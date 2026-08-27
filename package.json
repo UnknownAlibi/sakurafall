@@ -1,6 +1,6 @@
 {
   "name": "sakurafall",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "sakurafall - 多源番剧元数据与可替换开源片源驱动的 Electron 桌面客户端",
   "main": "src/main/index.js",
   "scripts": {
@@ -25,6 +25,7 @@
     "audit:playback": "node scripts/production-playback-performance-audit.js",
     "smoke:installer": "node scripts/smoke-installer.js",
     "smoke:webgpu": "electron scripts/smoke-webgpu.js",
+    "release": "node scripts/release.js",
     "verify:release": "npm run verify && npm run build && npm run smoke:packaged && npm run smoke:packaged:offline && npm run smoke:installer"
   },
   "keywords": [

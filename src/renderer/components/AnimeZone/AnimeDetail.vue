@@ -1,7 +1,16 @@
 <template>
   <transition name="modal-fade">
     <div class="anime-detail-modal" @click="handleBackdropClick">
-      <div class="modal-content" @click.stop>
+      <div
+        ref="modalContent"
+        class="modal-content"
+        :class="{ 'modal-dragging': modalDragging, 'modal-drag-reset': modalDragResetting }"
+        :style="modalDragStyle"
+        @click.stop
+        @pointerdown="onModalDragStart"
+        @dblclick="onModalDragReset"
+        @dragstart.prevent
+      >
         <!-- 影院氛围底：封面放大模糊铺底 + 暗色纱幕，营造放映厅沉浸感 -->
         <div class="cinema-backdrop" aria-hidden="true">
           <div class="cinema-backdrop-img" :style="cinemaBackdropStyle"></div>
@@ -596,7 +605,12 @@ export default {
       _tabPrefetchTimer: null,
       _isUnmounted: false,
       // 选集源预取状态：silent 预取进行中为 true，切换到选集 Tab 时据此显示 loading
-      _playSourcePrefetching: false
+      _playSourcePrefetching: false,
+      // ===== 弹窗拖拽 =====
+      dragOffsetX: 0,
+      dragOffsetY: 0,
+      modalDragging: false,
+      modalDragResetting: false
     };
   },
   computed: {
@@ -607,6 +621,15 @@ export default {
     cinemaBackdropStyle() {
       const cover = this.anime?.cover;
       return cover ? { backgroundImage: `url("${cover}")` } : { backgroundImage: 'none' };
+    },
+    /**
+     * 弹窗拖拽位移（无位移时不加 transform，避免影响弹窗动画）
+     */
+    modalDragStyle() {
+      if (!this.dragOffsetX && !this.dragOffsetY) return null;
+      return {
+        transform: `translate3d(${this.dragOffsetX}px, ${this.dragOffsetY}px, 0)`
+      };
     },
     /**
      * 是否具备 Bangumi 元数据（基于 bgm_id 判断，而非 source）
@@ -817,8 +840,89 @@ export default {
     this.cancelTabPrefetch();
     this.cancelEpisodeRender();
     this.cancelSourceEpisodeRender();
+    this.stopModalDrag();
   },
   methods: {
+    /**
+     * ===== 弹窗内部拖拽 =====
+     * 把手 = 整个弹窗主体，排除按钮/链接/输入控件与可点选的交互区，
+     * 避免误触；移动超过 3px 才真正进入拖拽，保证精确点击不受影响。
+     */
+    isModalDragHandle(el) {
+      if (!el || !el.closest) return false;
+      return !el.closest('button, a, input, textarea, select, .no-drag, .bgm-tabs, .episodes-grid, .source-episodes, .source-header, .source-line-selector, .comments-list, .comments-pagination');
+    },
+    onModalDragStart(event) {
+      if (event.button !== 0 || this.modalDragging) return;
+      if (!this.isModalDragHandle(event.target)) return;
+      const el = this.$refs.modalContent;
+      if (!el) return;
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      // 还原未位移时的基准位置（rect 已包含当前 transform）
+      const baseLeft = rect.left - this.dragOffsetX;
+      const baseTop = rect.top - this.dragOffsetY;
+      const keepVisible = 48;
+      this._dragMinX = keepVisible - baseLeft - rect.width;
+      this._dragMaxX = window.innerWidth - keepVisible - baseLeft;
+      this._dragMinY = keepVisible - baseTop - rect.height;
+      this._dragMaxY = window.innerHeight - keepVisible - baseTop;
+      this._dragStartX = event.clientX;
+      this._dragStartY = event.clientY;
+      this._dragBaseX = this.dragOffsetX;
+      this._dragBaseY = this.dragOffsetY;
+      this._dragMoved = false;
+      this._modalDragMove = ev => {
+        const dx = ev.clientX - this._dragStartX;
+        const dy = ev.clientY - this._dragStartY;
+        if (!this._dragMoved) {
+          if (Math.hypot(dx, dy) < 3) return;
+          this._dragMoved = true;
+          this.modalDragging = true;
+        }
+        this.dragOffsetX = Math.min(Math.max(this._dragBaseX + dx, this._dragMinX), this._dragMaxX);
+        this.dragOffsetY = Math.min(Math.max(this._dragBaseY + dy, this._dragMinY), this._dragMaxY);
+      };
+      this._modalDragEnd = () => {
+        this.stopModalDrag();
+        // 拖拽结束后吞掉落点处的 click，避免误触发标签跳转等动作
+        if (this._dragMoved && this.$refs.modalContent) {
+          const swallow = clickEv => {
+            clickEv.stopPropagation();
+            clickEv.preventDefault();
+          };
+          const host = this.$refs.modalContent;
+          host.addEventListener('click', swallow, { capture: true, once: true });
+          setTimeout(() => host.removeEventListener('click', swallow, { capture: true }), 0);
+        }
+      };
+      window.addEventListener('pointermove', this._modalDragMove);
+      window.addEventListener('pointerup', this._modalDragEnd);
+      window.addEventListener('pointercancel', this._modalDragEnd);
+    },
+    stopModalDrag() {
+      if (this._modalDragMove) window.removeEventListener('pointermove', this._modalDragMove);
+      if (this._modalDragEnd) {
+        window.removeEventListener('pointerup', this._modalDragEnd);
+        window.removeEventListener('pointercancel', this._modalDragEnd);
+      }
+      this._modalDragMove = null;
+      this._modalDragEnd = null;
+      this.modalDragging = false;
+    },
+    /**
+     * 双击把手区域：弹窗平滑回到屏幕中央
+     */
+    onModalDragReset(event) {
+      if (!this.isModalDragHandle(event.target)) return;
+      if (!this.dragOffsetX && !this.dragOffsetY) return;
+      this.modalDragResetting = true;
+      this.dragOffsetX = 0;
+      this.dragOffsetY = 0;
+      clearTimeout(this._dragResetTimer);
+      this._dragResetTimer = setTimeout(() => { this.modalDragResetting = false; }, 300);
+    },
+
     handleBackdropClick() {
       this.$emit('close');
     },
@@ -1540,6 +1644,30 @@ export default {
   border: 1px solid rgba(255, 255, 255, 0.09);
   z-index: 1;
   contain: layout style paint;
+}
+
+/* ===== 弹窗内部拖拽 ===== */
+.modal-content .modal-body {
+  cursor: grab;
+}
+
+.modal-content .modal-body button,
+.modal-content .modal-body a,
+.modal-content .modal-body input,
+.modal-content .modal-body select,
+.modal-content .modal-body textarea {
+  cursor: pointer;
+}
+
+.modal-content.modal-dragging,
+.modal-content.modal-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.modal-content.modal-drag-reset {
+  transition: transform 0.3s var(--ease-smooth);
 }
 
 /* ===== 影院氛围底：封面放大模糊铺底 ===== */

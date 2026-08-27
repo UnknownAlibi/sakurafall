@@ -26,8 +26,8 @@ function safeError(...args) {
 class UpdateChecker {
   constructor() {
     this.http = new HttpClient({ timeout: 10000 });
-    // 默认更新源（占位，用户应在设置页修改为真实地址）
-    this.defaultUpdateUrl = 'https://raw.githubusercontent.com/sakurafall/releases/main/latest.json';
+    // 默认更新源：官方发布仓库的 latest.json（发布流程见 scripts/release.js）
+    this.defaultUpdateUrl = 'https://raw.githubusercontent.com/UnknownAlibi/sakurafall-releases/main/latest.json';
     this._config = null;
   }
 
