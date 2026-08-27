@@ -8,8 +8,8 @@
  *
  * 流程:
  *   1. (可选) npm run build 打出安装包 dist-app/SakuraFall-Setup-{version}.exe
- *   2. 在 UnknownAlibi/sakurafall-releases 创建 GitHub Release v{version} 并上传安装包
- *   3. 更新仓库 main 分支的 latest.json (version/downloadUrl/releaseNotes/...)
+ *   2. 在 UnknownAlibi/sakurafall (主仓库) 创建 GitHub Release v{version} 并上传安装包
+ *   3. 更新主仓库 main 分支的 latest.json (version/downloadUrl/releaseNotes/...)
  *      → 客户端「设置 → 检查更新」读取该文件提示新版本
  *
  * 依赖: gh CLI 已登录 (gh auth status), 远程可访问。
@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const RELEASES_REPO = 'UnknownAlibi/sakurafall-releases';
+const RELEASES_REPO = 'UnknownAlibi/sakurafall';
 const INSTALLER_GLOB_PREFIX = 'SakuraFall-Setup-';
 const GITHUB_BASE = 'https://github.com';
 
