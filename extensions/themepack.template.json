@@ -1,0 +1,31 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "author.theme",
+    "name": "My Theme",
+    "version": "1.0.0",
+    "author": "Author",
+    "description": ""
+  },
+  "content": {
+    "variables": {},
+    "assets": {
+      "brandMark": "",
+      "mascot": "",
+      "loadingMascot": "",
+      "loadingAnimation": "",
+      "cursorDefault": "",
+      "cursorPointer": "",
+      "emptyState": "",
+      "background": ""
+    },
+    "layout": {
+      "density": "comfortable",
+      "cardStyle": "manga",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ""
+  }
+}

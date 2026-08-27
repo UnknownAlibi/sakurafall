@@ -1,0 +1,52 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "sakurafall-default",
+    "name": "樱月放映室",
+    "version": "3.0.0",
+    "author": "SakuraFall",
+    "description": "珊瑚夕照里的现代动漫放映客厅，明亮、轻快，也保留樱月的成熟气质",
+    "tags": [
+      "#e8758f",
+      "#73cbb8",
+      "#d7b87a",
+      "#29202f"
+    ]
+  },
+  "content": {
+    "variables": {
+      "--primary-color": "#e8758f",
+      "--primary-hover": "#d85f7c",
+      "--primary-light": "rgba(232, 117, 143, 0.12)",
+      "--primary-lighter": "rgba(232, 117, 143, 0.06)",
+      "--accent-cyan": "#73cbb8",
+      "--accent-lavender": "#9184b7",
+      "--accent-gold": "#d7b87a",
+      "--tag-bg": "rgba(232, 117, 143, 0.1)",
+      "--tag-border": "rgba(232, 117, 143, 0.22)",
+      "--tag-text": "#e8758f",
+      "--nav-active-bg": "rgba(232, 117, 143, 0.12)",
+      "--player-progress": "#e8758f",
+      "--hover-color": "rgba(115, 203, 184, 0.08)"
+    },
+    "assets": {},
+    "assetFiles": {
+      "brandMark": "sakurafall-default/assets/brand-mark.png",
+      "mascot": "sakurafall-default/assets/mascot.webp",
+      "loadingMascot": "sakurafall-default/assets/loading-static.webp",
+      "loadingAnimation": "sakurafall-default/assets/loading-animation.webp",
+      "cursorDefault": "sakurafall-default/assets/cursor-default.png",
+      "cursorPointer": "sakurafall-default/assets/cursor-pointer.png",
+      "emptyState": "sakurafall-default/assets/mascot.webp",
+      "background": "sakurafall-default/assets/background.webp"
+    },
+    "layout": {
+      "density": "comfortable",
+      "cardStyle": "manga",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ":root { --theme-ambient-light-top: rgba(255, 248, 250, 0.8); --theme-ambient-light-mid: rgba(250, 248, 251, 0.9); --theme-ambient-dark-top: rgba(24, 18, 31, 0.74); --theme-ambient-dark-mid: rgba(24, 18, 31, 0.9); }\n.title-bar { box-shadow: inset 0 -2px 0 rgba(115, 203, 184, 0.55); }\n::-webkit-scrollbar-thumb { background: rgba(232, 117, 143, 0.4); }"
+  }
+}

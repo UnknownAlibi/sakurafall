@@ -1,0 +1,120 @@
+/* =====================================================================
+   polish.css — 质感修复层（加载顺序最后，优先级最高）
+   目标：消灭"廉价感"——统一圆角尺度、卡片去细灰边改大阴影、
+        图标加粗、收敛装饰性英文、控件材质化。
+   只覆盖视觉基础，不动交互；性能守卫与 kawaii.css 一致。
+   ===================================================================== */
+
+/* ---------- 1. 卡片材质：去 1px 灰边，改用分层阴影（仅亮色主题） ---------- */
+
+:where(
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card,
+  .source-card,
+  .episode-card,
+  .card,
+  .settings,
+  .dl-dir-bar
+) {
+  border-color: transparent;
+  box-shadow: var(--shadow-sm);
+}
+
+:where(
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card
+):hover {
+  box-shadow: var(--shadow-anime);
+}
+
+/* 深色主题保留弱边框，避免卡片糊成一团 */
+[data-theme="dark"] :where(
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card,
+  .source-card,
+  .episode-card,
+  .card,
+  .settings,
+  .dl-dir-bar
+) {
+  border-color: var(--border-color);
+}
+
+/* ---------- 2. 圆角尺度统一：三档制（pill / 12 / 16） ---------- */
+
+/* 徽章、标签、小按钮 → 胶囊 */
+:where(
+  .dl-status-badge,
+  .badge,
+  .tag,
+  .count-badge
+) {
+  border-radius: var(--radius-pill);
+}
+
+/* 面板、输入框、气泡 → 12px */
+:where(
+  .search-box,
+  .dl-dir-bar,
+  .settings-section,
+  .panel,
+  .dialog,
+  .modal-card
+) {
+  border-radius: var(--radius-md);
+}
+
+/* ---------- 3. 图标加粗：线性图标 stroke 2 → 2.3，告别纤细工具感 ---------- */
+
+:where(
+  .tab-icon,
+  .page-heading-icon svg,
+  .empty-icon svg,
+  .title-btn svg
+) {
+  stroke-width: 2.3;
+}
+
+/* ---------- 4. 页头排版：标题更挺，英文 kicker 收敛为排版细节 ---------- */
+
+.page-heading-copy > span {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.page-heading-copy > small,
+.current-page-kicker {
+  font-family: inherit;
+  letter-spacing: 0.16em;
+  opacity: 0.42;
+}
+
+/* ---------- 5. 搜索框材质化：柔边 + 浅影 + 聚焦抬起 ---------- */
+
+.search-box {
+  border: 1px solid transparent !important;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s var(--ease-smooth), border-color 0.2s ease;
+}
+
+.search-box:focus-within {
+  border-color: rgba(251, 114, 153, 0.5) !important;
+  box-shadow: var(--shadow-md);
+}
+
+/* ---------- 6. 标题字重：h2/h3 更挺 ---------- */
+
+:where(h2, h3) {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}

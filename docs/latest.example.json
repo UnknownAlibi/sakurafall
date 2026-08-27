@@ -1,0 +1,8 @@
+{
+  "version": "1.0.1",
+  "downloadUrl": "https://downloads.example.com/SakuraFall-Setup-1.0.1.exe",
+  "releaseNotes": "Fix playback source matching and improve desktop stability.",
+  "releaseDate": "2026-07-13",
+  "minRequiredVersion": "1.0.0",
+  "sha256": "replace-with-published-installer-sha256"
+}

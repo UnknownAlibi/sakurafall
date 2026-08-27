@@ -1,0 +1,842 @@
+/* ===== 全局基础样式 ===== */
+
+/* Effect presets may simplify decoration, but must never hide the document root. */
+html[data-ui-effects] {
+  display: block !important;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg-base);
+  margin: 0;
+  padding: 0;
+}
+
+:where(button, input, select, textarea) {
+  font-family: var(--font-family);
+  letter-spacing: 0;
+}
+
+:where(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-display);
+  letter-spacing: 0;
+}
+
+.page-heading-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  border: 1px solid var(--brand-ink);
+  border-radius: 6px;
+  color: #fff;
+  background: var(--brand-ink);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.14);
+}
+
+.page-heading-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.page-heading-copy {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  line-height: 1.05;
+}
+
+.page-heading-copy > span {
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.page-heading-copy > small {
+  color: var(--brand-cyan-deep);
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+:where(.page-header, .fav-top-bar, .dl-top-bar, .sm-top-bar, .discovery-header) {
+  position: relative;
+}
+
+:where(.page-header, .fav-top-bar, .dl-top-bar, .sm-top-bar, .discovery-header)::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 72px;
+  height: 2px;
+  background: var(--accent-cyan);
+  pointer-events: none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-primary);
+}
+
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  color: var(--primary-hover);
+}
+
+:where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.button {
+  background-color: var(--primary-color);
+  color: var(--text-inverse);
+  border: none;
+  border-radius: var(--border-radius);
+  padding: 10px 15px;
+  transition: background-color 0.2s var(--ease-smooth), transform 0.15s var(--ease-smooth);
+}
+
+[data-ui-effects="anime"] :where(body, #app) {
+  cursor: var(--sakura-cursor-native-default-image) 2 2, auto;
+}
+
+[data-ui-effects="anime"] :where(
+  button,
+  a,
+  .button,
+  [role="button"],
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  select,
+  summary,
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .schedule-tab,
+  .source-tab,
+  .line-tab,
+  .episode-btn,
+  .action-btn,
+  .category-btn,
+  .pagination-btn,
+  .video-player-container,
+  .video-element
+) {
+  cursor: var(--sakura-cursor-native-pointer-image) 2 2, pointer !important;
+}
+
+/* Explicit fallback for component-scoped pointer classes. Avoid broad [class*="..."]
+   selectors here; they are expensive when hover targets change during scrolling. */
+[data-ui-effects="anime"] :where(
+  [onclick],
+  [tabindex]:not([tabindex="-1"]),
+  .image-search-btn,
+  .fav-btn,
+  .refresh-btn,
+  .search-btn,
+  .clear-btn,
+  .back-btn,
+  .close-btn,
+  .window-control,
+  .icon-action,
+  .clickable,
+  .toolbar-chip,
+  .bangumi-type-chip,
+  .genre-chip,
+  .type-chip,
+  .tag-chip,
+  .source-header,
+  .source-card,
+  .play-source-card,
+  .control-btn,
+  .progress-track,
+  .progress-container,
+  .volume-slider,
+  .rate-menu,
+  .quality-menu,
+  .danmaku-menu,
+  .subtitle-menu,
+  .episode-card,
+  .page-btn,
+  .page-number,
+  .nav-item,
+  .menu-item,
+  .toggle-switch
+) {
+  cursor: var(--sakura-cursor-native-pointer-image) 2 2, pointer !important;
+}
+
+[data-ui-effects="anime"] :where(
+  input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  [contenteditable="true"]
+) {
+  cursor: text !important;
+}
+
+[data-ui-effects="anime"] :where(button:disabled, [disabled], [aria-disabled="true"]) {
+  cursor: not-allowed !important;
+}
+
+[data-ui-effects="anime"].anime-cursor-ready :where(
+  body,
+  #app,
+  button,
+  a,
+  .button,
+  [role="button"],
+  input,
+  textarea,
+  select,
+  summary,
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .schedule-tab,
+  .source-tab,
+  .line-tab,
+  .episode-btn,
+  .action-btn,
+  .category-btn,
+  .pagination-btn,
+  .video-player-container,
+  .video-element
+) {
+  cursor: none !important;
+}
+
+[data-ui-effects="balanced"] body,
+[data-ui-effects="performance"] body {
+  cursor: auto;
+}
+
+[data-ui-effects="balanced"] :where(
+  button,
+  a,
+  .button,
+  [role="button"],
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  select,
+  summary,
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .schedule-tab,
+  .source-tab,
+  .line-tab,
+  .episode-btn,
+  .action-btn,
+  .category-btn,
+  .pagination-btn,
+  .video-player-container,
+  .video-element
+),
+[data-ui-effects="performance"] :where(
+  button,
+  a,
+  .button,
+  [role="button"],
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  select,
+  summary,
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .schedule-tab,
+  .source-tab,
+  .line-tab,
+  .episode-btn,
+  .action-btn,
+  .category-btn,
+  .pagination-btn,
+  .video-player-container,
+  .video-element
+) {
+  cursor: pointer !important;
+}
+
+.button:hover {
+  background-color: var(--primary-hover);
+}
+
+/* ===== 全局点击反馈：轻量 transform + 颜色过渡，不使用大面积阴影动画 ===== */
+:where(
+  button:not(:disabled),
+  .button,
+  [role="button"],
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .bgm-tab,
+  .schedule-tab,
+  .source-tab,
+  .line-btn,
+  .line-tab,
+  .episode-btn,
+  .action-btn,
+  .category-pill,
+  .bangumi-type-chip,
+  .page-btn,
+  .page-number,
+  .source-header
+) {
+  transition-property: transform, background-color, border-color, color, opacity, filter;
+  transition-duration: 0.16s;
+  transition-timing-function: var(--ease-smooth);
+}
+
+:where(
+  button:not(:disabled),
+  .button,
+  [role="button"],
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .bgm-tab,
+  .schedule-tab,
+  .source-tab,
+  .line-btn,
+  .line-tab,
+  .episode-btn,
+  .action-btn,
+  .category-pill,
+  .bangumi-type-chip,
+  .page-btn,
+  .page-number,
+  .source-header
+):active {
+  transform: translateY(1px) scale(0.985);
+}
+
+[data-scroll-state="scrolling"] :where(
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card
+) {
+  transition-duration: 0.01ms !important;
+  /* 入场阶梯延迟也必须清零：否则滚动中挂载的卡片会先隐形 240ms 再出现，体感顿挫 */
+  transition-delay: 0ms !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+/* 滚动中挂载的卡片直接可见：跳过"隐形等 IntersectionObserver 回调"的一帧空白，
+   避免快速滚动时内容一格格蹦出来 */
+[data-scroll-state="scrolling"] .anime-card:not(.card-entered):not(.skeleton),
+[data-performance-pressure="high"] .anime-card:not(.card-entered):not(.skeleton) {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+[data-scroll-state="scrolling"] :where(
+  .anime-card:hover,
+  .schedule-card:hover,
+  .hot-card:hover,
+  .continue-card:hover,
+  .bangumi-type-chip:hover,
+  .episode-btn:hover,
+  .toolbar-chip:hover,
+  .genre-chip:hover,
+  .type-chip:hover
+) {
+  transform: none !important;
+}
+
+[data-scroll-state="scrolling"] :where(
+  .anime-card .anime-poster img,
+  .anime-card .fav-btn,
+  .schedule-card img,
+  .hot-card img,
+  .continue-card img
+) {
+  transition-duration: 0.01ms !important;
+}
+
+.card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 15px;
+  margin: 10px;
+  box-shadow: var(--shadow-sm);
+}
+
+.card img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+.progress {
+  background-color: var(--divider-color);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background-color: var(--primary-color);
+  transition: width 0.3s;
+}
+
+.title-bar {
+  background-color: var(--titlebar-bg);
+  color: var(--titlebar-text);
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title-bar h1 {
+  margin: 0;
+}
+
+.settings {
+  background-color: var(--bg-surface);
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ===== 全局滚动条：默认细且半透明，hover 时变粗显色 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(251, 114, 153, 0.22);
+  border-radius: var(--radius-pill);
+  border: none;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(180deg, var(--primary-color), var(--accent-cyan));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+/* hover 滚动条整体时变粗，符合"细 + hover 可见" */
+::-webkit-scrollbar:hover {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+[data-ui-effects="performance"] ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+[data-ui-effects="performance"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-ui-effects="performance"] ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: none;
+  box-shadow: none;
+}
+
+[data-ui-effects="performance"] .skeleton-shimmer,
+[data-ui-effects="performance"] .anime-loading-bubble i {
+  animation: none !important;
+}
+
+[data-ui-effects="performance"] .anime-loading-mascot,
+[data-ui-effects="performance"] .player-loading-mascot,
+[data-ui-effects="performance"] .sources-loading::before,
+[data-ui-effects="performance"] .tab-loading::before,
+[data-ui-effects="performance"] .empty-art,
+[data-ui-effects="performance"] .no-cover-placeholder::before {
+  filter: none !important;
+}
+
+/* 纯净模式只收缩装饰反馈，不能覆盖 Vue 组件自身的显隐生命周期。 */
+[data-ui-effects="performance"] :where(
+  button,
+  .button,
+  [role="button"],
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .tab-btn,
+  .episode-btn,
+  .toolbar-chip
+) {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+[data-scroll-state="scrolling"] .anime-card,
+[data-scroll-state="scrolling"] .schedule-card,
+[data-scroll-state="scrolling"] .hot-card,
+[data-scroll-state="scrolling"] .continue-card,
+[data-performance-pressure="high"] .anime-card,
+[data-performance-pressure="high"] .schedule-card,
+[data-performance-pressure="high"] .hot-card,
+[data-performance-pressure="high"] .continue-card {
+  transition-delay: 0ms !important;
+}
+
+/* 真正检测到帧压力时才牺牲阴影，日常滚动保持稳定材质，避免整屏卡片反复重绘。 */
+[data-performance-pressure="high"] .anime-card,
+[data-performance-pressure="high"] .schedule-card,
+[data-performance-pressure="high"] .hot-card,
+[data-performance-pressure="high"] .continue-card {
+  box-shadow: none !important;
+}
+
+[data-scroll-state="scrolling"] .anime-loading-mascot,
+[data-scroll-state="scrolling"] .player-loading-mascot,
+[data-scroll-state="scrolling"] .sources-loading::before,
+[data-scroll-state="scrolling"] .tab-loading::before,
+[data-scroll-state="scrolling"] .empty-art,
+[data-scroll-state="scrolling"] .no-cover-placeholder::before {
+  filter: none !important;
+}
+
+[data-scroll-state="scrolling"] .skeleton-shimmer,
+[data-scroll-state="scrolling"] .anime-loading-bubble i,
+[data-scroll-state="scrolling"] .anime-cursor-core,
+[data-scroll-state="scrolling"] .anime-cursor-trail,
+[data-performance-pressure="high"] .skeleton-shimmer,
+[data-performance-pressure="high"] .anime-loading-bubble i,
+[data-performance-pressure="high"] .anime-cursor-core,
+[data-performance-pressure="high"] .anime-cursor-trail {
+  animation: none !important;
+}
+
+[data-scroll-state="scrolling"] .anime-cursor-trail,
+[data-performance-pressure="high"] .anime-cursor-trail {
+  display: none !important;
+}
+
+[data-performance-pressure="high"] .anime-loading-mascot,
+[data-performance-pressure="high"] .player-loading-mascot,
+[data-performance-pressure="high"] .sources-loading::before,
+[data-performance-pressure="high"] .tab-loading::before,
+[data-performance-pressure="high"] .empty-art,
+[data-performance-pressure="high"] .no-cover-placeholder::before {
+  filter: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===== 共享加载动效（AnimeZone / MyFavorites 等列表页通用） ===== */
+.anime-loading-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 92px;
+  margin: 12px 0 4px;
+  pointer-events: none;
+}
+
+.anime-loading-mascot {
+  width: 65px;
+  height: 92px;
+  background: var(--sakura-mascot-image) center bottom / contain no-repeat;
+  filter: drop-shadow(0 12px 18px rgba(251, 114, 153, 0.24));
+  /* 呼吸浮动：轻微上下漂浮，让静立形象有生命感 */
+  animation: mascot-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes mascot-breathe {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+/* ===== 樱花花瓣粒子（stage-enhanced 场景） ===== */
+.anime-loading-stage.stage-enhanced {
+  position: relative;
+  min-height: 132px;
+}
+
+.loading-petal {
+  position: absolute;
+  top: -14px;
+  width: 11px;
+  height: 11px;
+  background: linear-gradient(135deg, rgba(251, 114, 153, 0.85), rgba(246, 156, 188, 0.65));
+  border-radius: 62% 38% 56% 44% / 55% 58% 42% 45%;
+  opacity: 0;
+  pointer-events: none;
+  animation: petal-drift 3.6s ease-in infinite;
+  will-change: transform, opacity;
+}
+
+.loading-petal.p1 { left: 34%; animation-delay: 0s; animation-duration: 3.4s; }
+.loading-petal.p2 { left: 44%; animation-delay: 0.9s; animation-duration: 4.1s; transform: scale(0.8); }
+.loading-petal.p3 { left: 52%; animation-delay: 1.7s; animation-duration: 3.7s; }
+.loading-petal.p4 { left: 40%; animation-delay: 2.4s; animation-duration: 4.4s; transform: scale(0.7); }
+.loading-petal.p5 { left: 58%; animation-delay: 0.5s; animation-duration: 3.9s; transform: scale(0.9); }
+
+@keyframes petal-drift {
+  0% { opacity: 0; translate: 0 0; rotate: 0deg; }
+  12% { opacity: 0.85; }
+  55% { opacity: 0.7; }
+  100% { opacity: 0; translate: 26px 128px; rotate: 220deg; }
+}
+
+/* 性能模式 / 减少动态：花瓣与浮动降级为静态 */
+[data-ui-effects="performance"] .loading-petal,
+[data-software-rendering="true"] .loading-petal {
+  display: none;
+}
+
+[data-ui-effects="performance"] .anime-loading-mascot,
+[data-software-rendering="true"] .anime-loading-mascot {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-petal { display: none; }
+  .anime-loading-mascot { animation: none; }
+}
+
+/* 两种演出档共用固定画布逐帧播放；标准演出只在鼠标形态上与完整演出不同。 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  .anime-loading-mascot,
+  .player-loading-mascot,
+  .sakurane-loading-art
+) {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: none !important;
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  .anime-loading-mascot,
+  .player-loading-mascot,
+  .sakurane-loading-art
+)::before,
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  .anime-loading-mascot,
+  .player-loading-mascot,
+  .sakurane-loading-art
+)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-position: 0 0;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  .anime-loading-mascot,
+  .player-loading-mascot,
+  .sakurane-loading-art
+)::before {
+  z-index: 0;
+  inset: 0 auto 0 0;
+  width: 3200%;
+  background-image: var(--sakura-loading-sprite-image);
+  background-size: 100% 100%;
+  animation: sakurane-projector-loop 1s steps(32) infinite;
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  .anime-loading-mascot,
+  .player-loading-mascot,
+  .sakurane-loading-art
+)::after {
+  display: none;
+}
+
+@keyframes sakurane-projector-loop {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-100%, 0, 0); }
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]):where(
+  [data-scroll-state="scrolling"],
+  [data-performance-pressure="high"]
+) :where(
+  .anime-loading-mascot,
+  .player-loading-mascot,
+  .sakurane-loading-art
+)::before {
+  animation-play-state: paused;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+    .anime-loading-mascot,
+    .player-loading-mascot,
+    .sakurane-loading-art
+  ) {
+    background: var(--sakura-mascot-static-image) center bottom / contain no-repeat !important;
+  }
+
+  :is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+    .anime-loading-mascot,
+    .player-loading-mascot,
+    .sakurane-loading-art
+  )::before,
+  :is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+    .anime-loading-mascot,
+    .player-loading-mascot,
+    .sakurane-loading-art
+  )::after {
+    display: none;
+  }
+}
+
+.anime-loading-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 8px 14px;
+  border: 1px solid rgba(251, 114, 153, 0.18);
+  border-radius: 8px;
+  background: var(--bg-card-glass);
+  color: var(--text-secondary);
+  box-shadow: 0 10px 24px rgba(160, 74, 118, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.anime-loading-bubble i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  opacity: 0.35;
+  animation: loading-dot 1s ease-in-out infinite;
+}
+
+.anime-loading-bubble i:nth-child(3) {
+  animation-delay: 0.15s;
+}
+
+.anime-loading-bubble i:nth-child(4) {
+  animation-delay: 0.3s;
+}
+
+.skeleton .skeleton-shimmer {
+  background: linear-gradient(110deg, var(--bg-elevated) 30%, var(--border-color) 50%, var(--bg-elevated) 70%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.skeleton .anime-poster {
+  background: var(--bg-elevated);
+}
+
+.skeleton .skeleton-line {
+  border-radius: 4px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes loading-dot {
+  0%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* ===== 软件渲染降级 =====
+   GPU 循环崩溃被 GpuGuard 禁用硬件加速后，Chromium 走 CPU 合成。
+   此时保留色彩与布局，关闭代价最高的循环动画 / hover 位移 / 自定义鼠标，
+   "完整演出"在软件渲染下自动收缩为静态版，避免交互卡顿。 */
+[data-software-rendering="true"] :where(
+  .tab-navigation::before,
+  .tab-navigation::after,
+  .title-bar-center::after,
+  .progress-bar::after,
+  .dl-progress-fill::after
+) {
+  display: none;
+}
+
+[data-software-rendering="true"] *,
+[data-software-rendering="true"] *::before,
+[data-software-rendering="true"] *::after {
+  animation-duration: 0.01s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.05s !important;
+}
+
+[data-software-rendering="true"] :where(button, a, .button, [role="button"]) {
+  transform: none !important;
+}
+
+/* 软件渲染下不用自绘鼠标（JS 逐帧移动开销大），回退原生指针 */
+[data-software-rendering="true"] :where(body, #app, button, a, .button, [role="button"]) {
+  cursor: auto;
+}

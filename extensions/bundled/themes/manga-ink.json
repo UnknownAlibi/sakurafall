@@ -1,0 +1,47 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "manga-ink",
+    "name": "漫画工坊",
+    "version": "3.0.0",
+    "author": "SakuraFall",
+    "description": "明亮创作桌、彩色画材与编辑装樱月，让索引页像一间正在赶稿的工作室",
+    "tags": [
+      "#e65d75",
+      "#20b7aa",
+      "#e1c68f",
+      "#242329"
+    ]
+  },
+  "content": {
+    "variables": {
+      "--primary-color": "#e65d75",
+      "--primary-hover": "#cf4962",
+      "--primary-light": "rgba(230, 93, 117, 0.12)",
+      "--primary-lighter": "rgba(230, 93, 117, 0.05)",
+      "--accent-cyan": "#20b7aa",
+      "--accent-lavender": "#827895",
+      "--accent-gold": "#e1c68f",
+      "--tag-bg": "rgba(230, 93, 117, 0.09)",
+      "--tag-border": "rgba(36, 35, 41, 0.2)",
+      "--tag-text": "#d95069",
+      "--nav-active-bg": "rgba(32, 183, 170, 0.1)",
+      "--player-progress": "#e65d75",
+      "--hover-color": "rgba(32, 183, 170, 0.07)"
+    },
+    "assets": {},
+    "assetFiles": {
+      "background": "manga-ink/assets/background.webp",
+      "mascot": "manga-ink/assets/mascot.webp",
+      "emptyState": "manga-ink/assets/mascot.webp"
+    },
+    "layout": {
+      "density": "compact",
+      "cardStyle": "manga",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ":root { --theme-ambient-light-top: rgba(255, 255, 255, 0.8); --theme-ambient-light-mid: rgba(251, 250, 252, 0.91); --theme-ambient-dark-top: rgba(24, 23, 30, 0.76); --theme-ambient-dark-mid: rgba(24, 23, 30, 0.91); }\n.title-bar { box-shadow: inset 0 -2px 0 rgba(32, 183, 170, 0.6); }\n::-webkit-scrollbar-thumb { background: rgba(230, 93, 117, 0.4); }"
+  }
+}

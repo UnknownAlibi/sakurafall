@@ -1,0 +1,47 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "snow-noel",
+    "name": "雪夜星灯",
+    "version": "3.0.0",
+    "author": "SakuraFall",
+    "description": "雪后城市广场与星形彩灯，冬装樱月带来温暖的节日观影气氛",
+    "tags": [
+      "#d9687b",
+      "#6db9d7",
+      "#d4b673",
+      "#59657f"
+    ]
+  },
+  "content": {
+    "variables": {
+      "--primary-color": "#d9687b",
+      "--primary-hover": "#c15368",
+      "--primary-light": "rgba(217, 104, 123, 0.12)",
+      "--primary-lighter": "rgba(217, 104, 123, 0.06)",
+      "--accent-cyan": "#6db9d7",
+      "--accent-lavender": "#8e9fc5",
+      "--accent-gold": "#d4b673",
+      "--tag-bg": "rgba(109, 185, 215, 0.1)",
+      "--tag-border": "rgba(109, 185, 215, 0.24)",
+      "--tag-text": "#5aa6c4",
+      "--nav-active-bg": "rgba(109, 185, 215, 0.12)",
+      "--player-progress": "#d9687b",
+      "--hover-color": "rgba(109, 185, 215, 0.08)"
+    },
+    "assets": {},
+    "assetFiles": {
+      "background": "snow-noel/assets/background.webp",
+      "mascot": "snow-noel/assets/mascot.webp",
+      "emptyState": "snow-noel/assets/mascot.webp"
+    },
+    "layout": {
+      "density": "comfortable",
+      "cardStyle": "glass",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ":root { --theme-ambient-light-top: rgba(247, 252, 255, 0.8); --theme-ambient-light-mid: rgba(250, 252, 255, 0.91); --theme-ambient-dark-top: rgba(12, 24, 45, 0.72); --theme-ambient-dark-mid: rgba(12, 24, 45, 0.89); }\n.title-bar { box-shadow: inset 0 -2px 0 rgba(109, 185, 215, 0.66); }\n::-webkit-scrollbar-thumb { background: rgba(109, 185, 215, 0.42); }"
+  }
+}

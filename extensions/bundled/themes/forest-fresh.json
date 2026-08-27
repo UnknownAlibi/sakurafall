@@ -1,0 +1,47 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "forest-fresh",
+    "name": "森语祭典",
+    "version": "3.0.0",
+    "author": "SakuraFall",
+    "description": "彩灯、摊位与林间露天银幕，樱月换上轻盈的植物祭典礼服",
+    "tags": [
+      "#50aa82",
+      "#65c9b6",
+      "#d3af6e",
+      "#712f45"
+    ]
+  },
+  "content": {
+    "variables": {
+      "--primary-color": "#50aa82",
+      "--primary-hover": "#3e916d",
+      "--primary-light": "rgba(80, 170, 130, 0.12)",
+      "--primary-lighter": "rgba(80, 170, 130, 0.06)",
+      "--accent-cyan": "#65c9b6",
+      "--accent-lavender": "#9d7893",
+      "--accent-gold": "#d3af6e",
+      "--tag-bg": "rgba(80, 170, 130, 0.1)",
+      "--tag-border": "rgba(80, 170, 130, 0.23)",
+      "--tag-text": "#40936f",
+      "--nav-active-bg": "rgba(80, 170, 130, 0.12)",
+      "--player-progress": "#50aa82",
+      "--hover-color": "rgba(101, 201, 182, 0.08)"
+    },
+    "assets": {},
+    "assetFiles": {
+      "background": "forest-fresh/assets/background.webp",
+      "mascot": "forest-fresh/assets/mascot.webp",
+      "emptyState": "forest-fresh/assets/mascot.webp"
+    },
+    "layout": {
+      "density": "airy",
+      "cardStyle": "clean",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ":root { --theme-ambient-light-top: rgba(242, 252, 244, 0.8); --theme-ambient-light-mid: rgba(248, 252, 249, 0.91); --theme-ambient-dark-top: rgba(10, 28, 22, 0.72); --theme-ambient-dark-mid: rgba(10, 28, 22, 0.89); }\n.title-bar { box-shadow: inset 0 -2px 0 rgba(101, 201, 182, 0.62); }\n::-webkit-scrollbar-thumb { background: rgba(80, 170, 130, 0.42); }"
+  }
+}

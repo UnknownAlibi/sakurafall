@@ -1,0 +1,514 @@
+/* =====================================================================
+   kawaii.css — 卡通 / 二次元视觉增强层
+   档位差异（与设置页三档一一对应）：
+   - anime 完整演出：全部氛围与交互动效，并启用樱月自定义鼠标
+   - balanced 标准演出：保留与完整演出相同的界面动效，使用系统鼠标
+   - performance 纯净模式：无变换、无贴纸阴影、无糖果装饰，最简材质
+   通用守卫：滚动中 / 高压状态 / 减少动态偏好 一律降级
+   ===================================================================== */
+
+/* ---------- 0. 全局糖果化小细节 ---------- */
+
+::selection {
+  background: rgba(251, 114, 153, 0.28);
+  color: inherit;
+}
+
+/* 焦点框：糖果粉描边，更柔更圆 */
+:where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 3px solid rgba(251, 114, 153, 0.55);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- 1. 贴纸风卡片：白描边 + 粉色 offset 阴影 + Q弹悬浮 ---------- */
+
+:where(
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card,
+  .source-card,
+  .episode-card,
+  .card
+) {
+  border-radius: var(--radius-lg);
+  transition:
+    transform 0.22s var(--ease-bounce),
+    box-shadow 0.22s var(--ease-smooth),
+    border-color 0.18s var(--ease-smooth),
+    filter 0.18s var(--ease-smooth);
+}
+
+/* 注意：.play-source-card 不参与悬浮——详情页源卡片是可展开的功能列表行，
+   hover 上移会造成整块内容跳动，改为组件内的原地浸染发光 */
+:where(
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .dl-card
+):hover {
+  transform: translateY(-4px);
+  border-color: rgba(251, 114, 153, 0.45);
+  box-shadow: var(--shadow-sticker);
+}
+
+/* 卡片封面图跟随变圆 */
+:where(.anime-card, .hot-card, .schedule-card, .continue-card, .dl-card)
+  :where(img, .anime-poster, .dl-cover, .cover) {
+  border-radius: var(--radius-md);
+}
+
+/* ---------- 2. 按钮 &  chips：果冻按压 + 胶囊化 ---------- */
+
+:where(
+  .episode-btn,
+  .line-btn,
+  .line-tab,
+  .schedule-tab,
+  .source-tab,
+  .category-pill,
+  .bangumi-type-chip,
+  .genre-chip,
+  .type-chip,
+  .tag-chip,
+  .toolbar-chip,
+  .page-btn,
+  .page-number,
+  .pagination-btn
+) {
+  border-radius: var(--radius-pill);
+  transition:
+    transform 0.2s var(--ease-bounce),
+    background-color 0.16s var(--ease-smooth),
+    border-color 0.16s var(--ease-smooth),
+    color 0.16s var(--ease-smooth),
+    box-shadow 0.2s var(--ease-smooth);
+}
+
+/* chips 弹跳放大：两种演出档共用
+   注意：.episode-btn 不参与弹跳——密集选集网格逐个跳起观感嘈杂，改用原地浸染发光 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  .category-pill,
+  .bangumi-type-chip,
+  .genre-chip,
+  .type-chip,
+  .tag-chip,
+  .toolbar-chip
+):hover {
+  transform: translateY(-2px) scale(1.04);
+}
+
+/* 主按钮：糖果渐变 + 顶部高光 + 果冻按压 */
+:where(.btn-primary, .button, .search-btn, .dl-dir-btn:not(.dl-dir-btn-secondary)) {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%);
+  border-radius: var(--radius-pill);
+  box-shadow:
+    inset 0 -3px 0 rgba(41, 39, 66, 0.16),
+    0 6px 14px rgba(240, 100, 141, 0.22);
+  transition:
+    transform 0.18s var(--ease-bounce),
+    box-shadow 0.18s var(--ease-smooth),
+    background-color 0.16s var(--ease-smooth),
+    filter 0.16s var(--ease-smooth);
+}
+
+:where(.btn-primary, .button, .search-btn):hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 -3px 0 rgba(41, 39, 66, 0.16),
+    0 10px 20px rgba(240, 100, 141, 0.3);
+}
+
+/* 覆盖全局按压：更明显的"捏扁"果冻感（两种演出档） */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
+  button:not(:disabled),
+  .button,
+  [role="button"],
+  .tab-btn,
+  .episode-btn,
+  .action-btn,
+  .page-btn,
+  .page-number
+):active {
+  transform: translateY(1px) scale(0.93);
+  transition-timing-function: var(--ease-squish);
+}
+
+/* ---------- 3. 左侧导航：图标摇摆 + 激活弹跳 ---------- */
+
+.tab-btn {
+  border-radius: var(--radius-md);
+}
+
+.tab-icon-shell {
+  border-radius: 10px 12px 10px 13px; /* 不对称圆角，手绘感 */
+  transition:
+    transform 0.25s var(--ease-bounce),
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+/* 图标摇摆 & 激活弹跳：两种演出档 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .tab-btn:hover .tab-icon-shell {
+  animation: kawaii-wiggle 0.5s var(--ease-bounce);
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .tab-btn.active .tab-icon-shell {
+  animation: kawaii-pop 0.38s var(--ease-bounce);
+}
+
+.tab-btn.active .tab-icon-shell {
+  box-shadow: 0 4px 10px rgba(41, 39, 66, 0.28);
+}
+
+.tab-btn.active {
+  border-radius: var(--radius-md);
+}
+
+.tab-btn.active::after {
+  border-radius: 999px;
+  width: 4px;
+}
+
+/* 追番角标：圆润描边（全档静态）；弹跳由两种演出档启用 */
+.tab-badge {
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--sticker-outline);
+}
+
+/* ---------- 4. 页头图标：渐变 blob ---------- */
+
+.page-heading-icon {
+  border-radius: 10px 13px 9px 13px;
+  background: linear-gradient(135deg, var(--brand-ink), var(--accent-lavender) 130%);
+  border-color: transparent;
+  box-shadow:
+    inset 0 -3px 0 rgba(0, 0, 0, 0.16),
+    0 4px 10px rgba(41, 39, 66, 0.22);
+  transition: transform 0.25s var(--ease-bounce);
+}
+
+/* 页头图标 hover 旋转：两种演出档（PageHeader 统一组件 + 各页面遗留顶栏） */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(.page-header, .fav-top-bar, .dl-top-bar, .sm-top-bar, .discovery-header, .top-bar):hover
+  .page-heading-icon {
+  transform: rotate(-6deg) scale(1.06);
+}
+
+/* 页头下划线改成糖果渐变胶囊 */
+:where(.page-header, .fav-top-bar, .dl-top-bar, .sm-top-bar, .discovery-header)::after {
+  height: 4px;
+  width: 84px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary-color), var(--accent-cyan));
+}
+
+/* 页头标题旁的音符：两种演出档均轻轻跳动 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .page-header-note {
+  display: inline-block;
+  animation: kawaii-note 2.4s ease-in-out infinite;
+}
+
+/* ---------- 4.5 主内容区樱花氛围（低密度，两种演出档） ---------- */
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .main-content {
+  position: relative;
+}
+
+/* 两片氛围花瓣从内容区右上缓缓飘落，营造翻页间的樱花雨 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .main-content::before,
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .main-content::after {
+  content: var(--petal-glyph, '🌸');
+  position: absolute;
+  top: -6%;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .main-content::before {
+  left: 68%;
+  font-size: 14px;
+  filter: saturate(1.15);
+  animation: kawaii-petal-fall 11s linear 1.2s infinite;
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .main-content::after {
+  left: 88%;
+  font-size: 10px;
+  animation: kawaii-petal-fall 15s linear 5s infinite;
+}
+
+/* ---------- 5. 标题栏：品牌签名渐变字 ---------- */
+
+.app-signature {
+  background: linear-gradient(90deg, #ffd3e2, #a5ecff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ---------- 6. 进度条：糖果圆头 +（anime 模式）条纹流动 ---------- */
+
+:where(.progress, .dl-progress-bar) {
+  border-radius: var(--radius-pill);
+}
+
+:where(.progress-bar, .dl-progress-fill) {
+  border-radius: var(--radius-pill);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.35),
+    rgba(255, 255, 255, 0) 55%
+  );
+}
+
+/* ---------- 7. 空状态 & 加载气泡：Q弹入场（两种演出档） ---------- */
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .empty-state {
+  animation: kawaii-pop 0.45s var(--ease-bounce);
+}
+
+.anime-loading-bubble {
+  border-radius: var(--radius-pill) var(--radius-pill) var(--radius-pill) 6px; /* 对话气泡感 */
+}
+
+/* ---------- 8. 演出档共用：循环氛围动画 ---------- */
+
+/* 樱花花瓣：导航轨道顶部缓缓飘落 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .tab-navigation {
+  position: relative;
+  overflow: hidden;
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .tab-navigation::before {
+  content: var(--petal-glyph, '🌸');
+  position: absolute;
+  top: -8%;
+  left: 18%;
+  font-size: 15px;
+  opacity: 0.75;
+  filter: saturate(1.2);
+  animation: kawaii-petal-fall 9s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .tab-navigation::after {
+  content: var(--petal-glyph, '🌸');
+  position: absolute;
+  top: -8%;
+  left: 62%;
+  font-size: 11px;
+  opacity: 0.55;
+  animation: kawaii-petal-fall 13s linear 3.5s infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 标题栏小星星眨眼 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .title-bar-center::after {
+  content: var(--sparkle-glyph, '✨');
+  font-size: 11px;
+  margin-left: 8px;
+  animation: kawaii-twinkle 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 角标呼吸弹跳 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .tab-badge {
+  animation:
+    kawaii-pop 0.4s var(--ease-bounce),
+    kawaii-bob 2.2s ease-in-out 0.45s infinite;
+}
+
+/* 进度条纹流动 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(.progress-bar, .dl-progress-fill) {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0) 55%),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.28) 0 8px,
+      rgba(255, 255, 255, 0) 8px 16px
+    );
+  background-size: auto, 24px 100%;
+  animation: kawaii-stripes 1.1s linear infinite;
+}
+
+/* 空状态角色轻轻摇摆 */
+:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .sakurane-empty-art {
+  animation: kawaii-sway 3.6s ease-in-out infinite;
+  transform-origin: 50% 90%;
+}
+
+/* ---------- 9. 关键帧 ---------- */
+
+@keyframes kawaii-wiggle {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(-9deg) scale(1.08); }
+  55% { transform: rotate(7deg) scale(1.1); }
+  80% { transform: rotate(-3deg) scale(1.04); }
+}
+
+@keyframes kawaii-pop {
+  0% { transform: scale(0.7); }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes kawaii-bob {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.06); }
+}
+
+@keyframes kawaii-petal-fall {
+  0% { transform: translate3d(0, -10%, 0) rotate(0deg); opacity: 0; }
+  12% { opacity: 0.75; }
+  50% { transform: translate3d(10px, 46vh, 0) rotate(170deg); }
+  88% { opacity: 0.6; }
+  100% { transform: translate3d(-6px, 92vh, 0) rotate(340deg); opacity: 0; }
+}
+
+@keyframes kawaii-twinkle {
+  0%, 100% { opacity: 0.25; transform: scale(0.85) rotate(-8deg); }
+  50% { opacity: 1; transform: scale(1.1) rotate(6deg); }
+}
+
+@keyframes kawaii-stripes {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 0 0, 24px 0; }
+}
+
+@keyframes kawaii-note {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.55; }
+  50% { transform: translateY(-3px) rotate(8deg); opacity: 1; }
+}
+
+@keyframes kawaii-sway {
+  0%, 100% { transform: rotate(-2.5deg); }
+  50% { transform: rotate(2.5deg); }
+}
+
+/* ---------- 10. 性能守卫：降级关闭卡通增强 ---------- */
+
+[data-ui-effects="performance"] :where(
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card
+):hover {
+  transform: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+[data-ui-effects="performance"] :where(
+  .episode-btn,
+  .category-pill,
+  .bangumi-type-chip,
+  .genre-chip,
+  .type-chip,
+  .tag-chip,
+  .toolbar-chip
+):hover {
+  transform: none;
+}
+
+[data-ui-effects="performance"] .tab-btn:hover .tab-icon-shell,
+[data-ui-effects="performance"] .tab-btn.active .tab-icon-shell,
+[data-ui-effects="performance"] .tab-badge,
+[data-ui-effects="performance"] .empty-state {
+  animation: none;
+}
+
+/* 纯净模式：主按钮无浮起、无糖果阴影，回到最简材质 */
+[data-ui-effects="performance"] :where(.btn-primary, .button, .search-btn, .dl-dir-btn:not(.dl-dir-btn-secondary)) {
+  background-image: none;
+  box-shadow: none;
+}
+
+[data-ui-effects="performance"] :where(.btn-primary, .button, .search-btn):hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* 纯净模式：页头渐变线与图标装饰回归朴素 */
+[data-ui-effects="performance"] :where(.page-header, .fav-top-bar, .dl-top-bar, .sm-top-bar, .discovery-header)::after {
+  height: 2px;
+  width: 72px;
+  border-radius: 0;
+  background: var(--accent-cyan);
+}
+
+/* 纯净模式：无音符、无主内容区氛围花瓣 */
+[data-ui-effects="performance"] .page-header-note,
+[data-ui-effects="performance"] .main-content::before,
+[data-ui-effects="performance"] .main-content::after {
+  display: none;
+}
+
+[data-ui-effects="performance"] .page-heading-icon {
+  background: var(--brand-ink);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.14);
+}
+
+/* 滚动中 / 高压状态：去掉悬浮位移与动画（与现有守卫一致） */
+[data-scroll-state="scrolling"] :where(
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card
+):hover,
+[data-performance-pressure="high"] :where(
+  .anime-card,
+  .schedule-card,
+  .hot-card,
+  .continue-card,
+  .play-source-card,
+  .dl-card
+):hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+[data-scroll-state="scrolling"] .tab-btn:hover .tab-icon-shell,
+[data-scroll-state="scrolling"] .tab-navigation::before,
+[data-scroll-state="scrolling"] .tab-navigation::after,
+[data-scroll-state="scrolling"] .main-content::before,
+[data-scroll-state="scrolling"] .main-content::after,
+[data-scroll-state="scrolling"] .page-header-note,
+[data-scroll-state="scrolling"] .sakurane-empty-art,
+[data-performance-pressure="high"] .tab-btn:hover .tab-icon-shell,
+[data-performance-pressure="high"] .tab-navigation::before,
+[data-performance-pressure="high"] .tab-navigation::after,
+[data-performance-pressure="high"] .main-content::before,
+[data-performance-pressure="high"] .main-content::after,
+[data-performance-pressure="high"] .page-header-note,
+[data-performance-pressure="high"] .sakurane-empty-art {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-btn:hover .tab-icon-shell,
+  .tab-btn.active .tab-icon-shell,
+  .tab-badge,
+  .empty-state,
+  .sakurane-empty-art,
+  .tab-navigation::before,
+  .tab-navigation::after,
+  .main-content::before,
+  .main-content::after,
+  .page-header-note,
+  .title-bar-center::after,
+  .progress-bar,
+  .dl-progress-fill {
+    animation: none !important;
+  }
+}

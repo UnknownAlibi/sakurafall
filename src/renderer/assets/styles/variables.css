@@ -1,0 +1,198 @@
+/* ===== 亮色主题（默认） ===== */
+:root {
+  /* 主色 */
+  --primary-color: #f0648d;
+  /* 品牌粉 RGB 三元组（供 rgba(var(--primary-rgb), α) 使用；保持与播放器内旧硬编码 #fb7299 一致，改主题时可整体覆盖） */
+  --primary-rgb: 251, 114, 153;
+  --primary-hover: #d94d79;
+  --primary-light: rgba(240, 100, 141, 0.09);
+  --primary-lighter: rgba(240, 100, 141, 0.045);
+  --accent-cyan: #36bdd7;
+  --accent-lavender: #8175d7;
+  --accent-gold: #e8aa3b;
+  --brand-ink: #292742;
+  --brand-cyan-deep: #167f96;
+  --brand-paper: #fbfbfd;
+
+  /* 背景 */
+  --bg-base: #f5f6fa;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-overlay: rgba(30, 15, 25, 0.65);
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-glass: rgba(255, 255, 255, 0.78);
+  --bg-card-glass: #ffffff;
+
+  /* 文字（提高对比：小字号下不发虚） */
+  --text-primary: #232131;
+  --text-secondary: #55526a;
+  --text-tertiary: #7c7b8d;
+  --text-inverse: #ffffff;
+
+  /* 边框 & 分割线 */
+  --border-color: #e7e7ef;
+  --border-color-strong: #d8d7e3;
+  --divider-color: #e9e9f0;
+
+  /* 阴影（加深加彩，支撑无边框卡片） */
+  --shadow-sm: 0 1px 2px rgba(37, 36, 62, 0.05), 0 4px 12px rgba(37, 36, 62, 0.07);
+  --shadow-md: 0 2px 4px rgba(37, 36, 62, 0.06), 0 10px 24px rgba(37, 36, 62, 0.1);
+  --shadow-lg: 0 4px 8px rgba(37, 36, 62, 0.07), 0 18px 40px rgba(37, 36, 62, 0.14);
+  --shadow-anime: 0 2px 6px rgba(240, 100, 141, 0.1), 0 16px 36px rgba(240, 100, 141, 0.16);
+
+  /* 标签 */
+  --tag-bg: rgba(251, 114, 153, 0.08);
+  --tag-border: rgba(251, 114, 153, 0.15);
+  --tag-text: #b44f70;
+
+  /* 状态色 */
+  --success-color: #28a745;
+  --warning-color: #f0a020;
+  --error-color: #ff4444;
+  --danger-color: #ff4757;
+
+  /* 滚动条 */
+  --scrollbar-track: #f0f1f5;
+  --scrollbar-thumb: #c9c8d3;
+  --scrollbar-thumb-hover: #aaa8b7;
+
+  /* 标题栏 */
+  --titlebar-bg: #292742;
+  --titlebar-text: #ffffff;
+  --nav-bg: #ffffff;
+  --nav-active-bg: rgba(240, 100, 141, 0.1);
+
+  /* 播放器 */
+  --player-bg: #000000;
+  --player-control-bg: rgba(0, 0, 0, 0.8);
+  --player-progress: #fb7299;
+  --player-progress-buffer: rgba(255, 255, 255, 0.5);
+
+  /* 其他 */
+  --hover-color: rgba(251, 114, 153, 0.06);
+  --app-ambient-bg: none;
+  --sakura-charm-image: none;
+  --sakura-mascot-image: var(--sakura-mascot-static-image);
+  --sakura-mascot-static-image: none;
+  --sakura-loading-sprite-image: none;
+  --sakurafall-mark-image: none;
+  --sakurafall-character-image: none;
+  --sakurafall-empty-state-image: var(--sakurafall-character-image);
+  --sakura-cursor-default-image: auto;
+  --sakura-cursor-pointer-image: pointer;
+  --sakura-cursor-native-default-image: auto;
+  --sakura-cursor-native-pointer-image: pointer;
+  --border-radius: 12px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --motion-fast: 140ms;
+  --motion-normal: 180ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* 卡通 Q 弹缓动：果冻感回弹 & 按压挤压 */
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-squish: cubic-bezier(0.5, 1.8, 0.4, 0.9);
+  /* 贴纸风：白描边 + 粉色 offset 阴影 */
+  --sticker-outline: rgba(255, 255, 255, 0.95);
+  --shadow-sticker: 0 3px 0 rgba(240, 100, 141, 0.12), 0 10px 22px rgba(240, 100, 141, 0.12);
+  /* 交互动效升级：丝滑缓动 + 统一过渡时长 */
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+  --transition-fast: 0.15s;
+  --transition-base: 0.25s;
+  --transition-slow: 0.4s;
+  --font-family: 'Microsoft YaHei UI', 'Yu Gothic UI', 'Meiryo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Microsoft YaHei UI', 'Yu Gothic UI', 'Meiryo', sans-serif;
+  --font-size: 14px;
+  --font-size-large: 18px;
+  --font-size-xlarge: 20px;
+}
+
+/* ===== 深色主题 ===== */
+[data-theme="dark"] {
+  /* 主色 — 深色下保持但略调亮 */
+  --primary-color: #ff8ab0;
+  /* 与亮色同值，保证播放器等处旧硬编码粉色在暗色下不变 */
+  --primary-rgb: 251, 114, 153;
+  --primary-hover: #ff9ec4;
+  --primary-light: rgba(255, 138, 176, 0.12);
+  --primary-lighter: rgba(255, 138, 176, 0.06);
+  --accent-cyan: #6ed8ff;
+  --accent-lavender: #bba0ff;
+  --accent-gold: #ffd36b;
+  --brand-ink: #5c68ae;
+  --brand-cyan-deep: #67d9ed;
+  --brand-paper: #241a2a;
+
+  /* 背景 */
+  --bg-base: #1a1220;
+  --bg-surface: #241a2a;
+  --bg-elevated: #2e2236;
+  --bg-overlay: rgba(0, 0, 0, 0.75);
+  --bg-card: #2a1f30;
+  --bg-input: #2e2236;
+  --bg-glass: rgba(36, 26, 42, 0.78);
+  --bg-card-glass: rgba(42, 31, 48, 0.88);
+
+  /* 文字 */
+  --text-primary: #f0e8f2;
+  --text-secondary: #b0a0b8;
+  --text-tertiary: #807088;
+  --text-inverse: #1a1220;
+
+  /* 边框 & 分割线 */
+  --border-color: rgba(255, 138, 176, 0.1);
+  --border-color-strong: rgba(255, 138, 176, 0.2);
+  --divider-color: rgba(255, 255, 255, 0.06);
+
+  /* 阴影 */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --shadow-anime: 0 16px 44px rgba(0, 0, 0, 0.32);
+  --sticker-outline: rgba(255, 255, 255, 0.12);
+  --shadow-sticker: 0 3px 0 rgba(0, 0, 0, 0.25), 0 10px 22px rgba(0, 0, 0, 0.3);
+
+  /* 标签 */
+  --tag-bg: rgba(255, 138, 176, 0.1);
+  --tag-border: rgba(255, 138, 176, 0.15);
+  --tag-text: #ff8ab0;
+
+  /* 状态色 */
+  --success-color: #4caf50;
+  --warning-color: #ffb74d;
+  --error-color: #ef5350;
+  --danger-color: #ff5252;
+
+  /* 滚动条 */
+  --scrollbar-track: #2a1f30;
+  --scrollbar-thumb: rgba(255, 138, 176, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 138, 176, 0.35);
+
+  /* 标题栏 */
+  --titlebar-bg: #2a1f30;
+  --titlebar-text: #f0e8f2;
+  --nav-bg: rgba(36, 26, 42, 0.84);
+  --nav-active-bg: rgba(255, 138, 176, 0.14);
+
+  /* 播放器不变 */
+  --player-bg: #000000;
+  --player-control-bg: rgba(0, 0, 0, 0.8);
+  --player-progress: #ff8ab0;
+  --player-progress-buffer: rgba(255, 255, 255, 0.5);
+}
+
+[data-ui-effects="performance"] {
+  --sakura-mascot-image: var(--sakura-mascot-static-image);
+}
+
+[data-ui-effects="performance"] {
+  --app-ambient-bg: none;
+  --shadow-anime: var(--shadow-md);
+}
+
+[data-scroll-state="scrolling"],
+[data-performance-pressure="high"] {
+  --sakura-mascot-image: var(--sakura-mascot-static-image);
+}

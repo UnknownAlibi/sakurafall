@@ -1,0 +1,42 @@
+/* ===== 主题基础样式（变量定义在 variables.css） ===== */
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* 全局链接 */
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+a:hover {
+  color: var(--primary-hover);
+}
+
+/* 全局按钮重置（不覆盖组件内 scoped 样式） */
+button {
+  cursor: pointer;
+}
+
+/* 通用工具类 */
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-accent { color: var(--primary-color); }
+.bg-surface { background-color: var(--bg-surface); }
+.bg-card { background-color: var(--bg-card); }
+
+/* 错误提示 */
+.error-message {
+  color: var(--error-color);
+}
+
+/* 加载状态 */
+.loading {
+  color: var(--primary-color);
+}

@@ -1,0 +1,60 @@
+{
+  "kind": "sakurafall.source-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "author.sources",
+    "name": "My Sources",
+    "version": "1.0.0",
+    "author": "Author",
+    "description": "",
+    "homepage": "",
+    "updateUrl": "",
+    "license": "",
+    "minAppVersion": "1.0.0",
+    "tags": []
+  },
+  "content": {
+    "cmsSources": [
+      {
+        "id": "example-cms",
+        "name": "Example CMS",
+        "api": "https://example.com/api.php/provide/vod/",
+        "categories": [{ "id": "1", "name": "Anime" }],
+        "defaultCategory": "1",
+        "roles": ["fallback-catalog"],
+        "resolverId": "author.share-page"
+      }
+    ],
+    "xpathRules": [],
+    "mediaLibraries": [
+      {
+        "id": "my-local-library",
+        "name": "My Local Anime",
+        "type": "local",
+        "enabled": false,
+        "preference": 15,
+        "roots": ["D:/Anime"]
+      },
+      {
+        "id": "my-jellyfin",
+        "name": "My Jellyfin",
+        "type": "jellyfin",
+        "enabled": false,
+        "preference": 15,
+        "baseUrl": "http://127.0.0.1:8096",
+        "userId": "YOUR_USER_ID",
+        "apiKey": "${ENV:SAKURAFALL_JELLYFIN_API_KEY}"
+      }
+    ],
+    "resolvers": [
+      {
+        "id": "author.share-page",
+        "name": "Example share-page resolver",
+        "hosts": ["share.example.com"],
+        "pathPrefixes": ["/share/"],
+        "requestHeaders": { "Referer": "https://example.com/" },
+        "playbackHeaders": { "Referer": "https://example.com/" }
+      }
+    ]
+  }
+}

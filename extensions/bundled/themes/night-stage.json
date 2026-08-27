@@ -1,0 +1,47 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "night-stage",
+    "name": "霓虹夜航",
+    "version": "3.0.0",
+    "author": "SakuraFall",
+    "description": "屋顶影院、城市霓虹与机能风樱月组成的午夜动漫现场",
+    "tags": [
+      "#ff708f",
+      "#4fd7c2",
+      "#7f86b8",
+      "#171b27"
+    ]
+  },
+  "content": {
+    "variables": {
+      "--primary-color": "#ff708f",
+      "--primary-hover": "#eb5a7b",
+      "--primary-light": "rgba(255, 112, 143, 0.13)",
+      "--primary-lighter": "rgba(255, 112, 143, 0.06)",
+      "--accent-cyan": "#4fd7c2",
+      "--accent-lavender": "#7f86b8",
+      "--accent-gold": "#d8b56d",
+      "--tag-bg": "rgba(255, 112, 143, 0.1)",
+      "--tag-border": "rgba(255, 112, 143, 0.24)",
+      "--tag-text": "#ff708f",
+      "--nav-active-bg": "rgba(79, 215, 194, 0.11)",
+      "--player-progress": "#ff708f",
+      "--hover-color": "rgba(79, 215, 194, 0.08)"
+    },
+    "assets": {},
+    "assetFiles": {
+      "background": "night-stage/assets/background.webp",
+      "mascot": "night-stage/assets/mascot.webp",
+      "emptyState": "night-stage/assets/mascot.webp"
+    },
+    "layout": {
+      "density": "comfortable",
+      "cardStyle": "glass",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ":root { --theme-ambient-light-top: rgba(238, 245, 252, 0.82); --theme-ambient-light-mid: rgba(246, 244, 250, 0.91); --theme-ambient-dark-top: rgba(9, 14, 30, 0.7); --theme-ambient-dark-mid: rgba(9, 14, 30, 0.88); }\n.title-bar { box-shadow: inset 0 -2px 0 rgba(79, 215, 194, 0.62); }\n::-webkit-scrollbar-thumb { background: rgba(255, 112, 143, 0.42); }"
+  }
+}

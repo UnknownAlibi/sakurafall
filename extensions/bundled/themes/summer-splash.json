@@ -1,0 +1,47 @@
+{
+  "kind": "sakurafall.theme-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "summer-splash",
+    "name": "海盐假日",
+    "version": "3.0.0",
+    "author": "SakuraFall",
+    "description": "晴空、海盐与彩色冲浪板，樱月以泳装和透明罩衫进入夏日模式",
+    "tags": [
+      "#ef7c78",
+      "#36bdd0",
+      "#f0c277",
+      "#253b67"
+    ]
+  },
+  "content": {
+    "variables": {
+      "--primary-color": "#ef7c78",
+      "--primary-hover": "#db6663",
+      "--primary-light": "rgba(239, 124, 120, 0.12)",
+      "--primary-lighter": "rgba(239, 124, 120, 0.06)",
+      "--accent-cyan": "#36bdd0",
+      "--accent-lavender": "#768bc1",
+      "--accent-gold": "#f0c277",
+      "--tag-bg": "rgba(239, 124, 120, 0.1)",
+      "--tag-border": "rgba(239, 124, 120, 0.23)",
+      "--tag-text": "#e36b68",
+      "--nav-active-bg": "rgba(54, 189, 208, 0.11)",
+      "--player-progress": "#ef7c78",
+      "--hover-color": "rgba(54, 189, 208, 0.08)"
+    },
+    "assets": {},
+    "assetFiles": {
+      "background": "summer-splash/assets/background.webp",
+      "mascot": "summer-splash/assets/mascot.webp",
+      "emptyState": "summer-splash/assets/mascot.webp"
+    },
+    "layout": {
+      "density": "comfortable",
+      "cardStyle": "clean",
+      "navigation": "rail",
+      "motion": "balanced"
+    },
+    "customCss": ":root { --theme-ambient-light-top: rgba(242, 252, 255, 0.78); --theme-ambient-light-mid: rgba(250, 252, 252, 0.9); --theme-ambient-dark-top: rgba(8, 28, 46, 0.72); --theme-ambient-dark-mid: rgba(8, 28, 46, 0.89); }\n.title-bar { box-shadow: inset 0 -2px 0 rgba(54, 189, 208, 0.65); }\n::-webkit-scrollbar-thumb { background: rgba(239, 124, 120, 0.44); }"
+  }
+}

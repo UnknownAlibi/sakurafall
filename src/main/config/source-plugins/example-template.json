@@ -1,0 +1,29 @@
+{
+  "id": "example-template",
+  "name": "示例 XPath 源（模板）",
+  "type": "xpath",
+  "version": "1.0.0",
+  "enabled": false,
+  "baseUrl": "https://example.com",
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "@baseUrl"
+  },
+  "search": {
+    "url": "/search?keyword=@keyword&page=@page",
+    "method": "GET",
+    "list": "//div[@class='search-result-item']",
+    "name": ".//a[@class='title']/text()",
+    "urlPath": ".//a[@class='title']/@href",
+    "cover": ".//img[@class='cover']/@src"
+  },
+  "detail": {
+    "name": "//h1[@class='anime-title']/text()",
+    "cover": "//div[@class='cover-wrap']//img/@src",
+    "episodeGroups": "//div[@class='playlist-group']",
+    "episodeGroupName": ".//h3/text()",
+    "episodeList": ".//ul[@class='episode-list']/li/a",
+    "episodeTitle": "./text()",
+    "episodeUrl": "./@href"
+  }
+}

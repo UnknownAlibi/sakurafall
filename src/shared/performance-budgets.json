@@ -1,0 +1,36 @@
+{
+  "startup": {
+    "packagedReadyMs": 10000
+  },
+  "operations": {
+    "list-index-query": 80,
+    "detail-metadata": 2500,
+    "source-search": 7000,
+    "player-open": 1200,
+    "scroll-frame": 20
+  },
+  "scroll": {
+    "targetFps": 55,
+    "minimumFps": 45,
+    "longFrameMs": 32,
+    "maximumLongFrameRatio": 0.12,
+    "sampleDurationMs": 1200,
+    "sampleCooldownMs": 2500
+  },
+  "bundles": {
+    "animeZoneJsBytes": 184320,
+    "animeZoneCssBytes": 92160,
+    "mainJsBytes": 122880,
+    "hlsVendorJsBytes": 614400
+  },
+  "sourceLimits": {
+    "animeZoneMaxLines": 2200,
+    "animeZoneMaxBytes": 80000,
+    "videoPlayerMaxLines": 3611,
+    "videoPlayerMaxBytes": 125657,
+    "settingsMaxLines": 3197,
+    "settingsMaxBytes": 98000,
+    "mainIndexMaxLines": 2998,
+    "mainIndexMaxBytes": 116945
+  }
+}
