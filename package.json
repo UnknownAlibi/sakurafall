@@ -41,12 +41,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wky199712/sakurafall.git"
+    "url": "git+https://github.com/UnknownAlibi/sakurafall.git"
   },
   "bugs": {
-    "url": "https://github.com/wky199712/sakurafall/issues"
+    "url": "https://github.com/UnknownAlibi/sakurafall/issues"
   },
-  "homepage": "https://github.com/wky199712/sakurafall#readme",
+  "homepage": "https://github.com/UnknownAlibi/sakurafall#readme",
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.2.3",
     "concurrently": "^8.2.0",

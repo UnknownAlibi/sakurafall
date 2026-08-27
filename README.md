@@ -51,7 +51,7 @@ SQLite cache <───────── Main process IPC boundary <───�
 ## 本地开发
 
 ```powershell
-git clone https://github.com/wky199712/sakurafall.git
+git clone https://github.com/UnknownAlibi/sakurafall.git
 cd sakurafall
 npm install
 npm run dev
