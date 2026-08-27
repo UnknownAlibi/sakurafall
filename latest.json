@@ -1,6 +1,6 @@
 {
   "version": "1.0.1",
   "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.0.1/SakuraFall-Setup-1.0.1.exe",
-  "releaseNotes": "",
+  "releaseNotes": "1. 新增应用内更新：检查更新后可直接下载并安装，无需跳转浏览器\n2. 修复番剧索引年份筛选首屏数据不全的问题\n3. 修复设置页应用更新区域不显示的问题",
   "releaseDate": "2026-08-27"
 }
