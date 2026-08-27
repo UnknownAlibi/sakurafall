@@ -1,0 +1,6 @@
+{
+  "version": "1.0.1",
+  "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.0.1/SakuraFall-Setup-1.0.1.exe",
+  "releaseNotes": "1. 新增详情弹窗内部拖拽（按住拖动/双击复位）2. 新增一键发版流程与官方更新源 3. XPath 规则源随包内置（AGE/DM84/enlie）",
+  "releaseDate": "2026-08-27"
+}
