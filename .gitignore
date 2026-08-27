@@ -173,6 +173,7 @@ scripts/__pycache__/
 
 # 默认片源包（含真实站点端点，仅本地使用；仓库内只保留公开模板 sourcepack.template.json）
 extensions/bundled/sources/sakurafall-default.sourcepack.json
+extensions/bundled/sources/xpath-community.sourcepack.json
 
 # 本地改造记录和 agent 交接稿（包含机器路径，不属于公开文档）
 docs/desktop-modernization-plan.md
