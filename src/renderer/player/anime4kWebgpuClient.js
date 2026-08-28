@@ -18,10 +18,10 @@ export function resolveWebgpuAnime4kProfile({
     (Number(displayWidth) || inputWidth || 1) / Math.max(1, Number(inputWidth) || 1),
     (Number(displayHeight) || inputHeight || 1) / Math.max(1, Number(inputHeight) || 1)
   );
-  // x2 pipelines allocate every intermediate texture at twice the source edge.
-  // Only use them when that output fits the 1080p realtime budget. Larger 720p
-  // variants still benefit from restoration without allocating unused 2K/4K data.
-  const shouldUpscale = requestedPreset !== 'light' && inputEdge * 2 <= 1920 && scale > 1.08;
+  // A 720p source needs a 2560px CNN intermediate for genuine x2 reconstruction.
+  // The presentation canvas remains capped separately; the worker benchmark
+  // rejects hardware that cannot sustain this pipeline in real time.
+  const shouldUpscale = requestedPreset !== 'light' && inputEdge * 2 <= 2560 && scale > 1.08;
 
   if (shouldUpscale) {
     return {

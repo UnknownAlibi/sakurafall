@@ -28,7 +28,7 @@ test('WebGPU Anime4K capability probe requires every frame-transfer primitive', 
   assert.equal(canUseWebgpuAnime4k({ ...complete, VideoFrame: undefined }), false);
 });
 
-test('WebGPU profile uses x2 CNN only when the doubled output fits the realtime budget', () => {
+test('WebGPU profile uses x2 CNN for common SD and 720p sources within the realtime budget', () => {
   assert.deepEqual(resolveWebgpuAnime4kProfile({
     preset: 'balanced',
     inputWidth: 960,
@@ -47,7 +47,7 @@ test('WebGPU profile uses x2 CNN only when the doubled output fits the realtime 
     inputHeight: 720,
     displayWidth: 1920,
     displayHeight: 1080
-  }).pipeline, 'CNNM');
+  }).pipeline, 'CNNx2M');
   assert.equal(resolveWebgpuAnime4kProfile({
     preset: 'light',
     inputWidth: 960,
@@ -61,7 +61,7 @@ test('WebGPU profile uses x2 CNN only when the doubled output fits the realtime 
     inputHeight: 720,
     displayWidth: 1920,
     displayHeight: 1080
-  }).pipeline, 'CNNVL');
+  }).pipeline, 'CNNx2VL');
   assert.equal(resolveWebgpuAnime4kProfile({
     preset: 'quality',
     inputWidth: 960,
@@ -99,4 +99,11 @@ test('WebGPU worker prewarms shaders and guards its one-frame mailbox', () => {
   assert.match(worker, /inputTexture\?\.destroy/);
   assert.match(worker, /device\?\.destroy/);
   assert.match(client, /setTimeout\(\(\) => worker\.terminate\(\), 200\)/);
+});
+
+test('Anime4K canvas restarts by source and only presents after a verified frame', () => {
+  const source = fs.readFileSync(new URL('../src/renderer/components/Player/Anime4KCanvas.vue', import.meta.url), 'utf8');
+  assert.match(source, /sourceKey/);
+  assert.match(source, /v-show="presenting"/);
+  assert.match(source, /if \(!this\.presenting\)/);
 });

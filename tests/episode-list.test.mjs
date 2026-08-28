@@ -13,7 +13,8 @@ const {
   getAdjacentEpisode,
   getLineEpisodes,
   getPreferredEpisodeLine,
-  hasEpisodeLines
+  hasEpisodeLines,
+  isSameEpisode
 } = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(moduleSource)}`);
 
 test('formatLineNames: formats cms line ids', () => {
@@ -47,6 +48,21 @@ test('findEpisodeIndex/findLineForEpisode: matches current episode', () => {
 
   assert.equal(findEpisodeIndex(list, { id: '2', title: 'Episode 2' }), 0);
   assert.equal(findLineForEpisode(episodes, { id: '2', title: 'Episode 2' }), 'lineB');
+});
+
+test('episode identity tolerates source id types and never matches missing fields', () => {
+  assert.equal(isSameEpisode({ id: 12 }, { id: '12' }), true);
+  assert.equal(isSameEpisode({}, {}), false);
+  assert.equal(findEpisodeIndex([{}, { title: '第12集' }], {}), -1);
+});
+
+test('episode identity survives source changes via number and stored index', () => {
+  const sourceEpisodes = [
+    { id: 'a', title: '第01集' },
+    { id: 'b', title: '第02集' }
+  ];
+  assert.equal(findEpisodeIndex(sourceEpisodes, { id: 'other', title: 'Episode 2' }), 1);
+  assert.equal(findEpisodeIndex([{ id: 'a' }, { id: 'b' }], { id: 'other', index: 1 }), 1);
 });
 
 test('getAdjacentEpisode/hasEpisodeLines: handles adjacent episodes and empty lists', () => {

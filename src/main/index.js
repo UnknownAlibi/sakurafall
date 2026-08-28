@@ -2398,41 +2398,32 @@ secureIpcHandle('cms-cache-clear', async (event, options = {}) => {
     }
 });
 
-// ======
-// 应用更新检查
-// ======
+// ====== 应用更新检查 ======
 
-// 手动检查更新
-secureIpcHandle('update-check', async () => {
-    return await updateChecker.checkForUpdates({ silent: false });
-});
+secureIpcHandle('update-check', async () => updateChecker.checkForUpdates({ silent: false }));
+secureIpcHandle('update-get-version', () => updateChecker.getCurrentVersion());
+secureIpcHandle('update-get-url', () => updateChecker.getUpdateUrl());
+secureIpcHandle('update-set-url', (event, url) => updateChecker.setUpdateUrl(url));
 
-// 获取当前版本
-secureIpcHandle('update-get-version', () => {
-    return updateChecker.getCurrentVersion();
-});
-
-// 获取/设置更新源 URL
-secureIpcHandle('update-get-url', () => {
-    return updateChecker.getUpdateUrl();
-});
-
-secureIpcHandle('update-set-url', (event, url) => {
-    return updateChecker.setUpdateUrl(url);
-});
-
-// 打开下载链接（用系统默认浏览器）
+// 打开下载链接（系统浏览器，作为应用内更新的兜底）
 secureIpcHandle('update-open-download', async (event, url) => {
     if (!url) return { success: false, error: '下载链接为空' };
     try {
-        const safeUrl = updateChecker.normalizeDownloadUrl(url);
-        await shell.openExternal(safeUrl);
+        await shell.openExternal(updateChecker.normalizeDownloadUrl(url));
         return { success: true };
     } catch (error) {
         console.error('[Update] 打开下载链接失败:', error);
         return { success: false, error: error.message };
     }
 });
+
+// 应用内下载安装包，进度经 update-download-progress 推送到渲染进程
+secureIpcHandle('update-download', (event, url) => updateChecker.downloadInstaller(url, p => {
+    try { event.sender.send('update-download-progress', p); } catch (e) { /* sender destroyed */ }
+}));
+
+// 启动安装程序并退出应用（覆盖安装，用户数据保留）
+secureIpcHandle('update-install', (event, filePath) => updateChecker.runInstaller(filePath));
 
 // ======
 // 收藏 / 追番 IPC 处理
@@ -2441,12 +2432,8 @@ secureIpcHandle('update-open-download', async (event, url) => {
 // 添加收藏
 secureIpcHandle('favorite-add', async (event, anime) => {
     try {
-        console.log('[Favorite-add] 收到参数:', JSON.stringify({
-            id: anime?.id, source: anime?.source, type: anime?.type,
-            bgm_id: anime?.bgm_id, episode_count: anime?.episode_count
-        }));
         const result = await animeDb.addFavorite(anime);
-        console.log('[Favorite-add] 主进程返回:', JSON.stringify(result), 'id类型:', typeof result?.id, 'changes类型:', typeof result?.changes);
+        console.log('[Favorite-add] 主进程返回:', JSON.stringify(result));
         return result;
     } catch (error) {
         console.error('[Favorite] 添加收藏失败:', error);

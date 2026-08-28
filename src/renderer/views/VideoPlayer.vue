@@ -88,7 +88,7 @@
           <div class="episodes-grid">
             <button v-for="(episode, index) in renderedCurrentLineEpisodes" :key="episode.id || index"
               @click="playEpisode(episode)"
-              :class="['episode-btn', { active: currentVideo?.episode?.id === episode.id }]">
+              :class="['episode-btn', { active: currentEpisodeIndex === index }]">
               {{ episode.title || episode.name || `${index + 1}` }}
             </button>
           </div>
@@ -114,6 +114,7 @@ import {
   formatLineNames,
   getAdjacentEpisode,
   getLineEpisodes,
+  getPreferredEpisodeLine,
   hasEpisodeLines,
   normalizeEpisodes
 } from '../utils/episodeList.js';
@@ -188,6 +189,14 @@ export default {
 
     previousEpisode() {
       return getAdjacentEpisode(this.currentLineEpisodes, this.currentEpisodeIndex, -1);
+    },
+
+    currentEpisodeIdentity() {
+      const episode = this.currentVideo?.episode;
+      if (!episode) return '';
+      return [episode.id, episode.title, episode.name, episode.index]
+        .map(value => value ?? '')
+        .join('|');
     }
   },
   watch: {
@@ -204,7 +213,8 @@ export default {
       this.resetVisibleEpisodes();
     },
 
-    'currentVideo.episode.id'() {
+    currentEpisodeIdentity() {
+      this.ensureSelectedLine();
       this.resetVisibleEpisodes();
     }
   },
@@ -218,10 +228,11 @@ export default {
       const keys = Object.keys(this.episodes);
       if (keys.length === 0) return;
       // 当前线路仍有效则保留
-      if (this.selectedLine && Array.isArray(this.episodes[this.selectedLine])) return;
+      const currentLine = this.selectedLine && this.episodes[this.selectedLine];
+      if (Array.isArray(currentLine) && findEpisodeIndex(currentLine, this.currentVideo?.episode) >= 0) return;
       // 否则尝试匹配当前集所在线路，否则取第一条
       const foundLine = findLineForEpisode(this.episodes, this.currentVideo?.episode);
-      this.selectedLine = foundLine || keys[0];
+      this.selectedLine = foundLine || getPreferredEpisodeLine(this.episodes) || keys[0];
     },
 
     toggleAutoPlay() {

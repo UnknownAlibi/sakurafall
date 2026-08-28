@@ -35,6 +35,19 @@
         </div>
       </div>
 
+      <div v-if="selectedType !== 'season'" class="toolbar-row bangumi-region-row">
+        <span class="toolbar-label">地区</span>
+        <div class="toolbar-chip-list">
+          <button
+            v-for="option in regionOptions"
+            :key="option.id"
+            :class="['toolbar-chip', { active: selectedRegion === option.id }]"
+            type="button"
+            @click="$emit('select-region', option.id)"
+          >{{ option.name }}</button>
+        </div>
+      </div>
+
       <div v-if="selectedType !== 'season'" class="toolbar-row browse-filter-row">
         <span class="toolbar-label browse-filter-label">年份</span>
         <select class="browse-filter-select" :value="selectedYear" @change="$emit('year-change', $event)">
@@ -65,9 +78,11 @@
       <span v-if="searchKeyword">搜索: "{{ searchKeyword }}"</span>
       <span v-if="selectedType !== 'season' && selectedSort !== 'date'" class="genre-status-tag">排序: {{ activeSortName }}</span>
       <span v-if="selectedType !== 'all'" class="genre-status-tag">类型: {{ activeTypeName }}</span>
+      <span v-if="selectedRegion !== 'all'" class="genre-status-tag">地区: {{ activeRegionName }}</span>
       <span v-if="selectedYear" class="genre-status-tag">年份: {{ selectedYear }}</span>
       <button v-if="searchKeyword" class="clear-search-btn" @click="$emit('clear-search')">清除搜索</button>
       <button v-if="selectedType !== 'all'" class="clear-search-btn" @click="$emit('select-type', 'all')">清除类型</button>
+      <button v-if="selectedRegion !== 'all'" class="clear-search-btn" @click="$emit('select-region', 'all')">清除地区</button>
       <button v-if="selectedYear" class="clear-search-btn" @click="$emit('clear-year')">清除年份</button>
     </div>
   </section>
@@ -81,22 +96,25 @@ export default {
     totalItems: { type: Number, default: 0 },
     selectedType: { type: String, default: 'all' },
     selectedSort: { type: String, default: 'date' },
+    selectedRegion: { type: String, default: 'all' },
     selectedYear: { type: [String, Number], default: '' },
     searchKeyword: { type: String, default: '' },
     typeOptions: { type: Array, default: () => [] },
     sortOptions: { type: Array, default: () => [] },
+    regionOptions: { type: Array, default: () => [] },
     yearOptions: { type: Array, default: () => [] },
     seasonOptions: { type: Array, default: () => [] },
     seasonYear: { type: [String, Number], default: null },
     seasonQuarter: { type: [String, Number], default: null },
     currentSeasonLabel: { type: String, default: '' },
     activeTypeName: { type: String, default: '' },
-    activeSortName: { type: String, default: '' }
+    activeSortName: { type: String, default: '' },
+    activeRegionName: { type: String, default: '' }
   },
-  emits: ['select-type', 'select-sort', 'year-change', 'season-change', 'clear-search', 'clear-year'],
+  emits: ['select-type', 'select-sort', 'select-region', 'year-change', 'season-change', 'clear-search', 'clear-year'],
   computed: {
     hasStatus() {
-      return !!(this.searchKeyword || this.selectedType !== 'all' || this.selectedYear ||
+      return !!(this.searchKeyword || this.selectedType !== 'all' || this.selectedRegion !== 'all' || this.selectedYear ||
         (this.selectedType !== 'season' && this.selectedSort !== 'date'));
     }
   }

@@ -858,57 +858,8 @@
           </div>
         </div>
 
-        <!-- 检查更新 -->
-        <div class="setting-item update-section">
-          <div class="setting-label">
-            <label>检查更新</label>
-            <p class="setting-desc">从配置的更新源检查是否有新版本</p>
-          </div>
-          <div class="setting-control">
-            <button class="action-btn primary" :disabled="checkingUpdate" @click="checkForUpdates">
-              {{ checkingUpdate ? '检查中...' : '检查更新' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- 更新结果 -->
-        <div v-if="updateResult" class="update-result" :class="{ 'has-update': updateResult.hasUpdate, 'no-update': !updateResult.hasUpdate && !updateResult.error, 'update-error': updateResult.error }">
-          <template v-if="updateResult.error">
-            <span class="update-icon">⚠️</span>
-            <div class="update-text">
-              <strong>检查失败</strong>
-              <p>{{ updateResult.error }}</p>
-            </div>
-          </template>
-          <template v-else-if="updateResult.hasUpdate">
-            <span class="update-icon">🎉</span>
-            <div class="update-text">
-              <strong>发现新版本 {{ updateResult.latestVersion }}</strong>
-              <p v-if="updateResult.releaseNotes" class="release-notes">{{ updateResult.releaseNotes }}</p>
-              <p class="release-date" v-if="updateResult.releaseDate">发布日期：{{ updateResult.releaseDate }}</p>
-            </div>
-            <button class="action-btn primary" @click="openDownloadPage(updateResult.downloadUrl)">前往下载</button>
-          </template>
-          <template v-else>
-            <span class="update-icon">✅</span>
-            <div class="update-text">
-              <strong>已是最新版本</strong>
-              <p>当前版本 {{ updateResult.currentVersion }}</p>
-            </div>
-          </template>
-        </div>
-
-        <!-- 更新源配置 -->
-        <div class="setting-item">
-          <div class="setting-label">
-            <label>更新源地址</label>
-            <p class="setting-desc">latest.json 所在的 URL，修改后点击"保存"</p>
-          </div>
-          <div class="setting-control update-url-control">
-            <input v-model="updateUrlInput" type="text" class="text-input" placeholder="https://example.com/latest.json" />
-            <button class="action-btn secondary" @click="saveUpdateUrl">保存</button>
-          </div>
-        </div>
+        <!-- 应用更新（检查更新/应用内下载安装/更新源配置） -->
+        <UpdateSettings />
       </div>
     </div>
 
@@ -922,6 +873,7 @@
 
 <script>
 import { mapGetters, mapActions } from 'vuex';
+import UpdateSettings from '../components/Settings/UpdateSettings.vue';
 import previewMoonwheel from '../assets/generated/theme-preview-sakurafall-default.webp';
 import previewNightStage from '../assets/generated/theme-preview-night-stage.webp';
 import previewMangaInk from '../assets/generated/theme-preview-manga-ink.webp';
@@ -940,6 +892,9 @@ const THEME_PREVIEWS = Object.freeze({
 
 export default {
   name: 'Settings',
+  components: {
+    UpdateSettings
+  },
   data() {
     return {
       localSettings: {
@@ -991,10 +946,6 @@ export default {
       platform: 'Unknown',
       isDev: false,
 
-      // 应用更新
-      checkingUpdate: false,
-      updateResult: null,
-      updateUrlInput: '',
       themePacks: [],
       importingTheme: false,
       // Bangumi 镜像选择模式：main(自动) | official | custom
@@ -1763,85 +1714,6 @@ export default {
       });
     },
 
-    // ── 应用更新 ──
-
-    async checkForUpdates() {
-      this.checkingUpdate = true;
-      this.updateResult = null;
-      try {
-        if (window.electronAPI && window.electronAPI.updateCheck) {
-          const result = await window.electronAPI.updateCheck();
-          this.updateResult = result;
-          if (result.hasUpdate) {
-            if (this.$notify) {
-              this.$notify.success('发现新版本', `v${result.latestVersion} 已发布`);
-            }
-          } else if (!result.error) {
-            if (this.$notify) {
-              this.$notify.success('已是最新版本', `当前 v${result.currentVersion}`);
-            }
-          }
-        } else {
-          if (this.$notify) {
-            this.$notify.warning('提示', '当前版本不支持更新检查');
-          }
-        }
-      } catch (error) {
-        console.error('检查更新失败:', error);
-        this.updateResult = { error: error.message, hasUpdate: false };
-        if (this.$notify) {
-          this.$notify.error('错误', '检查更新失败: ' + error.message);
-        }
-      } finally {
-        this.checkingUpdate = false;
-      }
-    },
-
-    async openDownloadPage(url) {
-      if (!url) {
-        if (this.$notify) this.$notify.warning('提示', '下载链接为空');
-        return;
-      }
-      try {
-        if (window.electronAPI && window.electronAPI.updateOpenDownload) {
-          await window.electronAPI.updateOpenDownload(url);
-        }
-      } catch (error) {
-        console.error('打开下载链接失败:', error);
-        if (this.$notify) this.$notify.error('错误', '打开下载链接失败: ' + error.message);
-      }
-    },
-
-    async saveUpdateUrl() {
-      const url = (this.updateUrlInput || '').trim();
-      if (!url) {
-        if (this.$notify) this.$notify.warning('提示', '请输入更新源地址');
-        return;
-      }
-      try {
-        if (window.electronAPI && window.electronAPI.updateSetUrl) {
-          const saved = await window.electronAPI.updateSetUrl(url);
-          if (saved) {
-            if (this.$notify) this.$notify.success('成功', '更新源地址已保存');
-          } else if (this.$notify) {
-            this.$notify.error('错误', '更新源地址无效，请使用 HTTPS 地址');
-          }
-        }
-      } catch (error) {
-        console.error('保存更新源失败:', error);
-        if (this.$notify) this.$notify.error('错误', '保存失败: ' + error.message);
-      }
-    },
-
-    async loadUpdateUrl() {
-      try {
-        if (window.electronAPI && window.electronAPI.updateGetUrl) {
-          this.updateUrlInput = await window.electronAPI.updateGetUrl();
-        }
-      } catch (error) {
-        // 加载失败使用空值，不影响页面
-      }
-    }
   },
 
   async mounted() {
@@ -1858,8 +1730,7 @@ export default {
         this.loadSystemInfo(),
         this.loadThemePacks(),
         this.loadAnime4kPresets(),
-        this.loadDomainSuggestions(),
-        this.loadUpdateUrl()
+        this.loadDomainSuggestions()
       ]);
       if (!isActive()) return;
 
@@ -1867,16 +1738,6 @@ export default {
       this.applyTheme(this.localSettings.theme);
       this.applyUiEffectsMode(this.localSettings.uiEffectsMode);
 
-      // 监听启动时的静默更新检查结果（保存注销函数，避免重复进入累积监听器）
-      if (window.electronAPI && window.electronAPI.onUpdateAvailable) {
-        this.removeUpdateListener = window.electronAPI.onUpdateAvailable((info) => {
-          this.updateResult = info;
-          if (this.$notify && info.hasUpdate) {
-            this.$notify.success('发现新版本', `v${info.latestVersion} 已发布，可在设置页下载`);
-          }
-        });
-      }
-      
     } catch (error) {
       console.error('初始化设置页面失败:', error);
     }
@@ -1884,10 +1745,6 @@ export default {
 
   beforeUnmount() {
     this._settingsLifecycleToken = null;
-    if (this.removeUpdateListener) {
-      this.removeUpdateListener();
-      this.removeUpdateListener = null;
-    }
   }
 };
 </script>
@@ -2916,90 +2773,6 @@ input:checked + .slider:before {
 
 .setting-hint.error {
   color: var(--error-color);
-}
-
-/* ── 应用更新 ── */
-.update-section {
-  margin-top: 16px;
-}
-
-.update-result {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-  margin: 12px 0;
-  border-radius: 8px;
-  border: 1px solid var(--border-color, #e5e5e5);
-  background: var(--bg-surface);
-}
-
-.update-result.has-update {
-  border-color: #fb7299;
-  background: rgba(var(--primary-rgb), 0.08);
-}
-
-.update-result.no-update {
-  border-color: #52c41a;
-  background: rgba(82, 196, 26, 0.08);
-}
-
-.update-result.update-error {
-  border-color: #ff4d4f;
-  background: rgba(255, 77, 79, 0.08);
-}
-
-.update-icon {
-  font-size: 22px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.update-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.update-text strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 14px;
-}
-
-.update-text p {
-  margin: 2px 0;
-  font-size: 13px;
-  color: var(--text-secondary, #666);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.update-text .release-notes {
-  max-height: 120px;
-  overflow-y: auto;
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: rgba(0, 0, 0, 0.03);
-  border-radius: 4px;
-}
-
-.update-url-control {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-width: 320px;
-}
-
-.update-url-control .text-input {
-  flex: 1;
-  min-width: 200px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color, #ddd);
-  border-radius: 6px;
-  font-size: 13px;
-  background: var(--bg-input);
-  color: var(--text-primary);
 }
 
 /* 主题包设置项：卡片墙较宽，改纵向布局让标题在上、卡片墙占满整行，避免左右挤压留白 */

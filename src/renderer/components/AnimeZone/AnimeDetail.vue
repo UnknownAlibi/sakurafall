@@ -100,8 +100,11 @@
                 <p class="intro-text" :class="{ expanded: introExpanded }">{{ anime.intro }}</p>
                 <button
                   v-if="anime.intro.length > 80"
+                  type="button"
                   class="expand-btn"
-                  @click="introExpanded = !introExpanded"
+                  :aria-expanded="String(introExpanded)"
+                  @pointerdown.stop
+                  @click.stop="introExpanded = !introExpanded"
                 >
                   {{ introExpanded ? '收起' : '展开' }}
                   <span class="expand-arrow" :class="{ flipped: introExpanded }">▼</span>
@@ -191,7 +194,7 @@
                     </div>
 
                     <!-- 资源站自带 episodes：直接显示多线路选集（无需多源候选） -->
-                    <template v-else-if="playSources.length === 0 && hasEpisodes">
+                    <template v-else-if="displayPlaySources.length === 0 && hasEpisodes">
                       <div v-if="episodeLines.length > 1" class="line-selector">
                         <button
                           v-for="(lineId, index) in episodeLines"
@@ -219,7 +222,11 @@
                       </div>
                     </template>
 
-                    <div v-else-if="playSources.length === 0 && !backgroundSourceSearch" class="no-episodes-hint">
+                    <div v-else-if="displayPlaySources.length === 0 && !backgroundSourceSearch" class="no-episodes-hint">
+                      <div v-if="sourceSearchNotice" class="source-search-notice source-search-notice-empty" role="status">
+                        <strong>{{ sourceSearchNotice.title }}</strong>
+                        <span>{{ sourceSearchNotice.detail }}</span>
+                      </div>
                       <p class="no-ep-text">{{ emptySourceMessage }}</p>
                       <button class="source-search-btn" @click="retryPlaySources">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -231,10 +238,6 @@
                       <div v-if="backgroundSourceSearch" class="source-background-status" role="status">
                         <span class="loading-spinner"></span>
                         <span>{{ reliableSourceCount > 0 ? '可播线路已先显示，其他片源继续补充中...' : '正在继续查找其他片源和别名...' }}</span>
-                      </div>
-                      <div v-if="sourceSearchNotice" class="source-search-notice" role="status">
-                        <strong>{{ sourceSearchNotice.title }}</strong>
-                        <span>{{ sourceSearchNotice.detail }}</span>
                       </div>
                       <div
                         v-for="source in displayPlaySources"
@@ -294,9 +297,6 @@
                             </button>
                           </div>
                         </div>
-                      </div>
-                      <div v-if="hiddenSourceCount > 0" class="source-hidden-summary">
-                        另有 {{ hiddenSourceCount }} 个源未匹配、无分集或暂时不可用
                       </div>
                     </div>
                   </div>
@@ -747,13 +747,9 @@ export default {
       )).length;
     },
     displayPlaySources() {
-      if (this.reliableSourceCount === 0) return this.playSources;
       return this.playSources.filter(source => (
         source.status === 'success' && source.matchReliable && source.playableEpisodeCount > 0
       ));
-    },
-    hiddenSourceCount() {
-      return Math.max(0, this.playSources.length - this.displayPlaySources.length);
     },
     sourceSearchNotice() {
       if (this.playSources.length === 0 || this.reliableSourceCount > 0) return null;
@@ -779,7 +775,8 @@ export default {
     },
     emptySourceMessage() {
       if (this.sourceSearchError) return `片源搜索失败：${this.sourceSearchError}`;
-      if (this.sourceSearchQueriesTried.length > 0) return '当前未配置可搜索片源，或片源包尚未启用';
+      if (this.playSources.length > 0) return '没有找到具备有效分集的播放源';
+      if (this.sourceSearchQueriesTried.length > 0) return '已启用的片源暂未返回可播放分集';
       return '未找到可播放的资源站源';
     }
   },
@@ -2300,13 +2297,6 @@ export default {
   background: var(--bg-card-glass);
   color: var(--text-tertiary);
   font-size: 12px;
-}
-
-.source-hidden-summary {
-  padding: 6px 2px 0;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  text-align: center;
 }
 
 .source-search-notice {

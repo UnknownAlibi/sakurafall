@@ -14,6 +14,13 @@
  */
 
 const bangumiApi = require('./BangumiApi');
+const { subjectYearHints } = require('./SubjectCatalogPolicy');
+
+function resolveSubjectYear(item, airDate = '') {
+  const explicit = Number(item?.year) || Number(String(airDate || '').match(/^(?:19|20)\d{2}/)?.[0]) || 0;
+  if (explicit >= 1900 && explicit <= 2100) return explicit;
+  return subjectYearHints(item)[0] || null;
+}
 
 class SubjectIndexService {
   constructor() {
@@ -85,7 +92,7 @@ class SubjectIndexService {
         const bgmId = item.bgmId || item.bgm_id || item.id;
         if (!bgmId) continue;
         const airDate = String(item.airDate || item.air_date || '');
-        const year = item.year || (airDate ? parseInt(airDate.slice(0, 4), 10) || null : null);
+        const year = resolveSubjectYear(item, airDate);
         const month = airDate ? parseInt(airDate.slice(5, 7), 10) || null : null;
         insertStmt.run({
           bgmId: Number(bgmId),
@@ -139,7 +146,7 @@ class SubjectIndexService {
     if (!bgmId) return;
     const now = Date.now();
     const airDate = String(detail.airDate || detail.air_date || '');
-    const year = detail.year || (airDate ? parseInt(airDate.slice(0, 4), 10) || null : null);
+    const year = resolveSubjectYear(detail, airDate);
     const month = airDate ? parseInt(airDate.slice(5, 7), 10) || null : null;
     try {
       this.db.prepare(`
@@ -219,6 +226,8 @@ class SubjectIndexService {
       page = 1,
       pageSize = this.DEFAULT_PAGE_SIZE,
       releasedOnly = false,
+      requireDated = false,
+      requireRated = false,
       type = null,
       platform = ''
     } = filters;
@@ -255,19 +264,34 @@ class SubjectIndexService {
       conditions.push('s.platform = ?');
       params.push(String(platform));
     }
-    if (releasedOnly) {
+    if (requireDated) {
       const today = this._todayKey();
-      conditions.push("(s.air_date IS NULL OR s.air_date = '' OR s.air_date <= ?)");
+      conditions.push("(s.air_date GLOB '????-??-??' AND s.air_date <= ?)");
       params.push(today);
+    } else if (releasedOnly) {
+      const today = this._todayKey();
+      const currentYear = Number(today.slice(0, 4));
+      const undatedYearCondition = requireRated
+        ? 's.year IS NOT NULL AND s.year <= ?'
+        : '(s.year IS NULL OR s.year <= ?)';
+      conditions.push(`(
+        (s.air_date GLOB '????-??-??' AND s.air_date <= ?)
+        OR ((s.air_date IS NULL OR s.air_date = '' OR s.air_date NOT GLOB '????-??-??')
+          AND ${undatedYearCondition})
+      )`);
+      params.push(today, currentYear);
+    }
+    if (requireRated) {
+      conditions.push('(s.rating > 0 AND (s.votes >= 10 OR s.rank > 0))');
     }
 
     const orderBy = this._resolveOrderBy(sort);
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
     const tagJoin = tagList.length > 0
-      ? `JOIN (SELECT DISTINCT bgm_id FROM bangumi_subject_tags WHERE tag IN (${tagList.map(() => '?').join(',')})) AS t ON s.bgm_id = t.bgm_id`
+      ? `JOIN (SELECT bgm_id FROM bangumi_subject_tags WHERE tag IN (${tagList.map(() => '?').join(',')}) GROUP BY bgm_id HAVING COUNT(DISTINCT tag) = ?) AS t ON s.bgm_id = t.bgm_id`
       : '';
-    const tagParams = tagList;
+    const tagParams = tagList.length > 0 ? [...tagList, tagList.length] : [];
 
     // 计算总数
     const countSql = `SELECT COUNT(*) as n FROM bangumi_subjects s ${tagJoin} ${where}`;
@@ -496,7 +520,7 @@ class SubjectIndexService {
       planned_episode_count: item.planned_episode_count || item.total_episode_count || item.episode_count || item.eps || 0,
       total_episode_count: item.total_episode_count || item.planned_episode_count || item.episode_count || item.eps || 0,
       intro: item.intro || item.summary || '',
-      year: item.year || (item.air_date ? parseInt(String(item.air_date).slice(0, 4), 10) || null : null),
+      year: resolveSubjectYear(item, item.air_date || item.airDate || ''),
       nsfw: item.nsfw || false,
       // 保留 platform 和 area，upsertSubjects/upsertDetail 会通过 item.platform || item.area fallback 写入 DB
       platform: item.platform || item.area || '',

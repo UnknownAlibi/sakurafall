@@ -3,6 +3,12 @@ const assert = require('node:assert/strict');
 const { SubjectService } = require('../src/main/services/SubjectService');
 const subjectIndexService = require('../src/main/services/SubjectIndexService');
 const bangumiApi = require('../src/main/services/BangumiApi');
+const {
+  hasQualifiedRating,
+  isSubjectCatalogEligible,
+  subjectReleaseState,
+  validDateKey
+} = require('../src/main/services/SubjectCatalogPolicy');
 
 function createSubject(id, airDate = '2026-01-01') {
   return {
@@ -12,6 +18,27 @@ function createSubject(id, airDate = '2026-01-01') {
     air_date: airDate
   };
 }
+
+test('catalog policy only treats real, reached dates as latest releases', () => {
+  const todayKey = '2026-08-28';
+  assert.equal(validDateKey('2026-02-29'), '');
+  assert.equal(subjectReleaseState(createSubject(1, '2026-08-28'), todayKey).state, 'released-dated');
+  assert.equal(isSubjectCatalogEligible(createSubject(2, '2026-08-29'), { sort: 'date', todayKey }), false);
+  assert.equal(isSubjectCatalogEligible({ ...createSubject(3, ''), year: 2025 }, { sort: 'date', todayKey }), false);
+  assert.equal(isSubjectCatalogEligible({ ...createSubject(4, ''), tags: ['2029年放送'] }, { sort: 'date', todayKey }), false);
+  assert.equal(isSubjectCatalogEligible(createSubject(5, '2026-08-28'), { sort: 'date', todayKey }), true);
+});
+
+test('catalog score policy rejects future, unrated and tiny unranked samples', () => {
+  const todayKey = '2026-08-28';
+  const oldTitle = { ...createSubject(10, ''), year: 2020, rating: 8.5, votes: 120 };
+  assert.equal(hasQualifiedRating(oldTitle), true);
+  assert.equal(isSubjectCatalogEligible(oldTitle, { sort: 'score', todayKey }), true);
+  assert.equal(isSubjectCatalogEligible({ ...oldTitle, rating: 0 }, { sort: 'score', todayKey }), false);
+  assert.equal(isSubjectCatalogEligible({ ...oldTitle, rating: 10, votes: 1, rank: 0 }, { sort: 'score', todayKey }), false);
+  assert.equal(isSubjectCatalogEligible({ ...oldTitle, year: null }, { sort: 'score', todayKey }), false);
+  assert.equal(isSubjectCatalogEligible({ ...oldTitle, tags: ['2027冬'] }, { sort: 'score', todayKey }), false);
+});
 
 test('SubjectService reuses released catalog scan results across sequential pages', async () => {
   const service = new SubjectService();
@@ -144,6 +171,7 @@ test('SubjectService serves TV and other platform filters from the local index',
     });
 
     assert.equal(capturedFilters.platform, 'TV');
+    assert.equal(capturedFilters.requireDated, true);
     assert.equal(result.cat, 1);
     assert.equal(result.total, 1598);
     assert.equal(result._servedFromIndex, true);
@@ -176,6 +204,7 @@ test('SubjectService uses numeric local ratings for platform score sorting', asy
 
     assert.equal(capturedFilters.platform, 'TV');
     assert.equal(capturedFilters.sort, 'rating');
+    assert.equal(capturedFilters.requireRated, true);
     assert.equal(result.data[0].rating, 9.2);
     assert.equal(result._indexBackedScoreSort, true);
   } finally {
@@ -217,20 +246,37 @@ test('SubjectService falls back to indexed tags when Bangumi returns an empty fi
   }
 });
 
-test('SubjectService serves an uncached tag filter from the local index first', async () => {
+test('SubjectService waits for the network collection on a tag-filtered date browse', async () => {
+  // 回归：筛选（标签/年份）+ date 排序曾从增量索引直读，
+  // 首屏只显示几条；现在 staleWhileRevalidate 也必须走网络集合路径
   const service = new SubjectService();
   const originalQuery = subjectIndexService.querySubjects;
   subjectIndexService.querySubjects = filters => ({
     data: [createSubject(202)],
-    total: 426,
+    total: 1,
     page: filters.page,
     pageSize: filters.pageSize,
-    totalPages: 18,
+    totalPages: 1,
     fromIndex: true
   });
   const originalRequest = bangumiApi.request;
+  const originalNormalizeItem = bangumiApi._normalizeItem;
+  let networkRequests = 0;
+  bangumiApi._normalizeItem = item => ({
+    bgm_id: item.id,
+    name: item.name,
+    air_date: item.date
+  });
   bangumiApi.request = async () => {
-    throw new Error('network should not block the tag filter response');
+    networkRequests += 1;
+    return {
+      total: 3,
+      data: [
+        { id: 501, name: 'A', date: '2026-01-05' },
+        { id: 502, name: 'B', date: '2026-02-10' },
+        { id: 503, name: 'C', date: '2026-03-15' }
+      ]
+    };
   };
 
   try {
@@ -242,13 +288,14 @@ test('SubjectService serves an uncached tag filter from the local index first', 
       staleWhileRevalidate: true
     });
 
-    assert.equal(result.data[0].bgm_id, 202);
-    assert.equal(result.total, 426);
-    assert.equal(result._servedFromIndex, true);
-    assert.equal(result._staleWhileRevalidate, true);
+    assert.equal(result._servedFromIndex, undefined);
+    assert.equal(networkRequests, 1);
+    assert.equal(result.total, 3);
+    assert.deepEqual(result.data.map(item => item.bgm_id), [503, 502, 501]);
   } finally {
     subjectIndexService.querySubjects = originalQuery;
     bangumiApi.request = originalRequest;
+    bangumiApi._normalizeItem = originalNormalizeItem;
   }
 });
 
@@ -337,6 +384,37 @@ test('SubjectService sorts one released tag collection by date and real score', 
   }
 });
 
+test('SubjectService keeps region tags separate from official platform metadata', async () => {
+  const service = new SubjectService();
+  const originalRequest = bangumiApi.request;
+  const originalNormalizeItem = bangumiApi._normalizeItem;
+  bangumiApi._normalizeItem = item => item;
+  bangumiApi.request = async (_url, options) => {
+    assert.deepEqual(options.body.filter.tag, ['国漫', '战斗']);
+    assert.deepEqual(options.body.filter.meta_tags, ['WEB']);
+    return {
+      total: 1,
+      data: [{ id: 501, name: 'Combined filter', air_date: '2025-01-01', rating: 8.2, votes: 200 }]
+    };
+  };
+
+  try {
+    const result = await service.browse({
+      tags: ['国漫', '战斗'],
+      metaTags: ['WEB'],
+      sort: 'score',
+      page: 1,
+      limit: 24
+    });
+    assert.equal(result.data.length, 1);
+    assert.deepEqual(result.tags, ['国漫', '战斗']);
+    assert.deepEqual(result.metaTags, ['WEB']);
+  } finally {
+    bangumiApi.request = originalRequest;
+    bangumiApi._normalizeItem = originalNormalizeItem;
+  }
+});
+
 test('SubjectService bounds cold tag collection scans', async () => {
   const service = new SubjectService();
   let requests = 0;
@@ -356,4 +434,45 @@ test('SubjectService bounds cold tag collection scans', async () => {
   assert.equal(requests, 8);
   assert.equal(result.data.length, 400);
   assert.equal(result.truncated, true);
+});
+
+test('SubjectService does not serve a year-filtered date browse from the partial local index', async () => {
+  // 回归：年份 + date 排序曾直接读增量索引，只有几条数据；
+  // 现在必须走网络集合路径（_getReleasedBrowseCollection）
+  const service = new SubjectService();
+  const originalQuery = subjectIndexService.querySubjects;
+  subjectIndexService.querySubjects = filters => ({
+    data: [createSubject(301)],
+    total: 1,
+    page: filters.page,
+    pageSize: filters.pageSize,
+    totalPages: 1,
+    fromIndex: true
+  });
+  let collectionCalls = 0;
+  service._getReleasedBrowseCollection = async ({ year }) => {
+    collectionCalls += 1;
+    assert.equal(year, 2024);
+    const items = Array.from({ length: 60 }, (_, index) => createSubject(1000 + index));
+    return {
+      data: items,
+      total: items.length,
+      sourceTotal: 60,
+      releaseDate: '2026-08-27',
+      futureFiltered: true,
+      truncated: false
+    };
+  };
+
+  try {
+    const result = await service.browse({ sort: 'date', year: 2024, page: 1, limit: 24 });
+
+    assert.equal(collectionCalls, 1);
+    assert.equal(result._servedFromIndex, undefined);
+    assert.equal(result.data.length, 24);
+    assert.equal(result.total, 60);
+    assert.equal(result.totalPages, 3);
+  } finally {
+    subjectIndexService.querySubjects = originalQuery;
+  }
 });

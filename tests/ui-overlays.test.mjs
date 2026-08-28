@@ -9,6 +9,7 @@ import path from 'node:path';
 
 import confirmState, { openConfirm, settleConfirm } from '../src/renderer/services/confirmService.js';
 import notificationModule from '../src/renderer/store/modules/notification.js';
+import favoriteModule from '../src/renderer/store/modules/favorite.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -43,6 +44,71 @@ test('effect presets keep the document root visible', () => {
   const mainCss = fs.readFileSync(path.join(root, 'src/renderer/assets/styles/main.css'), 'utf8');
 
   assert.match(mainCss, /html\[data-ui-effects\]\s*\{[\s\S]*?display:\s*block\s*!important;/);
+});
+
+test('detail episode picker renders only reliable sources with playable episodes', () => {
+  const detail = fs.readFileSync(path.join(root, 'src/renderer/components/AnimeZone/AnimeDetail.vue'), 'utf8');
+  assert.match(detail, /v-for="source in displayPlaySources"/);
+  assert.match(detail, /displayPlaySources\(\)\s*\{[\s\S]*?source\.status === 'success'[\s\S]*?source\.matchReliable[\s\S]*?source\.playableEpisodeCount > 0/);
+  assert.doesNotMatch(detail, /if \(this\.reliableSourceCount === 0\) return this\.playSources/);
+  assert.doesNotMatch(detail, /source-hidden-summary/);
+});
+
+test('discovery collapse controls and continue-watching delete use isolated native buttons', () => {
+  const componentsDir = path.join(root, 'src/renderer/components/AnimeZone');
+  const continueWatching = fs.readFileSync(path.join(componentsDir, 'ContinueWatching.vue'), 'utf8');
+  const hotAnime = fs.readFileSync(path.join(componentsDir, 'HotAnimeList.vue'), 'utf8');
+  const schedule = fs.readFileSync(path.join(componentsDir, 'BangumiSchedule.vue'), 'utf8');
+
+  for (const source of [continueWatching, hotAnime, schedule]) {
+    assert.match(source, /<button[\s\S]*?class="(?:continue-header|section-header)"[\s\S]*?@click="toggleCollapsed"/);
+    assert.match(source, /class="collapsible-shell" :class="\{ collapsed \}"/);
+    assert.match(source, /grid-template-rows:\s*0fr/);
+  }
+
+  assert.match(continueWatching, /class="continue-resume-btn"[\s\S]*?@click="\$emit\('resume', item\)"/);
+  assert.match(continueWatching, /class="continue-delete-btn"[\s\S]*?@pointerdown\.stop[\s\S]*?@click\.stop\.prevent="\$emit\('remove', item\)"/);
+  assert.doesNotMatch(continueWatching, /class="continue-card"[^>]*@click=/);
+});
+
+test('continue-watching removal updates immediately and rolls back on IPC failure', async () => {
+  const history = [
+    { anime_id: '1', source: 'ffzy', name: 'A' },
+    { anime_id: '2', source: 'legacy', name: 'B' }
+  ];
+  const state = { recentHistory: history.slice() };
+  const commit = (type, payload) => favoriteModule.mutations[type](state, payload);
+  const originalWindow = globalThis.window;
+
+  try {
+    globalThis.window = { electronAPI: { historyRemove: async () => ({ changes: 1 }) } };
+    assert.equal(await favoriteModule.actions.removePlayHistory(
+      { commit, state },
+      { animeId: '1', source: 'ffzy' }
+    ), true);
+    assert.deepEqual(state.recentHistory.map(item => item.anime_id), ['2']);
+
+    state.recentHistory = history.slice();
+    globalThis.window.electronAPI.historyRemove = async () => ({ error: 'database unavailable' });
+    assert.equal(await favoriteModule.actions.removePlayHistory(
+      { commit, state },
+      { animeId: '1', source: 'ffzy' }
+    ), false);
+    assert.deepEqual(state.recentHistory, history);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('application updater owns its layout and state after settings extraction', () => {
+  const settings = fs.readFileSync(path.join(root, 'src/renderer/views/Settings.vue'), 'utf8');
+  const updater = fs.readFileSync(path.join(root, 'src/renderer/components/Settings/UpdateSettings.vue'), 'utf8');
+  assert.match(settings, /<UpdateSettings\s*\/>/);
+  assert.doesNotMatch(settings, /async checkForUpdates\s*\(/);
+  assert.match(updater, /class="update-button update-button-primary"/);
+  assert.match(updater, /\.update-toolbar\s*[,\{]/);
+  assert.match(updater, /\.update-source-input\s*\{/);
+  assert.match(updater, /@keyframes update-spin/);
 });
 
 test('notification: 同屏最多 5 条，超出移除最旧的', () => {

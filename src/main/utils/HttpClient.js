@@ -298,6 +298,93 @@ class HttpClient {
   }
 
   /**
+   * 流式下载大文件到磁盘（安装包等），支持代理与重定向，不受 maxResponseBytes 限制
+   * @param {string} url - 下载地址
+   * @param {string} filePath - 目标文件路径
+   * @param {object} options - { headers?, referer?, timeout?, signal? }
+   * @param {function} onProgress - ({ received, total }) 回调
+   * @returns {Promise<{ received, total }>}
+   */
+  downloadToFile(url, filePath, options = {}, onProgress = null, _redirectCount = 0) {
+    if (_redirectCount > MAX_REDIRECTS) {
+      return Promise.reject(new Error(`重定向次数超过上限: ${MAX_REDIRECTS}`));
+    }
+    const fs = require('fs');
+    const headers = {
+      'User-Agent': DEFAULT_UA,
+      'Accept-Encoding': 'identity',
+      'Connection': 'keep-alive',
+      ...this.defaultHeaders,
+      ...(options.headers || {})
+    };
+    const timeout = options.timeout || 0;
+    const signal = options.signal;
+    return new Promise((resolve, reject) => {
+      const client = url.startsWith('https') ? https : http;
+      const reqOptions = { headers, method: 'GET' };
+      if (timeout) reqOptions.timeout = timeout;
+      const proxyAgent = this._getProxyAgent();
+      if (proxyAgent) reqOptions.agent = proxyAgent;
+      let settled = false;
+      let cleanupSignal = () => {};
+      const resolveOnce = (v) => { if (!settled) { settled = true; cleanupSignal(); resolve(v); } };
+      const rejectOnce = (e) => { if (!settled) { settled = true; cleanupSignal(); reject(e); } };
+      const req = client.request(url, reqOptions, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          const newUrl = res.headers.location.startsWith('http')
+            ? res.headers.location
+            : new URL(res.headers.location, url).toString();
+          cleanupSignal();
+          this.downloadToFile(newUrl, filePath, options, onProgress, _redirectCount + 1)
+            .then(resolveOnce).catch(rejectOnce);
+          return;
+        }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
+          rejectOnce(new Error(`HTTP ${res.statusCode || 0}`));
+          return;
+        }
+        const total = parseInt(res.headers['content-length'], 10) || 0;
+        let received = 0;
+        let lastReport = 0;
+        const out = fs.createWriteStream(filePath);
+        res.on('data', chunk => {
+          received += chunk.length;
+          // 进度节流：每 512KB 或首次上报
+          if (onProgress && (received - lastReport >= 512 * 1024 || lastReport === 0)) {
+            lastReport = received;
+            try { onProgress({ received, total }); } catch (e) { /* ignore */ }
+          }
+        });
+        res.on('error', rejectOnce);
+        out.on('error', rejectOnce);
+        res.on('end', () => {
+          out.end(() => {
+            if (onProgress) { try { onProgress({ received, total: total || received }); } catch (e) { /* ignore */ } }
+            resolveOnce({ received, total: total || received });
+          });
+        });
+        res.pipe(out);
+      });
+      if (signal) {
+        const onAbort = () => { req.destroy(); rejectOnce(createAbortError()); };
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
+        cleanupSignal = () => signal.removeEventListener('abort', onAbort);
+      }
+      req.on('error', rejectOnce);
+      if (timeout) {
+        req.on('timeout', () => {
+          req.destroy();
+          rejectOnce(new Error('Download timeout'));
+        });
+      }
+      req.end();
+    });
+  }
+
+  /**
    * 按指定 charset 解码 Buffer
    * @param {Buffer} buf
    * @param {string} contentType - 响应头 content-type

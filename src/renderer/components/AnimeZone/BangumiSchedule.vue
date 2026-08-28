@@ -1,7 +1,13 @@
 <template>
   <div v-if="schedule.length > 0" class="schedule-section">
-    <div class="section-header" @click="toggleCollapsed" @keydown.enter.prevent="toggleCollapsed" @keydown.space.prevent="toggleCollapsed" role="button" tabindex="0">
-      <h3 class="section-title">
+    <button
+      type="button"
+      class="section-header"
+      :aria-expanded="String(!collapsed)"
+      aria-controls="bangumi-schedule-content"
+      @click="toggleCollapsed"
+    >
+      <span class="section-title">
         <span class="section-icon schedule-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="5" width="18" height="16" rx="2"/>
@@ -9,10 +15,11 @@
           </svg>
         </span>
         新番时间表
-      </h3>
+      </span>
       <span class="collapse-toggle">{{ collapsed ? '展开' : '收起' }} <span class="collapse-arrow" :class="{ expanded: !collapsed }">›</span></span>
-    </div>
-    <div class="collapsible-body" :class="{ collapsed }">
+    </button>
+    <div class="collapsible-shell" :class="{ collapsed }">
+      <div id="bangumi-schedule-content" class="collapsible-body">
       <div class="schedule-tabs">
         <button v-for="day in schedule" :key="day.weekday.id"
           :class="['schedule-tab', { active: activeTab === day.weekday.id, today: day.weekday.id === todayDay }]"
@@ -61,6 +68,7 @@
       >
         显示更多 {{ currentDayItems.length - visibleItemLimit }} 部
       </button>
+      </div>
     </div>
   </div>
 </template>
@@ -169,10 +177,17 @@ export default {
 }
 
 .section-header {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
 }
@@ -234,17 +249,22 @@ export default {
   transform: rotate(90deg);
 }
 
-.collapsible-body {
-  max-height: 760px;
-  overflow: hidden;
+.collapsible-shell {
+  display: grid;
+  grid-template-rows: 1fr;
   opacity: 1;
-  transition: max-height 0.22s ease, opacity 0.18s ease;
+  transition: grid-template-rows 0.22s ease, opacity 0.18s ease;
 }
 
-.collapsible-body.collapsed {
-  max-height: 0;
+.collapsible-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.collapsible-shell.collapsed {
+  grid-template-rows: 0fr;
   opacity: 0;
-  margin: 0;
+  pointer-events: none;
 }
 
 .schedule-tabs {

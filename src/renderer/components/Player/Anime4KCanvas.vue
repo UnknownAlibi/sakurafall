@@ -1,6 +1,6 @@
 <template>
   <canvas
-    v-show="active"
+    v-show="presenting"
     :key="canvasEpoch"
     ref="canvas"
     class="anime4k-canvas"
@@ -34,12 +34,14 @@ export default {
   name: 'Anime4KCanvas',
   props: {
     enabled: { type: Boolean, default: false },
-    preset: { type: String, default: 'balanced' }
+    preset: { type: String, default: 'balanced' },
+    sourceKey: { type: String, default: '' }
   },
   emits: ['status-change', 'auto-disabled'],
   data() {
     return {
       active: false,
+      presenting: false,
       canvasEpoch: 0
     };
   },
@@ -51,6 +53,11 @@ export default {
     preset() {
       this._runtimePresetOverride = '';
       if (this.enabled) this.restart();
+    },
+    sourceKey(newKey, oldKey) {
+      if (newKey === oldKey) return;
+      this._runtimePresetOverride = '';
+      this.restartForSource();
     }
   },
   mounted() {
@@ -88,13 +95,27 @@ export default {
       await this.$nextTick();
       return this.$refs.canvas;
     },
+    restartForSource() {
+      this.stop();
+      if (!this.enabled || !this.sourceKey) return;
+      const video = this.findVideo();
+      if (!video) return;
+      const generation = this._lifecycleGeneration;
+      this.video = video;
+      this._metadataHandler = () => {
+        this._metadataHandler = null;
+        if (this.enabled && generation === this._lifecycleGeneration) this.start();
+      };
+      video.addEventListener('loadedmetadata', this._metadataHandler, { once: true });
+    },
     startFullscreenSafeMode(reason = '') {
       if (!this.video) return;
       this.backend = 'fullscreen-safe';
       this.fullscreenSafeMode = true;
       this.video.classList.add('anime4k-fullscreen-safe');
       this.active = false;
-      this.emitStatus({ fallbackReason: reason });
+      this.presenting = true;
+      this.emitStatus({ presenting: true, degraded: true, fallbackReason: reason });
     },
     buildStatus(extra = {}) {
       if (!this.video) return { active: false };
@@ -106,6 +127,8 @@ export default {
           preset: 'fullscreen-safe',
           requestedPreset: this.preset,
           adaptive: true,
+          presenting: true,
+          degraded: true,
           inputWidth: this.video.videoWidth || 0,
           inputHeight: this.video.videoHeight || 0,
           ...extra
@@ -118,6 +141,7 @@ export default {
         : (this.engine.outputSize || [0, 0]);
       return {
         active: true,
+        presenting: this.presenting,
         backend: this.backend === 'webgpu' ? 'webgpu-worker' : 'webgl-main',
         mode: this.backend === 'webgpu' ? 'webgpu-worker' : 'webgl',
         pipeline: this.engine.profile?.pipeline || '',
@@ -130,7 +154,9 @@ export default {
         outputWidth: output[0] || 0,
         outputHeight: output[1] || 0,
         renderMs: this.perfEma || 0,
-        renderedFrames: this.engine.renderedFrames || 0,
+        renderedFrames: this.backend === 'webgpu'
+          ? (this.engine.renderedFrames || 0)
+          : this.perfFrames,
         droppedFrames: this.engine.droppedFrames || 0,
         ...extra
       };
@@ -186,6 +212,10 @@ export default {
           if (generation !== this._lifecycleGeneration || this.backend !== 'webgpu') return;
           this.perfEma = this.perfEma ? this.perfEma * 0.92 + stats.renderMs * 0.08 : stats.renderMs;
           this.perfFrames += 1;
+          if (!this.presenting) {
+            this.presenting = true;
+            this.emitStatus();
+          }
           if (stats.renderedFrames <= 2 && stats.renderMs > WEBGPU_HARD_FRAME_MS) {
             this.handleWebgpuFailure(new Error(`CNN 实时性能不足（${stats.renderMs.toFixed(0)}ms/帧）`));
             return;
@@ -281,6 +311,7 @@ export default {
       this.backend = backend;
       this.effectivePreset = effectivePreset;
       this.active = true;
+      this.presenting = false;
       this.perfEma = 0;
       this.perfFrames = 0;
       this.lastCallbackAt = 0;
@@ -311,6 +342,7 @@ export default {
       this.fullscreenSafeMode = false;
       this.backend = '';
       this.active = false;
+      this.presenting = false;
       this._lastStatusKey = '';
     },
     stop() {
@@ -370,6 +402,10 @@ export default {
           const cost = this.engine.renderFrame(video);
           this.perfEma = this.perfEma ? this.perfEma * 0.92 + cost * 0.08 : cost;
           this.perfFrames += 1;
+          if (!this.presenting) {
+            this.presenting = true;
+            this.emitStatus();
+          }
           if (this.perfFrames >= PERF_WINDOW && this.perfEma > WEBGL_SLOW_FRAME_MS) {
             this.handleTerminalFailure('performance', `主线程 WebGL 平均耗时 ${this.perfEma.toFixed(1)}ms/帧`);
             return;

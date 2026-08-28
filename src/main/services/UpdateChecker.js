@@ -14,6 +14,7 @@
 const { app } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const HttpClient = require('../utils/HttpClient');
 
 function safeLog(...args) {
@@ -208,6 +209,69 @@ class UpdateChecker {
         error: error.message,
         silent: !!options.silent
       };
+    }
+  }
+
+  /**
+   * 应用内下载安装包到 userData/updates/
+   * @param {string} url - latest.json 里的 downloadUrl
+   * @param {function} onProgress - ({ received, total, percent }) 进度回调
+   * @returns {Promise<{ success, path, received, total }|{ success:false, error }>}
+   */
+  async downloadInstaller(url, onProgress = null) {
+    try {
+      const safeUrl = this.normalizeDownloadUrl(url);
+      const dir = path.join(app.getPath('userData'), 'updates');
+      fs.mkdirSync(dir, { recursive: true });
+      // 文件名取 URL 尾段，缺省用版本号命名
+      const tail = decodeURIComponent(new URL(safeUrl).pathname.split('/').pop() || '');
+      const fileName = /\.exe$/i.test(tail) ? tail : `SakuraFall-Setup-${this.getCurrentVersion()}.exe`;
+      const filePath = path.join(dir, fileName);
+      // 旧的同名残留先清掉，避免断点混淆
+      try { fs.rmSync(filePath, { force: true }); } catch (e) { /* ignore */ }
+      const report = ({ received, total }) => {
+        if (!onProgress) return;
+        onProgress({
+          received,
+          total,
+          percent: total ? Math.min(100, Math.floor((received / total) * 100)) : 0
+        });
+      };
+      const result = await this.http.downloadToFile(safeUrl, filePath, {}, report);
+      safeLog('[UpdateChecker] 安装包下载完成:', filePath, `${result.received} bytes`);
+      return { success: true, path: filePath, received: result.received, total: result.total };
+    } catch (error) {
+      safeError('[UpdateChecker] 下载安装包失败:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * 运行安装包并退出应用（覆盖安装，用户数据保留在 userData）
+   * @param {string} filePath - 下载得到的安装包路径
+   * @returns {Promise<{ success, error? }>}
+   */
+  async runInstaller(filePath) {
+    try {
+      const resolved = path.resolve(String(filePath || ''));
+      if (!fs.existsSync(resolved) || !/\.exe$/i.test(resolved)) {
+        return { success: false, error: '安装包不存在或格式无效' };
+      }
+      // detached 启动安装向导（非静默，用户可确认安装目录），随后退出应用
+      const child = spawn(resolved, [], {
+        detached: true,
+        stdio: 'ignore',
+        cwd: path.dirname(resolved)
+      });
+      child.unref();
+      safeLog('[UpdateChecker] 已启动安装程序，应用即将退出:', resolved);
+      setTimeout(() => {
+        try { app.quit(); } catch (e) { /* ignore */ }
+      }, 600);
+      return { success: true };
+    } catch (error) {
+      safeError('[UpdateChecker] 启动安装程序失败:', error.message);
+      return { success: false, error: error.message };
     }
   }
 }

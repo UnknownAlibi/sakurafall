@@ -14,6 +14,10 @@ const bangumiApi = require('./BangumiApi');
 const anilistProvider = require('./AniListProvider');
 // P0：本地索引服务（fire-and-forget 写入，不阻塞主流程）
 const subjectIndexService = require('./SubjectIndexService');
+const {
+  isSubjectCatalogEligible,
+  subjectReleaseState
+} = require('./SubjectCatalogPolicy');
 
 // AniList ID 标识：'anilist:123' / 'anilist_123'
 function parseAniListId(value) {
@@ -210,7 +214,7 @@ class SubjectService {
     const todayKey = this._todayDateKey();
     const releaseScope = includeFuture ? 'all' : `released-${todayKey}`;
 
-    const cacheKey = `bangumi:catalog:v2:${releaseScope}:${normalizedSort}:${safeCat ?? 'all'}:${safeYear || 'all-years'}:${safeMonth || 'all-months'}:${safePage}:${safeLimit}`;
+    const cacheKey = `bangumi:catalog:v3:${releaseScope}:${normalizedSort}:${safeCat ?? 'all'}:${safeYear || 'all-years'}:${safeMonth || 'all-months'}:${safePage}:${safeLimit}`;
     const cached = refresh ? null : this._readCache(cacheKey);
     if (cached) return cached;
     if (!refresh && staleWhileRevalidate) {
@@ -400,7 +404,9 @@ class SubjectService {
         sort: sort === 'date' ? 'latest' : sort === 'score' ? 'rating' : 'rank',
         page,
         pageSize: limit,
-        releasedOnly: true
+        releasedOnly: true,
+        requireDated: sort === 'date',
+        requireRated: sort === 'score'
       });
       if (!result?.data?.length) return null;
       return {
@@ -417,7 +423,7 @@ class SubjectService {
     }
   }
 
-  _readBrowsePageFromIndex({ keyword, metaTags, year, sort, page, limit }) {
+  _readBrowsePageFromIndex({ keyword, userTags, officialMetaTags, year, sort, page, limit }) {
     if (!subjectIndexService?.querySubjects) return null;
     try {
       const indexSort = sort === 'date'
@@ -427,19 +433,23 @@ class SubjectService {
           : 'popular';
       const result = subjectIndexService.querySubjects({
         keyword,
-        tags: metaTags,
+        tags: userTags,
+        platform: officialMetaTags[0] || '',
         year,
         sort: indexSort,
         page,
         pageSize: limit,
-        releasedOnly: true
+        releasedOnly: true,
+        requireDated: sort === 'date',
+        requireRated: sort === 'score'
       });
       if (!result?.data?.length) return null;
       return {
         ...result,
         limit,
         totalPages: result.totalPages || Math.ceil((result.total || 0) / limit) || 1,
-        tags: metaTags,
+        tags: userTags,
+        metaTags: officialMetaTags,
         year,
         sort,
         releaseDate: this._todayDateKey(),
@@ -506,7 +516,7 @@ class SubjectService {
         }
 
         for (const item of items) {
-          if (!this._isReleasedSubject(item, todayKey)) {
+          if (!isSubjectCatalogEligible(item, { sort, todayKey })) {
             scan.skippedFuture += 1;
             continue;
           }
@@ -572,16 +582,7 @@ class SubjectService {
   }
 
   _isReleasedSubject(item, todayKey = this._todayDateKey()) {
-    const rawDate = String(item?.air_date || item?.airDate || item?.date || '').trim();
-    const dateKey = rawDate.slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return dateKey <= todayKey;
-
-    const currentYear = Number(String(todayKey).slice(0, 4));
-    const yearHints = [item?.year, ...(Array.isArray(item?.tags) ? item.tags : [])]
-      .map(value => String(typeof value === 'string' ? value : value?.name || '').trim())
-      .map(value => Number(value.match(/^(19|20)\d{2}/)?.[0] || 0))
-      .filter(Boolean);
-    return !yearHints.some(year => year > currentYear);
+    return subjectReleaseState(item, todayKey).state !== 'future';
   }
 
   _todayDateKey() {
@@ -591,9 +592,10 @@ class SubjectService {
     return `${now.getFullYear()}-${month}-${day}`;
   }
 
-  async _requestBrowsePage({ keyword = '', metaTags = [], year = null, sort = 'score', limit = 50, offset = 0 }) {
+  async _requestBrowsePage({ keyword = '', userTags = [], officialMetaTags = [], year = null, sort = 'score', limit = 50, offset = 0 }) {
     const filter = { type: [2] };
-    if (metaTags.length > 0) filter.tag = metaTags;
+    if (userTags.length > 0) filter.tag = userTags;
+    if (officialMetaTags.length > 0) filter.meta_tags = officialMetaTags;
     const todayKey = this._todayDateKey();
     if (year && year >= 1900 && year <= 2100) {
       const yearEnd = `${year}-12-31`;
@@ -618,9 +620,9 @@ class SubjectService {
     };
   }
 
-  async _getReleasedBrowseCollection({ keyword = '', metaTags = [], year = null, refresh = false }) {
+  async _getReleasedBrowseCollection({ keyword = '', userTags = [], officialMetaTags = [], year = null, refresh = false }) {
     const todayKey = this._todayDateKey();
-    const cacheKey = `bangumi:browse-collection:v3:${todayKey}:${metaTags.join(',') || 'all'}:${year || 'all-years'}:${keyword || ''}`;
+    const cacheKey = `bangumi:browse-collection:v5:${todayKey}:${userTags.join(',') || 'all'}:${officialMetaTags.join(',') || 'all-platforms'}:${year || 'all-years'}:${keyword || ''}`;
     if (!refresh) {
       const cached = this._readCache(cacheKey);
       if (cached?.data) return cached;
@@ -632,7 +634,7 @@ class SubjectService {
 
     const pending = (async () => {
       const requestLimit = 50;
-      const first = await this._requestBrowsePage({ keyword, metaTags, year, limit: requestLimit, offset: 0 });
+      const first = await this._requestBrowsePage({ keyword, userTags, officialMetaTags, year, limit: requestLimit, offset: 0 });
       // This is only a cold-index fallback for date sorting. Keep it bounded so a
       // single filter click can never expand into hundreds of network requests.
       const maxPages = Math.min(8, Math.ceil(first.total / requestLimit));
@@ -643,7 +645,8 @@ class SubjectService {
         for (let pageIndex = pageStart; pageIndex < Math.min(pageStart + 4, maxPages); pageIndex += 1) {
           requests.push(this._requestBrowsePage({
             keyword,
-            metaTags,
+            userTags,
+            officialMetaTags,
             year,
             limit: requestLimit,
             offset: pageIndex * requestLimit
@@ -655,7 +658,7 @@ class SubjectService {
       const seen = new Set();
       const items = [];
       for (const item of pages.flatMap(result => result.data || [])) {
-        if (!this._isReleasedSubject(item, todayKey)) continue;
+        if (!isSubjectCatalogEligible(item, { sort: 'date', todayKey })) continue;
         const identity = String(item.bgm_id || item.bgmId || item.id || `${item.name}:${item.air_date}`);
         if (seen.has(identity)) continue;
         seen.add(identity);
@@ -715,20 +718,31 @@ class SubjectService {
    * Bangumi v0 search 使用 tag 做用户标签筛选。meta_tags 仅覆盖少量官方元标签，
    * 用它查询“异世界/搞笑/机甲”等常规类型会得到错误的空结果。
    */
-  async browse({ keyword = '', tag = '', tags = [], sort = 'rank', page = 1, limit = 24, year = null, refresh = false, staleWhileRevalidate = false } = {}) {
+  async browse({ keyword = '', tag = '', tags = [], metaTags = [], sort = 'rank', page = 1, limit = 24, year = null, refresh = false, staleWhileRevalidate = false } = {}) {
     const safePage = Math.max(1, parseInt(page, 10) || 1);
     const safeLimit = Math.max(1, Math.min(50, parseInt(limit, 10) || 24));
     const safeYear = year ? parseInt(year, 10) : null;
     const offset = (safePage - 1) * safeLimit;
     const normalizedSort = ['date', 'match', 'heat', 'rank', 'score'].includes(sort) ? sort : 'rank';
-    const metaTags = Array.from(new Set([
+    const userTags = Array.from(new Set([
       ...(Array.isArray(tags) ? tags : []),
       ...(tag ? [tag] : [])
     ].map(v => String(v || '').trim()).filter(Boolean)));
+    const officialMetaTags = Array.from(new Set(
+      (Array.isArray(metaTags) ? metaTags : [])
+        .map(v => String(v || '').trim())
+        .filter(Boolean)
+    ));
 
-    const cacheKey = `bangumi:browse:v4:${normalizedSort}:${metaTags.join(',') || 'all'}:${safeYear || 'all-years'}:${keyword || ''}:${safePage}:${safeLimit}`;
+    const cacheKey = `bangumi:browse:v7:${normalizedSort}:${userTags.join(',') || 'all'}:${officialMetaTags.join(',') || 'all-platforms'}:${safeYear || 'all-years'}:${keyword || ''}:${safePage}:${safeLimit}`;
     const cached = refresh ? null : this._readCache(cacheKey);
     if (cached) return cached;
+
+    // date 排序 + 收窄筛选（年份/标签）必须走网络集合路径：本地索引是
+    // 增量子集，直接读首屏只会返回几条（首屏残缺 bug 的根源）。
+    // 无筛选默认视图由日历同步喂养，索引完整，允许直读。
+    const dateNeedsCollection = normalizedSort === 'date' && !keyword && (userTags.length > 0 || officialMetaTags.length > 0 || !!safeYear);
+
     if (!refresh && staleWhileRevalidate) {
       const stale = this._readAnyCache(cacheKey);
       if (stale && stale.content) {
@@ -739,30 +753,34 @@ class SubjectService {
         };
       }
 
-      const indexed = this._readBrowsePageFromIndex({
-        keyword,
-        metaTags,
-        year: safeYear,
-        sort: normalizedSort,
-        page: safePage,
-        limit: safeLimit
-      });
-      if (indexed) {
-        return {
-          ...indexed,
-          tag: tag || '',
-          _servedFromIndex: true,
-          _staleWhileRevalidate: true
-        };
+      if (!dateNeedsCollection) {
+        const indexed = this._readBrowsePageFromIndex({
+          keyword,
+          userTags,
+          officialMetaTags,
+          year: safeYear,
+          sort: normalizedSort,
+          page: safePage,
+          limit: safeLimit
+        });
+        if (indexed) {
+          return {
+            ...indexed,
+            tag: tag || '',
+            _servedFromIndex: true,
+            _staleWhileRevalidate: true
+          };
+        }
       }
     }
 
-    // Bangumi search has no date sort. The local index is both faster and more
-    // accurate for this view, including refreshes triggered in the background.
-    if (normalizedSort === 'date') {
+    // Bangumi search has no date sort. For the default (unfiltered) view the
+    // calendar-fed local index is fast and accurate.
+    if (normalizedSort === 'date' && !dateNeedsCollection) {
       const indexed = this._readBrowsePageFromIndex({
         keyword,
-        metaTags,
+        userTags,
+        officialMetaTags,
         year: safeYear,
         sort: normalizedSort,
         page: safePage,
@@ -782,22 +800,22 @@ class SubjectService {
 
     const url = `${bangumiApi.baseUrl}/v0/search/subjects?limit=${safeLimit}&offset=${offset}`;
     const filter = { type: [2] };
-    if (metaTags.length > 0) {
-      filter.tag = metaTags;
-    }
+    if (userTags.length > 0) filter.tag = userTags;
+    if (officialMetaTags.length > 0) filter.meta_tags = officialMetaTags;
     const todayKey = this._todayDateKey();
     if (safeYear && safeYear >= 1900 && safeYear <= 2100) {
       const yearEnd = `${safeYear}-12-31`;
       filter.air_date = [`>=${safeYear}-01-01`, `<=${yearEnd < todayKey ? yearEnd : todayKey}`];
-    } else if (metaTags.length > 0) {
+    } else if (userTags.length > 0 || officialMetaTags.length > 0) {
       filter.air_date = [`<=${todayKey}`];
     }
 
     try {
-      if (!keyword && metaTags.length > 0 && normalizedSort === 'date') {
+      if (!keyword && normalizedSort === 'date' && (userTags.length > 0 || officialMetaTags.length > 0 || safeYear)) {
         const collection = await this._getReleasedBrowseCollection({
           keyword,
-          metaTags,
+          userTags,
+          officialMetaTags,
           year: safeYear,
           refresh
         });
@@ -808,7 +826,8 @@ class SubjectService {
           page: safePage,
           totalPages: Math.ceil(sorted.length / safeLimit) || 1,
           tag: tag || '',
-          tags: metaTags,
+          tags: userTags,
+          metaTags: officialMetaTags,
           year: safeYear,
           sort: normalizedSort,
           releaseDate: collection.releaseDate,
@@ -832,7 +851,8 @@ class SubjectService {
           page: safePage,
           totalPages: 0, // 0 表示"未知/超出范围"，UI 不会覆盖已有的 totalPages
           tag: tag || '',
-          tags: metaTags,
+          tags: userTags,
+          metaTags: officialMetaTags,
           year: safeYear,
           sort: normalizedSort,
           _outOfRange: true
@@ -854,17 +874,18 @@ class SubjectService {
           : item;
         return this._toSubjectSummary(normalized);
       }).filter(Boolean);
-      const shouldFilterFuture = metaTags.length > 0;
-      const resultItems = shouldFilterFuture
-        ? normalizedItems.filter(item => this._isReleasedSubject(item, todayKey))
+      const shouldApplyCatalogPolicy = !keyword;
+      const resultItems = shouldApplyCatalogPolicy
+        ? normalizedItems.filter(item => isSubjectCatalogEligible(item, { sort: normalizedSort, todayKey }))
         : normalizedItems;
       const displayItems = normalizedSort === 'score'
         ? this._sortBrowseCollection(resultItems, 'score')
         : resultItems;
-      if (displayItems.length === 0 && metaTags.length > 0) {
+      if (displayItems.length === 0 && (userTags.length > 0 || officialMetaTags.length > 0)) {
         const indexed = this._readBrowsePageFromIndex({
           keyword,
-          metaTags,
+          userTags,
+          officialMetaTags,
           year: safeYear,
           sort: normalizedSort,
           page: safePage,
@@ -881,19 +902,21 @@ class SubjectService {
           return fallbackResult;
         }
       }
-      const skippedFuture = normalizedItems.length - resultItems.length;
-      const realTotal = Math.max(displayItems.length, (data.total || 0) - skippedFuture);
+      const skippedIneligible = normalizedItems.length - resultItems.length;
+      const realTotal = Math.max(displayItems.length, (data.total || 0) - skippedIneligible);
       const result = {
         data: displayItems,
         total: realTotal,
         page: safePage,
         totalPages: Math.ceil(realTotal / safeLimit) || 1,
         tag: tag || '',
-        tags: metaTags,
+        tags: userTags,
+        metaTags: officialMetaTags,
         year: safeYear,
         sort: normalizedSort,
-        releaseDate: shouldFilterFuture ? todayKey : null,
-        futureFiltered: shouldFilterFuture
+        releaseDate: shouldApplyCatalogPolicy ? todayKey : null,
+        futureFiltered: shouldApplyCatalogPolicy,
+        skippedIneligible
       };
 
       this._writeCache(cacheKey, 'browse', result, 30 * 60 * 1000);
@@ -906,7 +929,7 @@ class SubjectService {
           return { ...fallback.content, _fromExpiredCache: true };
         }
       }
-      return { data: [], total: 0, page: safePage, totalPages: 0, tag: tag || '', tags: metaTags, year: safeYear, sort: normalizedSort, error: err.message };
+      return { data: [], total: 0, page: safePage, totalPages: 0, tag: tag || '', tags: userTags, metaTags: officialMetaTags, year: safeYear, sort: normalizedSort, error: err.message };
     }
   }
 

@@ -75,11 +75,13 @@
       <span>换源</span>
     </button>
 
-    <div v-show="!loading && !error && !autoRecovering && controlsVisible && (currentSourceLabel || playbackStatsLabel || anime4kRuntime.active)" class="source-status-pill">
+    <div v-show="!loading && !error && !autoRecovering && controlsVisible && (currentSourceLabel || playbackStatsLabel || anime4kRuntime.presenting)" class="source-status-pill">
       <span v-if="currentSourceLabel">{{ currentSourceLabel }}</span>
       <span v-if="currentSourceQualityLabel && !playbackStatsLabel">{{ currentSourceQualityLabel }}</span>
       <span v-if="playbackStatsLabel" class="playback-stats" :title="playbackStatsTitle">{{ playbackStatsLabel }}</span>
-      <span v-if="anime4kRuntime.active" :title="anime4kRuntimeTitle">A4K · {{ anime4kPresetLabel }}</span>
+      <span v-if="anime4kRuntime.presenting" :title="anime4kRuntimeTitle">
+        {{ anime4kRuntime.degraded ? '显示增强' : `A4K · ${anime4kPresetLabel}` }}
+      </span>
     </div>
 
     <div v-if="sourcePanelVisible" class="video-overlay source-panel-overlay" @click.self="closeSourcePanel">
@@ -239,7 +241,7 @@
       您的浏览器不支持视频播放
     </video>
 
-    <Anime4KCanvas :enabled="anime4kEnabled" :preset="anime4kPreset"
+    <Anime4KCanvas :enabled="anime4kEnabled" :preset="anime4kPreset" :source-key="currentVideo?.url || ''"
       @status-change="onAnime4kStatusChange" @auto-disabled="onAnime4kAutoDisabled" />
 
     <!-- 弹幕层 -->
@@ -290,6 +292,8 @@
       :has-episodes="hasEpisodes"
       :has-next="hasNextEpisode"
       :danmaku-enabled="danmakuEnabled"
+      :danmaku-active="danmakuActive"
+      :danmaku-pending="danmakuPending"
       :subtitle-enabled="showSubtitle"
       :casting="casting"
       :watch-together-active="watchTogetherActive"
@@ -301,7 +305,8 @@
       :auto-skip-marked-ads="autoSkipMarkedAds"
       :smooth-streaming="smoothStreaming"
       :anime4k-enabled="anime4kEnabled"
-      :anime4k-active="anime4kRuntime.active"
+      :anime4k-active="anime4kRuntime.presenting && !anime4kRuntime.degraded"
+      :anime4k-degraded="anime4kRuntime.presenting && anime4kRuntime.degraded"
       :anime4k-preset="anime4kPreset"
       :ad-ranges="detectedAdRanges"
       :is-muted="videoMuted"
@@ -466,11 +471,12 @@ export default {
       autoSkipMarkedAds: localStorage.getItem('player-auto-skip-marked-ads') === 'true',
       anime4kEnabled: localStorage.getItem('player-anime4k') === 'true',
       anime4kPreset: localStorage.getItem('player-anime4k-preset') || 'balanced',
-      anime4kRuntime: { active: false },
+      anime4kRuntime: { active: false, presenting: false },
       adSkipNotice: '',
       danmakuNotice: '',
       danmakuNoticeTone: 'info',
       danmakuNoticeTimer: null,
+      danmakuRuntimeState: 'idle',
       sourcePanelVisible: false,
       sourcePanelLoading: false,
       sourcePanelError: '',
@@ -541,6 +547,12 @@ export default {
     // 弹幕开关：受设置和当前视频是否有番剧名双重控制
     danmakuEnabled() {
       return this.enableDanmaku && !!this.danmakuAnimeName;
+    },
+    danmakuActive() {
+      return this.danmakuEnabled && this.danmakuRuntimeState === 'active';
+    },
+    danmakuPending() {
+      return this.danmakuEnabled && ['idle', 'loading'].includes(this.danmakuRuntimeState);
     },
     // 是否渲染弹幕层组件（仅当启用弹幕时才挂载，节省资源）
     showDanmakuLayer() {
@@ -2104,6 +2116,9 @@ export default {
 
     setAnime4kEnabled(enabled) {
       this.anime4kEnabled = !!enabled;
+      this.anime4kRuntime = this.anime4kEnabled
+        ? { active: false, presenting: false, state: 'initializing' }
+        : { active: false, presenting: false };
       localStorage.setItem('player-anime4k', String(this.anime4kEnabled));
     },
 
@@ -2114,11 +2129,13 @@ export default {
     },
 
     onAnime4kStatusChange(status) {
-      this.anime4kRuntime = status?.active ? { ...status, active: true } : { active: false };
+      this.anime4kRuntime = status?.active
+        ? { ...status, active: true, presenting: !!status.presenting }
+        : { active: false, presenting: false };
     },
 
     onAnime4kAutoDisabled() {
-      this.anime4kRuntime = { active: false };
+      this.anime4kRuntime = { active: false, presenting: false };
       this.setAnime4kEnabled(false);
     },
 
@@ -2329,14 +2346,11 @@ export default {
 
     // ===== 弹幕相关方法 =====
 
-    /**
-     * 切换弹幕开关（由 ControlBar 按钮触发）
-     * 这里切换的是本地状态，并同步到 settings store 持久化
-     */
     async toggleDanmaku() {
       const nextEnabled = !this.enableDanmaku;
       await this.$store.dispatch('settings/updateEnableDanmaku', nextEnabled);
       if (nextEnabled) {
+        this.danmakuRuntimeState = 'loading';
         this.showDanmakuNotice(
           this.danmakuEpisodeNumber > 0
             ? `正在匹配第 ${this.danmakuEpisodeNumber} 集弹幕…`
@@ -2345,6 +2359,7 @@ export default {
           0
         );
       } else {
+        this.danmakuRuntimeState = 'idle';
         this.showDanmakuNotice('弹幕已关闭', 'info');
       }
     },
@@ -2370,6 +2385,7 @@ export default {
 
     onDanmakuLoaded(info) {
       const count = Number(info?.count) || 0;
+      this.danmakuRuntimeState = count > 0 ? 'active' : 'empty';
       if (count > 0) {
         const episodeLabel = info?.match?.episodeNumber
           ? `第 ${info.match.episodeNumber} 集 · `
@@ -2387,12 +2403,14 @@ export default {
     },
 
     onDanmakuError(msg) {
+      this.danmakuRuntimeState = 'error';
       console.warn('[VideoPlayer] 弹幕加载失败:', msg);
       this.showDanmakuNotice(msg || '弹幕加载失败', 'error', 6500);
     },
 
     onDanmakuStatus(status) {
       if (status?.state === 'loading') {
+        this.danmakuRuntimeState = 'loading';
         this.showDanmakuNotice(status.message || '正在匹配弹幕…', 'loading', 0);
       }
     },
@@ -2414,10 +2432,6 @@ export default {
 
     // ===== 字幕相关方法 =====
 
-    /**
-     * 切换字幕开关（由 ControlBar 按钮触发）
-     * 受设置开关控制：若设置中关闭字幕，则首次开启时同时更新设置
-     */
     toggleSubtitle() {
       if (!this.showSubtitle && this.subtitleCues.length === 0) {
         // 还没有字幕数据，提示用户加载
@@ -2746,6 +2760,10 @@ export default {
           this.savePlayProgress(this.playedSnapshot);
         }
         if (newUrl && newUrl !== oldUrl) {
+          this.anime4kRuntime = this.anime4kEnabled
+            ? { active: false, presenting: false, state: 'initializing' }
+            : { active: false, presenting: false };
+          this.danmakuRuntimeState = this.danmakuEnabled ? 'loading' : 'idle';
           this.scheduleVideoInitialization(120);
           // 切换视频时清空旧字幕（新视频需要重新加载字幕）
           this.subtitleCues = [];
@@ -2789,7 +2807,7 @@ export default {
       window.electronAPI.subtitleSetApiKey(this.openSubtitlesApiKey).catch(() => {});
     }
     // 应用设置中的字幕开关偏好
-    this.showSubtitle = !!this.enableSubtitle;
+    this.showSubtitle = !!this.enableSubtitle && this.subtitleCues.length > 0;
 
     // 订阅"一起看"主进程消息
     if (window.electronAPI?.onWtMessage) {

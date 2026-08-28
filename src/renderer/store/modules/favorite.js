@@ -73,6 +73,14 @@ export default {
             state.recentHistory = list;
         },
 
+        REMOVE_RECENT_HISTORY_ENTRY(state, { animeId, source = 'legacy' }) {
+            const normalizedId = String(animeId ?? '');
+            state.recentHistory = state.recentHistory.filter(item => (
+                String(item.anime_id ?? item.id ?? '') !== normalizedId
+                || (item.source || 'legacy') !== source
+            ));
+        },
+
         SET_HISTORY_LOADING(state, loading) {
             state.historyLoading = loading;
         },
@@ -294,12 +302,19 @@ export default {
         /**
          * 删除播放历史
          */
-        async removePlayHistory(_, { animeId, source = 'legacy' }) {
+        async removePlayHistory({ commit, state }, { animeId, source = 'legacy' }) {
+            const previousHistory = state.recentHistory;
+            commit('REMOVE_RECENT_HISTORY_ENTRY', { animeId, source });
             try {
-                return await window.electronAPI.historyRemove(animeId, source);
+                const result = await window.electronAPI.historyRemove(animeId, source);
+                if (result && !result.error) return true;
+                commit('SET_RECENT_HISTORY', previousHistory);
+                console.warn('[History] 删除播放历史未成功:', { animeId, source, result });
+                return false;
             } catch (error) {
+                commit('SET_RECENT_HISTORY', previousHistory);
                 console.error('[History] 删除播放历史失败:', error);
-                return null;
+                return false;
             }
         },
 

@@ -295,6 +295,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateGetUrl: () => ipcRenderer.invoke('update-get-url'),
     updateSetUrl: (url) => ipcRenderer.invoke('update-set-url', url),
     updateOpenDownload: (url) => ipcRenderer.invoke('update-open-download', url),
+    // 应用内更新：下载安装包（进度经 onUpdateDownloadProgress 推送）→ 运行安装并重启
+    updateDownload: (url) => ipcRenderer.invoke('update-download', url),
+    updateInstall: (filePath) => ipcRenderer.invoke('update-install', filePath),
+    onUpdateDownloadProgress: (callback) => {
+        const handler = (_, progress) => callback(progress);
+        ipcRenderer.on('update-download-progress', handler);
+        return () => ipcRenderer.removeListener('update-download-progress', handler);
+    },
     // 监听主进程推送的"发现新版本"事件（启动时静默检查触发）
     onUpdateAvailable: (callback) => {
         const handler = (_, info) => callback(info);

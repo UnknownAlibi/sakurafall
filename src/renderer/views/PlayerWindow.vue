@@ -110,9 +110,9 @@
           <button
             v-for="(episode, index) in renderedFilteredEpisodes"
             :key="episode.id || index"
-            :ref="el => { if (currentVideo?.episode?.id === episode.id) currentEpisodeEl = el }"
+            :ref="el => { if (isCurrentEpisode(episode)) currentEpisodeEl = el }"
             @click="playEpisode(episode)"
-            :class="['episode-btn', { active: currentVideo?.episode?.id === episode.id }]"
+            :class="['episode-btn', { active: isCurrentEpisode(episode) }]"
             :title="episode.title || episode.name || `${index + 1}`"
           >
             {{ episode.title || episode.name || `${index + 1}` }}
@@ -133,7 +133,9 @@ import {
   formatLineNames,
   getAdjacentEpisode,
   getLineEpisodes,
+  getPreferredEpisodeLine,
   hasEpisodeLines,
+  isSameEpisode,
   normalizeEpisodes
 } from '../utils/episodeList.js';
 import { isPlayableVideoUrl, resolveEpisodeVideoUrl } from '../utils/episodePlayback.js';
@@ -222,6 +224,13 @@ export default {
     },
     episodeRenderItems() {
       return this.filteredEpisodes;
+    },
+    currentEpisodeIdentity() {
+      const episode = this.currentVideo?.episode;
+      if (!episode) return '';
+      return [episode.id, episode.title, episode.name, episode.index]
+        .map(value => value ?? '')
+        .join('|');
     }
   },
   watch: {
@@ -237,7 +246,8 @@ export default {
       this.resetVisibleEpisodes();
       this.$nextTick(() => this.scrollCurrentIntoView());
     },
-    'currentVideo.episode.id'() {
+    currentEpisodeIdentity() {
+      this.ensureSelectedLine();
       this.resetVisibleEpisodes();
       this.$nextTick(() => this.scrollCurrentIntoView());
     },
@@ -283,9 +293,15 @@ export default {
       if (!this.hasEpisodes) return;
       const keys = Object.keys(this.episodes);
       if (keys.length === 0) return;
-      if (this.selectedLine && Array.isArray(this.episodes[this.selectedLine])) return;
+      const currentLine = this.selectedLine && this.episodes[this.selectedLine];
+      if (Array.isArray(currentLine) && findEpisodeIndex(currentLine, this.currentVideo?.episode) >= 0) return;
       const found = findLineForEpisode(this.episodes, this.currentVideo?.episode);
-      this.selectedLine = found || keys[0];
+      this.selectedLine = found || getPreferredEpisodeLine(this.episodes) || keys[0];
+    },
+
+    isCurrentEpisode(episode) {
+      if (isSameEpisode(episode, this.currentVideo?.episode)) return true;
+      return this.currentEpisodeIndex >= 0 && this.currentLineEpisodes[this.currentEpisodeIndex] === episode;
     },
 
     selectLine(lineId) {

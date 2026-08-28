@@ -1,7 +1,13 @@
 <template>
   <div v-if="items.length > 0" class="hot-section">
-    <div class="section-header" @click="toggleCollapsed" @keydown.enter.prevent="toggleCollapsed" @keydown.space.prevent="toggleCollapsed" role="button" tabindex="0">
-      <h3 class="section-title">
+    <button
+      type="button"
+      class="section-header"
+      :aria-expanded="String(!collapsed)"
+      aria-controls="hot-anime-content"
+      @click="toggleCollapsed"
+    >
+      <span class="section-title">
         <span class="section-icon hot-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22c4.4 0 8-3.6 8-8 0-3.5-2-6.6-5.2-9.5.1 2.2-.9 4-2.4 5.1.2-3.5-1.6-6.1-4.1-7.6.1 3.2-1.4 5.1-2.7 6.8C4.5 10.2 4 11.9 4 14c0 4.4 3.6 8 8 8Z"/>
@@ -9,11 +15,12 @@
           </svg>
         </span>
         热播动漫
-      </h3>
+      </span>
       <span class="collapse-toggle">{{ collapsed ? '展开' : '收起' }} <span class="collapse-arrow" :class="{ expanded: !collapsed }">›</span></span>
-    </div>
-    <div class="collapsible-body" :class="{ collapsed }">
-      <div class="hot-list">
+    </button>
+    <div class="collapsible-shell" :class="{ collapsed }">
+      <div id="hot-anime-content" class="collapsible-body">
+        <div class="hot-list">
         <div v-for="(anime, idx) in items" :key="anime.id"
           class="hot-card" role="button" tabindex="0" @click="$emit('view', anime)" @keydown.enter.prevent="$emit('view', anime)" @keydown.space.prevent="$emit('view', anime)">
           <span class="hot-rank" :class="{ 'top3': idx < 3 }">{{ idx + 1 }}</span>
@@ -41,6 +48,7 @@
               <span v-if="anime.remarks" class="hot-remarks">{{ anime.remarks }}</span>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
@@ -111,10 +119,17 @@ export default {
 }
 
 .section-header {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
 }
@@ -176,17 +191,22 @@ export default {
   transform: rotate(90deg);
 }
 
-.collapsible-body {
-  max-height: 400px;
-  overflow: hidden;
+.collapsible-shell {
+  display: grid;
+  grid-template-rows: 1fr;
   opacity: 1;
-  transition: max-height 0.22s ease, opacity 0.18s ease;
+  transition: grid-template-rows 0.22s ease, opacity 0.18s ease;
 }
 
-.collapsible-body.collapsed {
-  max-height: 0;
+.collapsible-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.collapsible-shell.collapsed {
+  grid-template-rows: 0fr;
   opacity: 0;
-  margin: 0;
+  pointer-events: none;
 }
 
 .hot-list {

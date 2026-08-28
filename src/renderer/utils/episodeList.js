@@ -102,16 +102,43 @@ export function getPreferredEpisodeLine(episodes) {
   return rankEpisodeLines(episodes)[0]?.lineId || '';
 }
 
+function normalizedIdentityPart(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+export function isSameEpisode(candidate, currentEpisode) {
+  if (!candidate || !currentEpisode) return false;
+
+  const candidateId = normalizedIdentityPart(candidate.id);
+  const currentId = normalizedIdentityPart(currentEpisode.id);
+  if (candidateId && currentId && candidateId === currentId) return true;
+
+  const candidateTitle = normalizedIdentityPart(candidate.title || candidate.name);
+  const currentTitle = normalizedIdentityPart(currentEpisode.title || currentEpisode.name);
+  if (candidateTitle && currentTitle && candidateTitle === currentTitle) return true;
+
+  const candidateNumber = extractEpisodeNumber(candidate);
+  const currentNumber = extractEpisodeNumber(currentEpisode);
+  return candidateNumber > 0 && currentNumber > 0 && candidateNumber === currentNumber;
+}
+
 export function findEpisodeIndex(episodes, currentEpisode) {
   if (!Array.isArray(episodes) || !currentEpisode) return -1;
-  return episodes.findIndex(ep => ep && (ep.id === currentEpisode.id || ep.title === currentEpisode.title));
+  const matchedIndex = episodes.findIndex(ep => isSameEpisode(ep, currentEpisode));
+  if (matchedIndex >= 0) return matchedIndex;
+
+  const storedIndex = Number(currentEpisode.index);
+  return Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < episodes.length
+    ? storedIndex
+    : -1;
 }
 
 export function findLineForEpisode(episodes, currentEpisode) {
   if (!currentEpisode) return null;
   const normalized = normalizeEpisodes(episodes);
   for (const lineId of Object.keys(normalized)) {
-    if (findEpisodeIndex(normalized[lineId], currentEpisode) >= 0) {
+    if (Array.isArray(normalized[lineId]) && normalized[lineId].some(ep => isSameEpisode(ep, currentEpisode))) {
       return lineId;
     }
   }

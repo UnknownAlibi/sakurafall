@@ -177,7 +177,7 @@
         <!-- 常用播放设置：播放时可直接调整，无需离开当前视频 -->
         <div class="player-settings-control">
           <button
-            :class="['control-btn', 'settings-btn', { active: showSettingsMenu }]"
+            :class="['control-btn', 'settings-btn', { 'menu-open': showSettingsMenu }]"
             type="button"
             title="播放设置"
             aria-label="播放设置"
@@ -262,8 +262,9 @@
               <label class="settings-menu-row settings-toggle-row">
                 <span>
                   <strong>Anime4K 实时增强</strong>
-                  <small v-if="anime4kEnabled && anime4kActive">运行中 · 已按片源自适应</small>
-                  <small v-else-if="anime4kEnabled">正在初始化 GPU 管线...</small>
+                  <small v-if="anime4kEnabled && anime4kActive">运行中 · 已验证增强帧输出</small>
+                  <small v-else-if="anime4kEnabled && anime4kDegraded">兼容显示增强中 · CNN 当前未运行</small>
+                  <small v-else-if="anime4kEnabled">正在初始化并验证 GPU 输出...</small>
                   <small v-else>GPU 实时修复线条并按显示尺寸放大，仅 1080P 级片源可用</small>
                 </span>
                 <input type="checkbox" :checked="anime4kEnabled" @change="$emit('anime4k-change', $event.target.checked)" />
@@ -331,13 +332,13 @@
         <!-- 弹幕控制（开关 + 导入菜单） -->
         <div class="danmaku-control">
           <button
-            :class="['control-btn', 'danmaku-btn', { active: danmakuEnabled }]"
+            :class="['control-btn', 'danmaku-btn', { active: danmakuActive, pending: danmakuPending }]"
             @click="toggleDanmakuMenu"
-            :title="danmakuEnabled ? '弹幕开' : '弹幕关'"
+            :title="danmakuActive ? '弹幕运行中' : (danmakuPending ? '弹幕加载中' : (danmakuEnabled ? '当前集暂无可用弹幕' : '弹幕关'))"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 6h18M3 12h12M3 18h6"/>
-              <circle v-if="danmakuEnabled" cx="19" cy="18" r="3" fill="currentColor" opacity="0.6" stroke="none"/>
+              <circle v-if="danmakuActive" cx="19" cy="18" r="3" fill="currentColor" opacity="0.6" stroke="none"/>
             </svg>
           </button>
           <transition name="fade-scale">
@@ -493,6 +494,14 @@ export default {
       type: Boolean,
       default: false
     },
+    danmakuActive: {
+      type: Boolean,
+      default: false
+    },
+    danmakuPending: {
+      type: Boolean,
+      default: false
+    },
     // 字幕是否启用（控制按钮高亮）
     subtitleEnabled: {
       type: Boolean,
@@ -540,6 +549,10 @@ export default {
       default: false
     },
     anime4kActive: {
+      type: Boolean,
+      default: false
+    },
+    anime4kDegraded: {
       type: Boolean,
       default: false
     },
@@ -1240,6 +1253,11 @@ export default {
   background: rgba(var(--primary-rgb), 0.12);
 }
 
+.danmaku-btn.pending {
+  color: rgba(255, 255, 255, 0.76);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 /* ===== 投屏按钮 ===== */
 .cast-btn.active {
   color: var(--player-progress);
@@ -1348,10 +1366,10 @@ export default {
   position: relative;
 }
 
-.settings-btn.active {
+.settings-btn.menu-open {
   color: var(--player-progress);
   border-color: rgba(var(--primary-rgb), 0.38);
-  background: rgba(var(--primary-rgb), 0.14);
+  background: rgba(var(--primary-rgb), 0.08);
 }
 
 .player-settings-menu {

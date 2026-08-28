@@ -300,7 +300,7 @@ export default {
          * 网络优先：total 始终来自 Bangumi 全库，保证分页数稳定；
          * 网络失败时回退本地索引，避免完全无数据。
          */
-        async fetchBangumiList({ commit, state }, { page = 1, search = '', year = null, quarter = null, tag = '', sort = 'rank', mode = 'browse', browseYear = null, cat = null, refresh = false, staleWhileRevalidate = false, silent = false, commitResult = true } = {}) {
+        async fetchBangumiList({ commit, state }, { page = 1, search = '', year = null, quarter = null, tag = '', tags = [], metaTags = [], sort = 'rank', mode = 'browse', browseYear = null, cat = null, refresh = false, staleWhileRevalidate = false, silent = false, commitResult = true } = {}) {
             const requestId = state.listRequestSeq + 1;
             if (!silent) {
                 commit('BEGIN_LIST_REQUEST', requestId);
@@ -316,11 +316,15 @@ export default {
                     const indexResult = await window.electronAPI.subjectIndexQuery({
                         keyword: search || '',
                         tag: tag || '',
+                        tags,
+                        platform: metaTags[0] || '',
                         year: (mode === 'season' && year) ? Number(year) : (browseYear ? Number(browseYear) : null),
                         sort: indexSort,
                         page,
                         pageSize: 24,
-                        releasedOnly: mode !== 'season'
+                        releasedOnly: mode !== 'season',
+                        requireDated: mode !== 'season' && indexSort === 'latest',
+                        requireRated: mode !== 'season' && indexSort === 'rating'
                     });
                     if (indexResult && indexResult.fromIndex && (indexResult.data?.length > 0 || (page > 1 && (indexResult.total || 0) > 0))) {
                         return indexResult;
@@ -333,8 +337,8 @@ export default {
                 let result;
                 let nextSeason = null;
                 if (search) {
-                    if ((tag || browseYear) && window.electronAPI.subjectBrowse) {
-                        result = await window.electronAPI.subjectBrowse({ keyword: search, tag, sort: 'match', page, limit: 24, year: browseYear });
+                    if ((tag || tags.length || metaTags.length || browseYear) && window.electronAPI.subjectBrowse) {
+                        result = await window.electronAPI.subjectBrowse({ keyword: search, tag, tags, metaTags, sort: 'match', page, limit: 24, year: browseYear });
                     } else if (window.electronAPI.subjectSearch) {
                         result = await window.electronAPI.subjectSearch(search, page);
                     } else {
@@ -349,7 +353,7 @@ export default {
                     commit('SET_BANGUMI_BROWSE_TAG', cat ? `cat:${cat}` : 'catalog');
                 } else if (mode === 'browse' || mode === 'trending' || tag || sort === 'heat' || sort === 'score') {
                     result = window.electronAPI.subjectBrowse
-                        ? await window.electronAPI.subjectBrowse({ tag, sort, page, limit: 24, year: browseYear, refresh, staleWhileRevalidate })
+                        ? await window.electronAPI.subjectBrowse({ tag, tags, metaTags, sort, page, limit: 24, year: browseYear, refresh, staleWhileRevalidate })
                         : await window.electronAPI.bangumiSearch(tag, page);
                     nextSeason = { year: null, quarter: null };
                     commit('SET_BANGUMI_BROWSE_TAG', tag || mode || '');

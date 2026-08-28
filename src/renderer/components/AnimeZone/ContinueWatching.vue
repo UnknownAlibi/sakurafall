@@ -1,7 +1,13 @@
 <template>
   <div v-if="items.length > 0" class="continue-section">
-    <div class="continue-header" @click="toggleCollapsed" @keydown.enter.prevent="toggleCollapsed" @keydown.space.prevent="toggleCollapsed" role="button" tabindex="0">
-      <h3 class="continue-title">
+    <button
+      type="button"
+      class="continue-header"
+      :aria-expanded="String(!collapsed)"
+      aria-controls="continue-watching-content"
+      @click="toggleCollapsed"
+    >
+      <span class="continue-title">
         <span class="continue-title-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="13" r="8"/>
@@ -9,42 +15,58 @@
           </svg>
         </span>
         继续观看
-      </h3>
+      </span>
       <span class="collapse-toggle">{{ collapsed ? '展开' : '收起' }} <span class="collapse-arrow" :class="{ expanded: !collapsed }">›</span></span>
-    </div>
-    <div class="collapsible-body" :class="{ collapsed }">
-      <div class="continue-list">
+    </button>
+    <div class="collapsible-shell" :class="{ collapsed }">
+      <div id="continue-watching-content" class="collapsible-body">
+        <div class="continue-list">
         <div v-for="item in displayedItems" :key="itemKey(item)"
-          class="continue-card" :class="{ 'is-resuming': resumingKey === itemKey(item) }" role="button" tabindex="0" @click="$emit('resume', item)" @keydown.enter.prevent="$emit('resume', item)" @keydown.space.prevent="$emit('resume', item)">
-          <button class="continue-delete-btn" @click.stop="$emit('remove', item)" title="删除记录">✕</button>
-          <div class="continue-cover">
-            <CachedImage
-              v-if="item.cover"
-              :src="item.cover"
-              :alt="item.name"
-              cache-variant="thumbnail"
-              :cache-width="160"
-              data-cache-resolve="true"
-              width="160"
-              height="208"
-              loading="lazy"
-              decoding="async"
-              fetchpriority="low"
-              @error="(e) => e.target.style.display='none'"
-            />
-            <div v-else class="continue-no-cover">{{ (item.name || '').slice(0, 2) }}</div>
-            <span v-if="resumingKey === itemKey(item)" class="continue-resume-spinner" aria-label="正在续播"></span>
-            <div class="continue-play-icon">▶</div>
-          </div>
-          <div class="continue-info">
-            <span class="continue-name" :title="item.name">{{ item.name }}</span>
-            <span class="continue-ep">{{ item.episode_title || '未知集数' }}</span>
-          </div>
+          class="continue-card" :class="{ 'is-resuming': resumingKey === itemKey(item) }">
+          <button
+            type="button"
+            class="continue-resume-btn"
+            :disabled="resumingKey === itemKey(item)"
+            @click="$emit('resume', item)"
+          >
+            <div class="continue-cover">
+              <CachedImage
+                v-if="item.cover"
+                :src="item.cover"
+                :alt="item.name"
+                cache-variant="thumbnail"
+                :cache-width="160"
+                data-cache-resolve="true"
+                width="160"
+                height="208"
+                loading="lazy"
+                decoding="async"
+                fetchpriority="low"
+                @error="(e) => e.target.style.display='none'"
+              />
+              <div v-else class="continue-no-cover">{{ (item.name || '').slice(0, 2) }}</div>
+              <span v-if="resumingKey === itemKey(item)" class="continue-resume-spinner" aria-label="正在续播"></span>
+              <div class="continue-play-icon">▶</div>
+            </div>
+            <div class="continue-info">
+              <span class="continue-name" :title="item.name">{{ item.name }}</span>
+              <span class="continue-ep">{{ item.episode_title || '未知集数' }}</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="continue-delete-btn"
+            title="删除记录"
+            :aria-label="`删除《${item.name || '该番剧'}》的观看记录`"
+            @pointerdown.stop
+            @click.stop.prevent="$emit('remove', item)"
+          >✕</button>
         </div>
-        <button v-if="items.length > 4" class="continue-toggle-btn" @click="showAll = !showAll">
+        <button v-if="items.length > 4" type="button" class="continue-toggle-btn" @click="showAll = !showAll">
           {{ showAll ? '收起' : `还有 ${items.length - 4} 部` }}
           <span class="toggle-arrow" :class="{ expanded: showAll }">›</span>
         </button>
+        </div>
       </div>
     </div>
   </div>
@@ -96,16 +118,24 @@ export default {
 }
 
 .continue-header {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
 }
 
 .continue-header:focus-visible,
-.continue-card:focus-visible {
+.continue-resume-btn:focus-visible,
+.continue-delete-btn:focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 3px;
 }
@@ -164,10 +194,6 @@ export default {
 .continue-card {
   flex: 0 0 auto;
   width: 180px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
   background: var(--bg-card-glass);
   border-radius: 8px;
   border: 1px solid var(--border-color);
@@ -184,37 +210,59 @@ export default {
 .continue-card.is-resuming {
   border-color: var(--primary-color);
   background: var(--primary-lighter);
-  pointer-events: none;
+}
+
+.continue-resume-btn {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 36px 8px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.continue-resume-btn:disabled {
+  cursor: wait;
 }
 
 .continue-delete-btn {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 18px;
-  height: 18px;
+  top: 50%;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  transform: translateY(-50%);
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.45);
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
-  z-index: 3;
+  opacity: 0.68;
+  transition: opacity 0.15s, background-color 0.15s, transform 0.15s;
+  z-index: 5;
   padding: 0;
+  pointer-events: auto;
 }
 
-.continue-card:hover .continue-delete-btn {
+.continue-card:hover .continue-delete-btn,
+.continue-delete-btn:focus-visible {
   opacity: 1;
 }
 
 .continue-delete-btn:hover {
   background: rgba(220, 53, 69, 0.85);
+  transform: translateY(-50%) scale(1.06);
 }
 
 .continue-cover {
@@ -365,16 +413,21 @@ export default {
   transform: rotate(90deg);
 }
 
-.collapsible-body {
-  max-height: 400px;
-  overflow: hidden;
-  transition: max-height 0.35s ease, opacity 0.25s ease;
+.collapsible-shell {
+  display: grid;
+  grid-template-rows: 1fr;
   opacity: 1;
+  transition: grid-template-rows 0.24s ease, opacity 0.18s ease;
 }
 
-.collapsible-body.collapsed {
-  max-height: 0;
+.collapsible-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.collapsible-shell.collapsed {
+  grid-template-rows: 0fr;
   opacity: 0;
-  margin: 0;
+  pointer-events: none;
 }
 </style>

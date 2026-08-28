@@ -1,6 +1,6 @@
 {
-  "version": "1.0.1",
-  "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.0.1/SakuraFall-Setup-1.0.1.exe",
-  "releaseNotes": "1. 新增应用内更新：检查更新后可直接下载并安装，无需跳转浏览器\n2. 修复番剧索引年份筛选首屏数据不全的问题\n3. 修复设置页应用更新区域不显示的问题",
-  "releaseDate": "2026-08-27"
+  "version": "1.0.2",
+  "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.0.2/SakuraFall-Setup-1.0.2.exe",
+  "releaseNotes": "1. 优化番剧索引的地区、类型、年份筛选与评分/更新排序，排除未上映和无效条目\n2. 修复播放器功能按钮、当前集数选中状态及 Anime4K 全屏增强流程\n3. 优化片源与分集展示，隐藏无有效分集的来源并提升详情加载体验\n4. 修复继续观看删除误触与多个收起按钮失效，并改善交互反馈\n5. 完善应用内更新，可直接下载并启动新版本安装程序",
+  "releaseDate": "2026-08-29"
 }

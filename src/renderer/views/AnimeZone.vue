@@ -49,10 +49,12 @@
       :total-items="totalItems"
       :selected-type="selectedBangumiType"
       :selected-sort="selectedBangumiSort"
+      :selected-region="selectedBangumiRegion"
       :selected-year="selectedBangumiYear"
       :search-keyword="searchKeyword"
       :type-options="bangumiTypeOptions"
       :sort-options="availableBangumiSortOptions"
+      :region-options="bangumiRegionOptions"
       :year-options="bangumiYearOptions"
       :season-options="bangumiSeasonOptions"
       :season-year="bangumiSeasonYear"
@@ -60,8 +62,10 @@
       :current-season-label="currentBangumiSeasonLabel"
       :active-type-name="activeBangumiType.name"
       :active-sort-name="activeBangumiSort.name"
+      :active-region-name="activeBangumiRegion.name"
       @select-type="onBangumiTypeSelect"
       @select-sort="onBangumiSortSelect"
+      @select-region="onBangumiRegionSelect"
       @year-change="onBangumiYearChange"
       @season-change="onSeasonSelectChange"
       @clear-search="clearSearch"
@@ -166,10 +170,18 @@ export default {
       totalItems: 0,
       selectedBangumiType: 'all',
       selectedBangumiSort: 'date',
+      selectedBangumiRegion: 'all',
       selectedBangumiYear: '',
       bangumiSortOptions: [
-        { id: 'date', name: '最新', sort: 'date' },
+        { id: 'date', name: '最新上映', sort: 'date' },
         { id: 'score', name: '评分最高', sort: 'score' }
+      ],
+      bangumiRegionOptions: [
+        { id: 'all', name: '全部', tag: '' },
+        { id: 'jp', name: '日漫', tag: '日本动画' },
+        { id: 'cn', name: '国漫', tag: '国漫' },
+        { id: 'western', name: '欧美', tag: '欧美动画' },
+        { id: 'kr', name: '韩国', tag: '韩国动画' }
       ],
       bangumiTypeOptions: [
         { id: 'all', name: '全部', mode: 'catalog' },
@@ -304,6 +316,10 @@ export default {
       return this.bangumiSortOptions.find(option => option.id === this.selectedBangumiSort) || this.bangumiSortOptions[0];
     },
 
+    activeBangumiRegion() {
+      return this.bangumiRegionOptions.find(option => option.id === this.selectedBangumiRegion) || this.bangumiRegionOptions[0];
+    },
+
     availableBangumiSortOptions() {
       return filterCatalogSortOptions(this.activeBangumiType, this.bangumiSortOptions);
     },
@@ -403,6 +419,10 @@ export default {
       const filter = this.activeBangumiType || {};
       const selectedSortId = normalizeCatalogSort(filter, this.selectedBangumiSort);
       const requestSort = this.bangumiSortOptions.find(option => option.id === selectedSortId)?.sort || 'date';
+      const tags = [filter.tag, this.activeBangumiRegion.tag].filter(Boolean);
+      const platformByCategory = { 1: 'TV', 2: 'OVA', 3: '剧场版', 5: 'WEB' };
+      const metaTags = tags.length > 0 && filter.cat ? [platformByCategory[filter.cat]].filter(Boolean) : [];
+      const requestMode = tags.length > 0 ? 'browse' : (filter.mode || 'browse');
 
       return {
         page,
@@ -410,9 +430,11 @@ export default {
         year: filter.mode === 'season' ? this.bangumiSeasonYear : null,
         quarter: filter.mode === 'season' ? this.bangumiSeasonQuarter : null,
         tag: filter.tag || '',
+        tags,
+        metaTags,
         sort: requestSort,
-        mode: filter.mode || 'browse',
-        cat: filter.cat || null,
+        mode: requestMode,
+        cat: requestMode === 'catalog' ? (filter.cat || null) : null,
         browseYear: filter.mode === 'season' ? null : (this.selectedBangumiYear || null),
         ...extra
       };
@@ -424,6 +446,7 @@ export default {
         source: this.dataSource,
         selectedType: this.selectedBangumiType,
         selectedSort: this.selectedBangumiSort,
+        selectedRegion: this.selectedBangumiRegion,
         selectedYear: this.selectedBangumiYear,
         request
       });
@@ -780,6 +803,7 @@ export default {
         this.$store.commit('anime/SET_BANGUMI_SEASON', { year: null, quarter: null });
       } else {
         this.selectedBangumiYear = '';
+        this.selectedBangumiRegion = 'all';
       }
       this._scheduleFilterReload('');
     },
@@ -795,6 +819,17 @@ export default {
       if (this.dataSource !== 'bangumi') {
         await this.setDataSource('bangumi');
       }
+      this._scheduleFilterReload(this.searchKeyword);
+    },
+
+    async onBangumiRegionSelect(regionId) {
+      if (this.selectedBangumiRegion === regionId) return;
+      this.cancelPrefetchCovers();
+      this.cancelProgressiveRender();
+      this.failedImageIds = new Set();
+      this.selectedBangumiRegion = this.bangumiRegionOptions.some(option => option.id === regionId) ? regionId : 'all';
+      if (this.selectedBangumiType === 'season') this.selectedBangumiType = 'all';
+      if (this.dataSource !== 'bangumi') await this.setDataSource('bangumi');
       this._scheduleFilterReload(this.searchKeyword);
     },
 
@@ -1504,11 +1539,14 @@ export default {
      * 删除继续观看记录
      */
     async onRemoveHistory(item) {
-      try {
-        await this.removePlayHistory({ animeId: item.anime_id, source: item.source });
+      const animeId = item?.anime_id ?? item?.id;
+      const source = item?.source || 'legacy';
+      if (animeId == null) return;
+      const removed = await this.removePlayHistory({ animeId, source });
+      if (removed) {
         await this.fetchRecentHistory(10);
-      } catch (err) {
-        // 静默
+      } else {
+        this.$notify?.error('删除失败', '观看记录没有删除，请稍后重试。');
       }
     },
   },
