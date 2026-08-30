@@ -114,6 +114,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ),
     playbackCancelAll: () => ipcRenderer.invoke('playback-cancel-all'),
     playbackClearResolveCache: () => ipcRenderer.invoke('playback-clear-resolve-cache'),
+    // 视频代理 URL 包装：远端 http(s) 直链 → sakurafall-media://proxy/...
+    // 播放窗口启用 webSecurity 后，渲染层用代理地址加载避免 canvas 跨域污染
+    buildVideoProxyUrl: (url, referer) => ipcRenderer.invoke(
+        'build-video-proxy-url',
+        String(url || ''),
+        String(referer || '')
+    ),
 
     // Phase 7: 网络与 TUN 分流策略
     networkPolicyGet: () => ipcRenderer.invoke('network-policy-get'),
@@ -231,8 +238,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     subjectIndexSyncDetail: (bgmId) => ipcRenderer.invoke('subject-index-sync-detail', bgmId),
     subjectIndexStatus: () => ipcRenderer.invoke('subject-index-status'),
 
-    // 弹幕 (dandanplay + 本地 XML 导入) API
+    // 弹幕（多源聚合 + 本地 XML）API
     danmakuSetCredentials: (appId, appSecret) => ipcRenderer.invoke('danmaku-set-credentials', appId, appSecret),
+    danmakuConfigureProviders: (config) => ipcRenderer.invoke('danmaku-configure-providers', config),
+    danmakuListProviders: () => ipcRenderer.invoke('danmaku-list-providers'),
+    danmakuResolve: (context) => ipcRenderer.invoke('danmaku-resolve', context),
+    danmakuSearchProviders: (context) => ipcRenderer.invoke('danmaku-search-providers', context),
     danmakuIsReady: () => ipcRenderer.invoke('danmaku-is-ready'),
     danmakuSearch: (keyword) => ipcRenderer.invoke('danmaku-search', keyword),
     danmakuGetComments: (episodeId) => ipcRenderer.invoke('danmaku-get-comments', episodeId),

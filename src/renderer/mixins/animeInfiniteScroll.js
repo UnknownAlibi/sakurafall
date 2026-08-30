@@ -92,7 +92,10 @@ export default {
           page: result.page || nextPage,
           totalPages: Math.max(this.totalPages, Number(result.totalPages) || 0)
         });
-        if (!result._servedFromIndex) {
+        // Keep the filter-session total stable. Progressive collection scans
+        // may discover more metadata, but scrolling must not rewrite the count
+        // the user received when the filter was applied.
+        if (!result._servedFromIndex && !this.totalItems) {
           this.totalItems = result.total || this.totalItems;
         }
         if (incoming.length > 0) {

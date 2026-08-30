@@ -1,4 +1,4 @@
-const PLAYABLE_PROTOCOLS = new Set(['http:', 'https:', 'blob:', 'data:', 'file:']);
+const PLAYABLE_PROTOCOLS = new Set(['http:', 'https:', 'blob:', 'data:', 'file:', 'sakurafall-media:']);
 
 function toIpcPlainObject(value, fallback = {}) {
   try {
@@ -55,7 +55,17 @@ async function resolveMaybeShareUrl(url, episode, electronAPI) {
       // 直接修改会绕过 mutation 污染 store；主进程已有解析缓存，重复调用无额外开销
       return resolvedUrl;
     }
-    if (!isSharePageUrl(normalizedUrl)) return normalizedUrl;
+    // electronAPI 存在但解析失败：远端直链也返回给播放器（其内部还有换源/重试）
+    if (!isSharePageUrl(normalizedUrl)) {
+      // 主进程可用时请求代理包装（避免跨域污染 canvas），失败则回退原地址
+      if (electronAPI?.buildVideoProxyUrl) {
+        try {
+          const proxied = await electronAPI.buildVideoProxyUrl(normalizedUrl);
+          if (proxied?.success && proxied?.url) return proxied.url;
+        } catch (_proxyError) { /* 回退原地址 */ }
+      }
+      return normalizedUrl;
+    }
   } catch (_error) {
     // Caller decides how to surface a failed episode resolution.
   }

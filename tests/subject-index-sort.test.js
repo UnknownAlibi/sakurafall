@@ -96,3 +96,35 @@ test('local region and genre tags use AND semantics alongside platform', () => {
     db.close();
   }
 });
+
+test('local latest and rating sorts preserve the same filtered total', () => {
+  const originalDb = subjectIndexService.db;
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE bangumi_subjects (
+      bgm_id INTEGER PRIMARY KEY, name TEXT, name_cn TEXT, aliases TEXT, summary TEXT,
+      cover_url TEXT, cover_local TEXT, rating REAL, rank INTEGER, votes INTEGER,
+      eps INTEGER, air_date TEXT, air_weekday INTEGER, year INTEGER, month INTEGER,
+      type INTEGER, nsfw INTEGER, popularity INTEGER, updated_at INTEGER, raw_json TEXT,
+      platform TEXT
+    );
+    CREATE TABLE bangumi_subject_tags (bgm_id INTEGER, tag TEXT, count INTEGER);
+    INSERT INTO bangumi_subjects (bgm_id, name_cn, rating, rank, votes, air_date, year, platform)
+      VALUES (1, 'Rated', 8.5, 12, 500, '2020-01-01', 2020, 'TV'),
+             (2, 'Unrated', 0, 0, 0, '2021-01-01', 2021, 'TV'),
+             (3, 'Undated old', 7.2, 300, 20, '', 2019, 'TV'),
+             (4, 'Future', 9.9, 1, 900, '2099-01-01', 2099, 'TV');
+  `);
+  subjectIndexService.db = db;
+  try {
+    const latest = subjectIndexService.querySubjects({ sort: 'latest', releasedOnly: true, platform: 'TV' });
+    const rating = subjectIndexService.querySubjects({ sort: 'rating', releasedOnly: true, platform: 'TV' });
+    assert.equal(latest.total, 3);
+    assert.equal(rating.total, latest.total);
+    assert.deepEqual(new Set(rating.data.map(item => item.bgm_id)), new Set(latest.data.map(item => item.bgm_id)));
+    assert.equal(rating.data.at(-1).bgm_id, 2);
+  } finally {
+    subjectIndexService.db = originalDb;
+    db.close();
+  }
+});

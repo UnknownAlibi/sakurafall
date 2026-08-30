@@ -1,7 +1,7 @@
 <template>
   <div
     class="video-player-container"
-    :class="{ 'controls-idle': !controlsVisible && isPlaying && !loading && !error && !buffering }"
+    :class="{ 'controls-idle': !controlsVisible && (isPlaying || isFullscreen) && !loading && !error && !buffering }"
     @mousemove="onMouseMove"
     @mouseleave="onMouseLeave"
     @click="onContainerClick"
@@ -29,6 +29,41 @@
         {{ danmakuNotice }}
       </div>
     </transition>
+
+    <div v-if="danmakuMatchVisible" class="video-overlay danmaku-match-overlay" @click.self="closeDanmakuMatchPanel">
+      <div class="danmaku-match-panel">
+        <header>
+          <div>
+            <h3>校正弹幕匹配</h3>
+            <p>{{ danmakuAnimeName }} · 第 {{ danmakuEpisodeNumber || '?' }} 集</p>
+          </div>
+          <button type="button" @click="closeDanmakuMatchPanel" title="关闭">×</button>
+        </header>
+        <div v-if="danmakuMatchLoading" class="danmaku-match-state">
+          <div class="loading-spinner small"></div><span>正在搜索各平台番剧库...</span>
+        </div>
+        <div v-else-if="!danmakuMatchGroups.some(group => group.candidates?.length)" class="danmaku-match-state">
+          暂未找到可校正的候选，仍可导入本地 XML 或配置自定义接口
+        </div>
+        <div v-else class="danmaku-match-groups">
+          <section v-for="group in danmakuMatchGroups" :key="group.id" v-show="group.candidates?.length">
+            <div class="danmaku-match-source">
+              <strong>{{ group.name }}</strong><span>{{ group.candidates.length }} 个候选</span>
+            </div>
+            <button
+              v-for="candidate in group.candidates"
+              :key="`${group.id}-${candidate.id}`"
+              type="button"
+              class="danmaku-match-candidate"
+              @click="applyDanmakuMatch(group.id, candidate)"
+            >
+              <span>{{ candidate.title }}</span>
+              <small>匹配度 {{ Math.round((candidate.score || 0) * 100) }}%</small>
+            </button>
+          </section>
+        </div>
+      </div>
+    </div>
 
     <!-- 自动恢复/换源中 -->
     <div v-if="autoRecovering && !loading" class="video-overlay video-recovering">
@@ -253,6 +288,8 @@
       :is-playing="isPlaying"
       :anime-name="danmakuAnimeName"
       :episode-number="danmakuEpisodeNumber"
+      :anime-metadata="danmakuAnimeMetadata"
+      :provider-ids="enabledDanmakuProviderIds"
       :font-size="danmakuFontSize"
       :opacity="danmakuOpacity"
       :speed="danmakuSpeed"
@@ -294,6 +331,7 @@
       :danmaku-enabled="danmakuEnabled"
       :danmaku-active="danmakuActive"
       :danmaku-pending="danmakuPending"
+      :danmaku-sources="danmakuSourceStatuses"
       :subtitle-enabled="showSubtitle"
       :casting="casting"
       :watch-together-active="watchTogetherActive"
@@ -323,6 +361,8 @@
       @next-episode="$emit('next-episode')"
       @toggle-danmaku="toggleDanmaku"
       @danmaku-import-xml="onDanmakuImportXml"
+      @danmaku-refresh="refreshDanmaku"
+      @danmaku-correct-match="openDanmakuMatchPanel"
       @open-settings="$emit('open-settings')"
       @toggle-subtitle="toggleSubtitle"
       @subtitle-load-file="loadSubtitleFile"
@@ -378,6 +418,7 @@ import { formatCandidateQuality, formatMatchType, candidateHealthClass, candidat
   formatCandidateStartup, formatCandidateRatio, candidateHealthTitle } from '../../utils/sourceCandidatePresentation.js';
 import { formatAnime4kPreset, formatAnime4kRuntimeTitle } from '../../utils/anime4kPresentation.js';
 import { applyRuntimeHlsBufferPolicy, toHlsBufferConfig } from '../../utils/hlsBufferPolicy.js';
+import playerPlatformIntegration from '../../mixins/playerPlatformIntegration.js';
 
 let hlsClassPromise = null;
 
@@ -396,6 +437,7 @@ function loadHlsClass() {
 export default {
   name: 'VideoPlayer',
   components: { ControlBar, DanmakuLayer, SubtitleLayer, Anime4KCanvas, CastDialog, WatchTogetherPanel },
+  mixins: [playerPlatformIntegration],
   emits: ['video-ended', 'next-episode', 'open-enhanced-player', 'open-settings'],
   props: {
     // 是否有剧集列表（控制下一集按钮显隐），由父视图传入
@@ -477,6 +519,10 @@ export default {
       danmakuNoticeTone: 'info',
       danmakuNoticeTimer: null,
       danmakuRuntimeState: 'idle',
+      danmakuSourceStatuses: [],
+      danmakuMatchVisible: false,
+      danmakuMatchLoading: false,
+      danmakuMatchGroups: [],
       sourcePanelVisible: false,
       sourcePanelLoading: false,
       sourcePanelError: '',
@@ -540,7 +586,7 @@ export default {
     ...mapGetters('settings', [
       'autoPlay', 'rememberPlaybackRate', 'videoQuality', 'seekStepSeconds',
       // 弹幕设置
-      'enableDanmaku', 'danmakuFontSize', 'danmakuOpacity', 'danmakuSpeed', 'danmakuDisplayArea',
+      'enableDanmaku', 'danmakuFontSize', 'danmakuOpacity', 'danmakuSpeed', 'danmakuDisplayArea', 'danmakuProviders',
       // 字幕设置
       'enableSubtitle', 'subtitleFontSize', 'subtitleOpacity', 'subtitleBottomOffset', 'openSubtitlesApiKey'
     ]),
@@ -623,6 +669,13 @@ export default {
     },
     currentSourceAdReported() {
       return !!this.currentAdvertisingKey && this.reportedAdvertisingKeys.includes(this.currentAdvertisingKey);
+    },
+    danmakuAnimeMetadata() {
+      return this.currentVideo?.anime || {};
+    },
+    enabledDanmakuProviderIds() {
+      const configured = this.danmakuProviders || {};
+      return ['bilibili', 'acfun', 'dandanplay', 'custom'].filter(id => configured[id] !== false);
     },
     // 创建房间时传递给 WatchTogetherPanel 的当前视频信息
     wtVideoInfoForRoom() {
@@ -2039,6 +2092,7 @@ export default {
 
     revealControls(autoHide = true) {
       this.controlsVisible = true;
+      this.syncFullscreenCursorState();
       if (this.hideControlsTimer) {
         clearTimeout(this.hideControlsTimer);
         this.hideControlsTimer = null;
@@ -2047,17 +2101,25 @@ export default {
     },
 
     scheduleControlsHide() {
-      if (!this.isPlaying || this.controlsHovered) return;
+      const canAutoHide = this.isPlaying || this.isFullscreen;
+      if (!canAutoHide || (this.controlsHovered && !this.isFullscreen)) return;
       if (this.hideControlsTimer) clearTimeout(this.hideControlsTimer);
       this.hideControlsTimer = setTimeout(() => {
-        if (this.isPlaying && !this.controlsHovered) this.controlsVisible = false;
         this.hideControlsTimer = null;
+        if (this.$refs.controlBar?.hasOpenInteraction?.()) {
+          this.scheduleControlsHide();
+          return;
+        }
+        if ((this.isPlaying || this.isFullscreen) && (!this.controlsHovered || this.isFullscreen)) {
+          this.controlsVisible = false;
+          this.syncFullscreenCursorState();
+        }
       }, 3000);
     },
 
     onControlsHover(hovered) {
       this.controlsHovered = hovered;
-      this.revealControls(!hovered);
+      this.revealControls(this.isFullscreen || !hovered);
     },
 
     onMouseMove() {
@@ -2073,8 +2135,9 @@ export default {
         clearTimeout(this.hideControlsTimer);
         this.hideControlsTimer = null;
       }
-      if (this.isPlaying) {
+      if (this.isPlaying || this.isFullscreen) {
         this.controlsVisible = false;
+        this.syncFullscreenCursorState();
       }
     },
 
@@ -2300,6 +2363,13 @@ export default {
       // 输入框内不触发快捷键
       if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.tagName === 'SELECT') return;
 
+      const focusedButton = event.target.tagName === 'BUTTON' ? event.target : null;
+      if (focusedButton && event.key !== ' ' && [
+        'f', 'F', 'm', 'M', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'n', 'N', 'Escape'
+      ].includes(event.key)) {
+        focusedButton.blur();
+      }
+
       switch (event.key) {
         case ' ':
           // 按钮聚焦时交给浏览器默认行为（Space 触发 click），避免双重切换播放状态
@@ -2316,9 +2386,11 @@ export default {
           this.toggleMute();
           break;
         case 'ArrowLeft':
+          event.preventDefault();
           this.seekRelative(-this.seekStepSeconds);
           break;
         case 'ArrowRight':
+          event.preventDefault();
           this.seekRelative(this.seekStepSeconds);
           break;
         case 'ArrowUp':
@@ -2383,14 +2455,72 @@ export default {
       }
     },
 
+    buildDanmakuSearchContext() {
+      const anime = this.danmakuAnimeMetadata || {};
+      return {
+        animeName: this.danmakuAnimeName,
+        aliases: [
+          anime.name_cn,
+          anime.nameCn,
+          anime.original_name,
+          anime.originalName,
+          anime.rawName,
+          ...(Array.isArray(anime.aliases) ? anime.aliases : []),
+          ...(Array.isArray(anime.alias) ? anime.alias : [])
+        ].filter(Boolean),
+        bgmId: anime.bgmId || anime.bgm_id || anime.subjectId || anime.id || '',
+        episodeNumber: this.danmakuEpisodeNumber,
+        providerIds: ['bilibili', 'acfun']
+      };
+    },
+
+    async refreshDanmaku() {
+      if (!this.$refs.danmakuLayer) return;
+      this.danmakuRuntimeState = 'loading';
+      this.showDanmakuNotice('正在重新匹配全部弹幕源…', 'loading', 0);
+      await this.$refs.danmakuLayer.loadDanmaku(true);
+    },
+
+    async openDanmakuMatchPanel() {
+      this.danmakuMatchVisible = true;
+      this.danmakuMatchLoading = true;
+      this.danmakuMatchGroups = [];
+      try {
+        this.danmakuMatchGroups = await window.electronAPI?.danmakuSearchProviders?.(
+          this.buildDanmakuSearchContext()
+        ) || [];
+      } catch (error) {
+        this.showDanmakuNotice(error.message || '弹幕候选搜索失败', 'error', 5000);
+      } finally {
+        this.danmakuMatchLoading = false;
+      }
+    },
+
+    closeDanmakuMatchPanel() {
+      this.danmakuMatchVisible = false;
+    },
+
+    async applyDanmakuMatch(providerId, candidate) {
+      this.closeDanmakuMatchPanel();
+      this.danmakuRuntimeState = 'loading';
+      this.showDanmakuNotice(`正在使用 ${candidate.title} 重新加载…`, 'loading', 0);
+      await this.$refs.danmakuLayer?.loadWithOverride?.(providerId, candidate);
+    },
+
     onDanmakuLoaded(info) {
       const count = Number(info?.count) || 0;
+      this.danmakuSourceStatuses = Array.isArray(info?.sources) ? info.sources : [];
       this.danmakuRuntimeState = count > 0 ? 'active' : 'empty';
       if (count > 0) {
         const episodeLabel = info?.match?.episodeNumber
           ? `第 ${info.match.episodeNumber} 集 · `
           : '';
-        this.showDanmakuNotice(`${episodeLabel}已加载 ${count} 条弹幕`, 'success', 3600);
+        const sourceNames = this.danmakuSourceStatuses
+          .filter(source => source.status === 'ok')
+          .map(source => source.name)
+          .filter(Boolean);
+        const sourceLabel = sourceNames.length ? ` · ${sourceNames.join(' + ')}` : '';
+        this.showDanmakuNotice(`${episodeLabel}已加载 ${count} 条弹幕${sourceLabel}`, 'success', 4200);
         return;
       }
       this.showDanmakuNotice(
@@ -2873,711 +3003,4 @@ export default {
 };
 </script>
 
-<style scoped>
-.video-player-container {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  background: var(--player-bg);
-  cursor: pointer;
-  user-select: none;
-}
-
-.video-element {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
-}
-
-/* ===== 覆盖层（加载/错误） ===== */
-.video-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-  pointer-events: none;
-}
-
-.video-loading {
-  background: rgba(0, 0, 0, 0.88);
-}
-
-.video-buffering {
-  background: rgba(0, 0, 0, 0.3);
-}
-
-.buffering-text {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 12px;
-  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.7);
-}
-
-.ad-skip-notice {
-  position: absolute;
-  left: 50%;
-  bottom: 96px;
-  z-index: 48;
-  transform: translateX(-50%);
-  padding: 7px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 6px;
-  background: rgba(20, 19, 29, 0.9);
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 12px;
-  pointer-events: none;
-}
-
-.danmaku-notice {
-  position: absolute;
-  top: 54px;
-  left: 50%;
-  z-index: 52;
-  max-width: min(560px, calc(100% - 32px));
-  transform: translateX(-50%);
-  padding: 8px 13px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 6px;
-  background: rgba(20, 19, 29, 0.9);
-  color: rgba(255, 255, 255, 0.94);
-  font-size: 12px;
-  line-height: 1.5;
-  text-align: center;
-  pointer-events: none;
-  backdrop-filter: blur(8px);
-}
-
-.danmaku-notice.is-loading {
-  color: #8fe9ff;
-  border-color: rgba(99, 210, 240, 0.38);
-}
-
-.danmaku-notice.is-success {
-  color: #a8f0cd;
-  border-color: rgba(98, 220, 159, 0.38);
-}
-
-.danmaku-notice.is-warning,
-.danmaku-notice.is-error {
-  color: #ffb2ca;
-  border-color: rgba(var(--primary-rgb), 0.42);
-}
-
-.video-recovering {
-  background: rgba(0, 0, 0, 0.76);
-  z-index: 42;
-}
-
-.video-error {
-  background:
-    radial-gradient(circle at center, rgba(var(--primary-rgb), 0.12), transparent 36%),
-    rgba(0, 0, 0, 0.9);
-  pointer-events: auto;
-}
-
-/* ===== 加载动画 ===== */
-.player-loading-mascot {
-  width: 85px;
-  height: 120px;
-  margin-bottom: 8px;
-  background: var(--sakura-mascot-image) center bottom / contain no-repeat;
-  filter: drop-shadow(0 18px 24px rgba(var(--primary-rgb), 0.35));
-}
-
-.loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 0;
-  background: var(--sakurafall-mark-image) center / contain no-repeat;
-  filter: drop-shadow(0 5px 8px rgba(var(--primary-rgb), 0.32));
-  animation: brand-buffer 0.72s ease-in-out infinite;
-  margin-bottom: 16px;
-}
-
-.loading-text {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.5);
-  margin: 0;
-  letter-spacing: 0;
-}
-
-/* ===== 错误状态 ===== */
-.error-icon {
-  margin-bottom: 12px;
-}
-
-.error-text {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.6);
-  margin: 0 0 16px 0;
-  text-align: center;
-  max-width: 280px;
-  line-height: 1.5;
-}
-
-.error-diagnostic,
-.recovering-detail {
-  max-width: min(520px, calc(100% - 48px));
-  margin: -6px 0 14px;
-  color: rgba(255, 255, 255, 0.48);
-  font-size: 12px;
-  line-height: 1.55;
-  text-align: center;
-}
-
-/* ===== Phase 5: 失败分类徽章与说明 ===== */
-.error-category-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  margin-bottom: 14px;
-  font-size: 13px;
-  font-weight: 700;
-  background: rgba(255, 107, 107, 0.18);
-  color: #ffb3b3;
-  border: 1px solid rgba(255, 107, 107, 0.35);
-}
-
-.error-category-badge .badge-icon {
-  font-size: 16px;
-  line-height: 1;
-}
-
-.error-category-badge.badge-network-blocked {
-  background: rgba(255, 193, 7, 0.18);
-  color: #f1c85b;
-  border-color: rgba(255, 193, 7, 0.4);
-}
-
-.error-category-badge.badge-cors-referer {
-  background: rgba(255, 152, 0, 0.18);
-  color: #ffb74d;
-  border-color: rgba(255, 152, 0, 0.4);
-}
-
-.error-category-badge.badge-hls-decode {
-  background: rgba(156, 123, 255, 0.18);
-  color: #b39ddb;
-  border-color: rgba(156, 123, 255, 0.4);
-}
-
-.error-category-badge.badge-format-unsupported {
-  background: rgba(66, 199, 238, 0.18);
-  color: #7ef3e8;
-  border-color: rgba(66, 199, 238, 0.4);
-}
-
-.error-category-badge.badge-resolver-timeout {
-  background: rgba(255, 138, 176, 0.18);
-  color: #ff8ab0;
-  border-color: rgba(255, 138, 176, 0.4);
-}
-
-.error-category-badge.badge-invalid-source {
-  background: rgba(255, 107, 107, 0.18);
-  color: #ff8a8a;
-  border-color: rgba(255, 107, 107, 0.4);
-}
-
-.error-category-badge.badge-cancelled,
-.error-category-badge.badge-unknown {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.7);
-  border-color: rgba(255, 255, 255, 0.18);
-}
-
-.error-description {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.56);
-  margin: 0 0 8px;
-  max-width: min(440px, calc(100% - 48px));
-  line-height: 1.55;
-  text-align: center;
-}
-
-.error-suggestion {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.68);
-  margin: 0 0 18px;
-  max-width: min(440px, calc(100% - 48px));
-  line-height: 1.55;
-  text-align: center;
-}
-
-.recovering-title {
-  margin: 0 0 10px;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.recovering-detail {
-  margin: 0;
-}
-
-.retry-btn {
-  padding: 7px 22px;
-  background: linear-gradient(135deg, var(--player-progress), var(--accent-lavender));
-  color: var(--text-inverse);
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: background 0.2s;
-}
-
-.retry-btn:hover {
-  filter: brightness(1.08);
-}
-
-.error-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-.fallback-btn {
-  padding: 7px 22px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-.fallback-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.5);
-}
-
-.source-switch-btn {
-  position: absolute;
-  right: 18px;
-  top: 18px;
-  z-index: 18;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 8px;
-  background: rgba(13, 12, 25, 0.68);
-  color: rgba(255, 255, 255, 0.88);
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
-}
-
-.source-switch-btn:hover {
-  background: rgba(var(--primary-rgb), 0.25);
-  border-color: rgba(var(--primary-rgb), 0.55);
-}
-
-.source-status-pill {
-  position: absolute;
-  right: 18px;
-  top: 58px;
-  z-index: 18;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: min(360px, calc(100% - 36px));
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
-  background: rgba(13, 12, 25, 0.58);
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 11px;
-  font-weight: 700;
-  cursor: default;
-}
-
-.source-status-pill span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.source-status-pill .playback-stats {
-  flex-shrink: 0;
-  overflow: visible;
-  color: rgba(144, 231, 255, 0.94);
-  font-variant-numeric: tabular-nums;
-}
-
-.source-panel-overlay {
-  z-index: 45;
-  pointer-events: auto;
-  background: rgba(0, 0, 0, 0.58);
-}
-
-.source-panel {
-  width: min(560px, calc(100% - 32px));
-  max-height: min(78vh, 540px);
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-  border: 1px solid rgba(255, 138, 176, 0.16);
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(31, 27, 48, 0.96), rgba(18, 17, 31, 0.96)),
-    var(--app-ambient-bg) right top / 480px auto no-repeat;
-  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
-}
-
-.source-panel-header,
-.subtitle-search-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.source-panel-header h3,
-.subtitle-search-header h3 {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.94);
-  font-size: 17px;
-}
-
-.source-panel-header p,
-.subtitle-search-header p {
-  margin: 5px 0 0;
-  color: rgba(255, 255, 255, 0.56);
-  font-size: 12px;
-}
-
-.source-panel-close,
-.subtitle-search-close {
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.74);
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-}
-
-.source-panel-close:hover,
-.subtitle-search-close:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
-}
-
-.source-panel-state,
-.subtitle-search-state {
-  min-height: 96px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: rgba(255, 255, 255, 0.68);
-  font-size: 13px;
-}
-
-.source-panel-state.error,
-.subtitle-search-state.error {
-  color: #ff8a8a;
-}
-
-.loading-spinner.small {
-  width: 22px;
-  height: 22px;
-  margin: 0;
-}
-
-.source-candidate-list,
-.subtitle-search-list {
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-right: 2px;
-}
-
-.source-candidate,
-.subtitle-search-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.055);
-  color: #fff;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.2s, border-color 0.2s;
-}
-
-.source-candidate:hover,
-.subtitle-search-item:hover {
-  background: rgba(var(--primary-rgb), 0.13);
-  border-color: rgba(var(--primary-rgb), 0.35);
-}
-
-.candidate-main,
-.subtitle-item-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.candidate-source {
-  font-size: 14px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.94);
-}
-
-.candidate-episode {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 260px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.54);
-}
-
-.candidate-meta,
-.subtitle-item-meta {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.candidate-chip,
-.subtitle-item-chip {
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.candidate-chip.quality {
-  color: #8ee6dc;
-  background: rgba(78, 205, 196, 0.16);
-}
-
-.candidate-chip.health-good {
-  color: #6ee68f;
-  background: rgba(45, 211, 111, 0.16);
-}
-
-.candidate-chip.health-warn {
-  color: #f1c85b;
-  background: rgba(255, 193, 7, 0.16);
-}
-
-.candidate-chip.health-bad {
-  color: #ff8a8a;
-  background: rgba(255, 107, 107, 0.16);
-}
-
-.candidate-chip.issue-ad {
-  color: #ffb36b;
-  background: rgba(255, 157, 72, 0.15);
-}
-
-.source-skipped {
-  margin-top: 10px;
-  color: rgba(255, 255, 255, 0.46);
-  font-size: 12px;
-}
-
-@media (max-width: 600px) {
-  .source-switch-btn {
-    right: 12px;
-    top: 12px;
-  }
-
-  .source-status-pill {
-    right: 12px;
-    top: 52px;
-  }
-
-  .source-panel,
-  .subtitle-search-panel {
-    max-height: min(82vh, 560px);
-    padding: 14px;
-  }
-
-  .source-candidate,
-  .subtitle-search-item {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .candidate-meta,
-  .subtitle-item-meta {
-    justify-content: flex-start;
-  }
-
-  .candidate-episode,
-  .subtitle-item-title {
-    max-width: 100%;
-  }
-}
-
-/* ===== 中央播放按钮 ===== */
-.center-play-btn {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 72px;
-  height: 72px;
-  background: radial-gradient(circle, rgba(var(--primary-rgb), 0.82), rgba(101, 65, 126, 0.78));
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 20;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.center-play-btn:hover {
-  background: radial-gradient(circle, rgba(var(--primary-rgb), 0.94), rgba(101, 65, 126, 0.88));
-}
-
-.center-play-btn svg {
-  margin-left: 4px;
-}
-
-/* ===== 播放/暂停闪烁反馈 ===== */
-.play-feedback {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 60px;
-  height: 60px;
-  background: rgba(0, 0, 0, 0.4);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 25;
-  pointer-events: none;
-}
-
-/* ===== 快进/快退/音量 OSD：中央图标 + 文本，一次性弹出后淡出 ===== */
-.player-osd {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 18px 26px;
-  border-radius: 18px;
-  background: rgba(10, 8, 14, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  z-index: 26;
-  pointer-events: none;
-  animation: osd-pop 0.65s var(--ease-smooth) forwards;
-}
-
-.osd-label {
-  color: rgba(255, 255, 255, 0.92);
-  font-size: 15px;
-  font-weight: 600;
-  font-family: 'Consolas', 'Monaco', monospace;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
-}
-
-@keyframes osd-pop {
-  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.82); }
-  18% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  72% { opacity: 1; }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.02); }
-}
-
-/* ===== 播放中控制栏隐藏时，鼠标光标一并隐藏（沉浸观影） ===== */
-.video-player-container.controls-idle {
-  cursor: none;
-}
-
-/* ===== 闪烁反馈过渡 ===== */
-.fade-enter-active {
-  transition: opacity 0.15s ease;
-}
-.fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-@keyframes brand-buffer {
-  0%, 100% { transform: scale(0.9); opacity: 0.58; }
-  50% { transform: scale(1); opacity: 1; }
-}
-
-/* ===== 字幕在线搜索面板 ===== */
-.subtitle-search-overlay {
-  z-index: 46;
-  pointer-events: auto;
-  background: rgba(0, 0, 0, 0.58);
-}
-
-.subtitle-search-panel {
-  width: min(520px, calc(100% - 32px));
-  max-height: min(78vh, 540px);
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-  border: 1px solid rgba(255, 138, 176, 0.16);
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(31, 27, 48, 0.96), rgba(18, 17, 31, 0.96));
-  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
-}
-
-/* 其余面板样式与 source-panel 系列共享，见上方组合选择器 */
-.subtitle-item-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 320px;
-  font-size: 13px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.94);
-}
-
-.subtitle-item-lang {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.54);
-}
-</style>
+<style scoped src="../../assets/styles/video-player.css"></style>

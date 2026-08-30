@@ -301,7 +301,7 @@
         <div class="setting-item">
           <div class="setting-label">
             <label>启用弹幕</label>
-            <p class="setting-desc">播放视频时显示弹幕（需配置 dandanplay 或导入本地 XML）</p>
+            <p class="setting-desc">播放时自动匹配 B 站、AcFun、弹弹play、自定义接口或本地 XML</p>
           </div>
           <div class="setting-control">
             <label class="switch">
@@ -387,11 +387,54 @@
           </div>
         </div>
 
+        <div class="setting-item danmaku-source-item">
+          <div class="setting-label">
+            <label>在线弹幕源</label>
+            <p class="setting-desc">自动并行匹配并合并结果，单个平台不可用时会继续使用其它来源</p>
+          </div>
+          <div class="setting-control danmaku-provider-grid">
+            <label v-for="source in danmakuProviderOptions" :key="source.id" class="danmaku-provider-option">
+              <input
+                type="checkbox"
+                v-model="localSettings.danmakuProviders[source.id]"
+                @change="updateDanmakuProviderConfig"
+              />
+              <span>
+                <strong>{{ source.name }}</strong>
+                <small>{{ source.desc }}</small>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>自定义弹幕接口</label>
+            <p class="setting-desc">支持返回 JSON/XML 的自建服务，也支持 {name}、{episode}、{bgmId} 占位符</p>
+          </div>
+          <div class="setting-control danmaku-custom-control">
+            <input
+              type="url"
+              v-model.trim="localSettings.danmakuCustomEndpoint"
+              @change="updateDanmakuProviderConfig"
+              class="setting-input"
+              placeholder="https://example.com/danmaku?name={name}&episode={episode}"
+            />
+            <input
+              type="password"
+              v-model="localSettings.danmakuCustomToken"
+              @change="updateDanmakuProviderConfig"
+              class="setting-input"
+              placeholder="Bearer Token（可选）"
+            />
+          </div>
+        </div>
+
         <!-- dandanplay AppID -->
         <div class="setting-item">
           <div class="setting-label">
             <label>弹弹play AppID</label>
-            <p class="setting-desc">开放弹幕网络的应用 ID（不填则仅支持本地 XML 导入）</p>
+            <p class="setting-desc">可选；配置后增加弹弹play 聚合池，不影响 B 站、AcFun 和本地 XML</p>
           </div>
           <div class="setting-control">
             <input
@@ -422,7 +465,7 @@
         </div>
 
         <p class="setting-hint">
-          提示：凭证可在 <a href="https://dev.dandanplay.com" target="_blank" rel="noopener">弹弹play开发者中心</a> 申请；不配置时仍可在播放器中导入本地 XML 弹幕文件。
+          B 站和 AcFun 默认免配置；弹弹play 凭证可在 <a href="https://dev.dandanplay.com" target="_blank" rel="noopener">开发者中心</a> 申请。播放器仍支持随时导入本地 XML。
         </p>
       </div>
 
@@ -917,6 +960,16 @@ export default {
         enableAnime4K: true,
         anime4kShaderPaths: '',
         anime4kPreset: 'balanced',
+        enableDanmaku: false,
+        danmakuFontSize: 20,
+        danmakuOpacity: 1,
+        danmakuSpeed: 1,
+        danmakuDisplayArea: 0.75,
+        danmakuProviders: { bilibili: true, acfun: true, dandanplay: true, custom: true },
+        danmakuCustomEndpoint: '',
+        danmakuCustomToken: '',
+        dandanplayAppId: '',
+        dandanplayAppSecret: '',
         // 字幕设置
         enableSubtitle: false,
         subtitleFontSize: 24,
@@ -954,6 +1007,12 @@ export default {
         { value: 'anime', label: '完整演出', desc: '全部角色、背景与交互动效，使用樱月自定义鼠标' },
         { value: 'balanced', label: '标准演出', desc: '保留完整界面动效，使用系统鼠标与原生手势' },
         { value: 'performance', label: '纯净模式', desc: '关闭装饰动画与贴纸阴影，优先性能与简洁' }
+      ],
+      danmakuProviderOptions: [
+        { id: 'bilibili', name: '哔哩哔哩', desc: '免配置，直接匹配番剧分集弹幕' },
+        { id: 'acfun', name: 'AcFun', desc: '免配置，直接读取番剧弹幕' },
+        { id: 'dandanplay', name: '弹弹play 聚合', desc: '配置凭证后启用多站聚合池' },
+        { id: 'custom', name: '自定义接口', desc: '使用下面配置的自建或兼容服务' }
       ]
     };
   },
@@ -984,6 +1043,9 @@ export default {
       'danmakuOpacity',
       'danmakuSpeed',
       'danmakuDisplayArea',
+      'danmakuProviders',
+      'danmakuCustomEndpoint',
+      'danmakuCustomToken',
       'dandanplayAppId',
       'dandanplayAppSecret',
       // 字幕
@@ -1110,6 +1172,9 @@ export default {
       'updateDanmakuOpacity',
       'updateDanmakuSpeed',
       'updateDanmakuDisplayArea',
+      'updateDanmakuProviders',
+      'updateDanmakuCustomEndpoint',
+      'updateDanmakuCustomToken',
       'updateDandanplayAppId',
       'updateDandanplayAppSecret',
       // 字幕
@@ -1344,6 +1409,23 @@ export default {
     async updateDanmakuDisplayArea() {
       await this.$store.dispatch('settings/updateDanmakuDisplayArea', this.localSettings.danmakuDisplayArea);
       this.showSaveSuccess();
+    },
+    async updateDanmakuProviderConfig() {
+      await Promise.all([
+        this.$store.dispatch('settings/updateDanmakuProviders', this.localSettings.danmakuProviders || {}),
+        this.$store.dispatch('settings/updateDanmakuCustomEndpoint', this.localSettings.danmakuCustomEndpoint || ''),
+        this.$store.dispatch('settings/updateDanmakuCustomToken', this.localSettings.danmakuCustomToken || '')
+      ]);
+      const result = await window.electronAPI?.danmakuConfigureProviders?.({
+        providers: this.localSettings.danmakuProviders || {},
+        customEndpoint: this.localSettings.danmakuCustomEndpoint || '',
+        customToken: this.localSettings.danmakuCustomToken || ''
+      });
+      if (result?.ok === false) {
+        this.$notify?.error('弹幕源配置失败', result.msg || '配置未生效');
+      } else {
+        this.showSaveSuccess();
+      }
     },
     async updateDandanplayAppId() {
       await this.$store.dispatch('settings/updateDandanplayAppId', this.localSettings.dandanplayAppId);
@@ -2775,6 +2857,62 @@ input:checked + .slider:before {
   color: var(--error-color);
 }
 
+.danmaku-source-item {
+  align-items: flex-start;
+}
+
+.danmaku-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(170px, 1fr));
+  gap: 8px;
+  width: min(560px, 64%);
+}
+
+.danmaku-provider-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-color-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  cursor: pointer;
+  transition: border-color 160ms var(--ease-smooth), background-color 160ms var(--ease-smooth);
+}
+
+.danmaku-provider-option:has(input:checked) {
+  border-color: var(--primary-color);
+  background: rgba(var(--primary-rgb), 0.08);
+}
+
+.danmaku-provider-option input {
+  margin-top: 3px;
+  accent-color: var(--primary-color);
+}
+
+.danmaku-provider-option span,
+.danmaku-custom-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.danmaku-provider-option strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.danmaku-provider-option small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.danmaku-custom-control {
+  width: min(560px, 64%);
+}
+
 /* 主题包设置项：卡片墙较宽，改纵向布局让标题在上、卡片墙占满整行，避免左右挤压留白 */
 .theme-pack-item {
   flex-direction: column;
@@ -2870,6 +3008,15 @@ input:checked + .slider:before {
 @media (max-width: 760px) {
   .custom-css-control {
     width: 100%;
+  }
+
+  .danmaku-provider-grid,
+  .danmaku-custom-control {
+    width: 100%;
+  }
+
+  .danmaku-provider-grid {
+    grid-template-columns: 1fr;
   }
 
 }

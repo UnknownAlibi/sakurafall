@@ -323,8 +323,8 @@ export default {
                         page,
                         pageSize: 24,
                         releasedOnly: mode !== 'season',
-                        requireDated: mode !== 'season' && indexSort === 'latest',
-                        requireRated: mode !== 'season' && indexSort === 'rating'
+                        requireDated: false,
+                        requireRated: false
                     });
                     if (indexResult && indexResult.fromIndex && (indexResult.data?.length > 0 || (page > 1 && (indexResult.total || 0) > 0))) {
                         return indexResult;

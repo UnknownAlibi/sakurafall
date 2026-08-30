@@ -86,7 +86,9 @@ const { CustomizationPackService, MAX_PACK_BYTES, MAX_THEME_PACK_BYTES } = requi
 const { RuntimeDiagnosticsService } = require('./services/RuntimeDiagnosticsService');
 const { BtSearchService } = require('./services/bt/BtSearchService');
 const { registerBtIpc } = require('./ipc/bt');
+const { registerDanmakuIpc } = require('./ipc/danmaku');
 const playerSvc = require('./services/LazyPlayerServices');
+const videoStreamProxy = require('./services/VideoStreamProxyService');
 
 // 创建数据库实例
 const animeDb = new AnimeDatabase();
@@ -750,6 +752,28 @@ function createWindow() {
 }
 
 /**
+ * 播放窗口全部关闭后释放主进程侧的播放期资源：
+ * - DLNA SSDP socket 与代理服务器（投屏会话随窗口结束）
+ * - 一起看房间（WebSocket 服务端/客户端连接）
+ * - 封面缓存 LRU 收缩（减少主进程驻留内存）
+ * 仅在没有任何存活的播放窗口时执行，避免误伤多窗口场景
+ */
+function releasePlayerRuntimeResources() {
+    if (playerWindows.size > 0) return;
+    try {
+        playerSvc.dlna().shutdown();
+    } catch (e) { /* 未初始化或已销毁 */ }
+    try {
+        watchTogetherService.leaveRoom();
+    } catch (e) { /* ignore */ }
+    try {
+        imageCacheService.trim();
+    } catch (e) { /* ignore */ }
+    // 窗口已销毁，此时触发一次主动 GC 把主进程内存还给系统
+    if (typeof global.gc === 'function') global.gc();
+}
+
+/**
  * 创建独立播放窗口（支持同时打开多个）
  * @param {Object} videoData - 视频信息 { title, url, anime, episode, episodeId, lineId }
  */
@@ -768,8 +792,9 @@ function createPlayerWindow(videoData) {
             nodeIntegration: false,
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js'),
-            // 直连视频源不返回 CORS 头，Anime4K 超分读取视频帧(texImage2D)会被跨域污染拦截
-            webSecurity: false
+            // 视频流经主进程 VideoStreamProxyService 代理并补 CORS 头，
+            // 无需再关闭 webSecurity（Anime4K 读帧不受跨域污染拦截）
+            webSecurity: true
         },
         titleBarStyle: 'hidden',
         frame: false,
@@ -813,6 +838,7 @@ function createPlayerWindow(videoData) {
         pendingPlayerDataMap.delete(webContentsId);
         playerPreMiniBounds.delete(webContentsId);
         playerWindows.delete(win);
+        releasePlayerRuntimeResources();
     });
 
     // 窗口状态变化通知渲染进程（用于最大化按钮状态）
@@ -916,10 +942,11 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
                 callback({ error: -6 });
             }
         });
-        protocol.registerFileProtocol('sakurafall-media', (request, callback) => {
-            const filePath = mediaLibraryService.resolveMediaPath(request.url);
-            callback(filePath ? { path: filePath } : { error: -6 });
-        });
+        // sakurafall-media 统一由 protocol.handle 接管：
+        //   - proxy 分支：远端视频流转发（补 CORS 头，恢复 webSecurity 后 Anime4K 仍可读帧）
+        //   - asset 分支：MediaLibraryService 本地文件语义保持不变
+        videoStreamProxy.setAssetResolver((url) => mediaLibraryService.resolveMediaPath(url));
+        videoStreamProxy.registerVideoStreamProxy();
         cmsApiService.setHealthStorePath(path.join(app.getPath('userData'), 'source-health.json'));
         await animeDb.connect();
         // 将数据库实例注入各数据源服务以启用接口缓存（复用同一张 cms_cache 表）
@@ -1539,6 +1566,12 @@ secureIpcHandle('playback-resolve', async (event, payload = {}, options = {}) =>
         // 每次调用都生成新 token，使旧 token 的返回结果被丢弃
         const token = playbackResolverService.nextToken();
         const result = await playbackResolverService.resolve(payload, { ...options, token });
+        // 远端 http(s) 直链改走主进程视频代理，恢复 webSecurity 后避免 canvas 跨域污染
+        if (result?.success && result.url && /^https?:\/\//i.test(result.url)) {
+            result.url = videoStreamProxy.buildProxyUrl(result.url, {
+                referer: result.headers?.Referer || result.headers?.referer || ''
+            });
+        }
         if (!result?.success && result?.category !== 'cancelled') {
             runtimeDiagnostics.report('playback-resolve-failed', {
                 sourceId: payload?.sourceId || payload?.source?.sourceId || '',
@@ -1572,6 +1605,16 @@ secureIpcHandle('playback-resolve', async (event, payload = {}, options = {}) =>
 secureIpcHandle('playback-cancel-all', async () => {
     playbackResolverService.cancelAll();
     return { success: true };
+});
+
+// 视频代理 URL 包装（远端直链 → sakurafall-media://proxy/...）
+secureIpcHandle('build-video-proxy-url', async (event, url, referer) => {
+    const target = String(url || '').trim();
+    if (!/^https?:\/\//i.test(target)) {
+        return { success: false, error: 'not a remote http(s) url', url: target };
+    }
+    const safeReferer = /^https?:\/\//i.test(String(referer || '')) ? String(referer) : '';
+    return { success: true, url: videoStreamProxy.buildProxyUrl(target, { referer: safeReferer }) };
 });
 
 // 清理解析短期缓存
@@ -2070,65 +2113,7 @@ secureIpcHandle('subject-index-status', async () => {
     }
 });
 
-// ======
-// 弹幕 (dandanplay + 本地导入) IPC 处理
-// ======
-
-// 设置 dandanplay 认证凭证
-secureIpcHandle('danmaku-set-credentials', async (event, appId, appSecret) => {
-    try {
-        danmakuApi.setCredentials(appId, appSecret);
-        return { ok: true };
-    } catch (error) {
-        console.error('[Danmaku] 设置凭证失败:', error);
-        return { ok: false, msg: error.message };
-    }
-});
-
-// 检查 dandanplay 是否就绪
-secureIpcHandle('danmaku-is-ready', async () => {
-    return danmakuApi.isReady();
-});
-
-// 搜索 dandanplay 番剧
-secureIpcHandle('danmaku-search', async (event, keyword) => {
-    try {
-        return await danmakuApi.searchAnime(keyword);
-    } catch (error) {
-        console.error('[Danmaku] 搜索失败:', error);
-        throw error;
-    }
-});
-
-// 获取某一集（episodeId）的弹幕池
-secureIpcHandle('danmaku-get-comments', async (event, episodeId) => {
-    try {
-        return await danmakuApi.getComments(episodeId);
-    } catch (error) {
-        console.error('[Danmaku] 获取弹幕失败:', error);
-        throw error;
-    }
-});
-
-// 解析本地 XML 弹幕文件
-secureIpcHandle('danmaku-parse-xml', async (event, filePath) => {
-    try {
-        return await danmakuApi.parseLocalXmlFile(filePath);
-    } catch (error) {
-        console.error('[Danmaku] 解析本地 XML 失败:', error);
-        return [];
-    }
-});
-
-// 测试 dandanplay 连通性
-secureIpcHandle('danmaku-test', async () => {
-    try {
-        return await danmakuApi.test();
-    } catch (error) {
-        console.error('[Danmaku] 测试失败:', error);
-        return { ok: false, msg: error.message };
-    }
-});
+registerDanmakuIpc({ handle: secureIpcHandle, danmakuApi });
 
 // Generic fallback catalog selected by a role declared in an installed source pack.
 function getFallbackPlaybackProvider() {

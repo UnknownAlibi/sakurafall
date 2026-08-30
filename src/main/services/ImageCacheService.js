@@ -497,7 +497,20 @@ class ImageCacheService {
     }
   }
 
-  _enforceLimits() {
+  /**
+   * 主动收缩缓存：按 LRU 淘汰到目标条数/字节数以下（比 maxEntries/maxBytes 更激进）
+   * 用于播放窗口关闭等场景，把主进程内存占用降下来
+   * @param {Object} target - { maxEntries, maxBytes }，缺省为当前上限的 1/2
+   */
+  trim(target = {}) {
+    if (!this.cacheDir) return;
+    const nextMaxEntries = Math.max(100, parseInt(target.maxEntries, 10) || Math.floor(this.maxEntries / 2));
+    const nextMaxBytes = Math.max(16 * 1024 * 1024, parseInt(target.maxBytes, 10) || Math.floor(this.maxBytes / 2));
+    this._enforceLimits(nextMaxEntries, nextMaxBytes);
+    this._scheduleSaveIndex();
+  }
+
+  _enforceLimits(nextMaxEntries = this.maxEntries, nextMaxBytes = this.maxBytes) {
     const entries = Object.entries(this.index)
       .map(([key, entry]) => ({ key, ...entry, filePath: path.join(this.cacheDir, entry.fileName || '') }))
       .filter(entry => entry.fileName);
@@ -514,7 +527,7 @@ class ImageCacheService {
     }
 
     existing.sort((a, b) => (a.lastUsedAt || 0) - (b.lastUsedAt || 0));
-    while (existing.length > this.maxEntries || totalBytes > this.maxBytes) {
+    while (existing.length > nextMaxEntries || totalBytes > nextMaxBytes) {
       const entry = existing.shift();
       if (!entry) break;
       try { fs.unlinkSync(entry.filePath); } catch (_error) { /* ignore */ }

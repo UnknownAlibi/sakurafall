@@ -150,7 +150,7 @@ import animeCatalogVirtualization from '../mixins/animeCatalogVirtualization.js'
 import animeInfiniteScroll from '../mixins/animeInfiniteScroll.js';
 import animeEpisodeAvailability from '../mixins/animeEpisodeAvailability.js';
 import animeDetailModal from '../mixins/animeDetailModal.js';
-import { filterCatalogSortOptions, normalizeCatalogSort } from '../utils/catalogSort.js';
+import { bangumiRegionOptions, filterCatalogSortOptions, normalizeCatalogSort } from '../utils/catalogSort.js';
 import {
   continueWatchingKey,
   resolveContinueWatching
@@ -174,15 +174,9 @@ export default {
       selectedBangumiYear: '',
       bangumiSortOptions: [
         { id: 'date', name: '最新上映', sort: 'date' },
-        { id: 'score', name: '评分最高', sort: 'score' }
+        { id: 'score', name: '评分优先', sort: 'score' }
       ],
-      bangumiRegionOptions: [
-        { id: 'all', name: '全部', tag: '' },
-        { id: 'jp', name: '日漫', tag: '日本动画' },
-        { id: 'cn', name: '国漫', tag: '国漫' },
-        { id: 'western', name: '欧美', tag: '欧美动画' },
-        { id: 'kr', name: '韩国', tag: '韩国动画' }
-      ],
+      bangumiRegionOptions: bangumiRegionOptions.map(option => ({ ...option })),
       bangumiTypeOptions: [
         { id: 'all', name: '全部', mode: 'catalog' },
         { id: 'season', name: '本季', mode: 'season' },
@@ -479,20 +473,8 @@ export default {
           }));
           if (token !== this._bangumiRefreshToken || signature !== this.bangumiListSignature(page, search)) return;
           if (!result || result.error || result.stale) return;
-          if (this.currentPage !== page) return;
-
-          this.$store.commit('anime/SET_ANIME_LIST', {
-            data: result.data || [],
-            total: result.total || 0,
-            page: result.page || page,
-            totalPages: result.totalPages || 1
-          });
-          this.$store.commit('anime/SET_SEARCH_KEYWORD', search);
-          this.totalItems = result.total || 0;
-          this.$nextTick(() => {
-            this.checkFavoritesBatch(this.animeList);
-            this.bindMainScrollTracker();
-          });
+          // Stale-while-revalidate only warms the cache. Replacing the visible
+          // result here made an untouched filter suddenly change cards and total.
         } catch (error) {
           console.warn('[AnimeZone] Bangumi 后台刷新失败:', error?.message || error);
         }

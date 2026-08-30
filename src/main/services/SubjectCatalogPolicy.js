@@ -59,19 +59,10 @@ function hasQualifiedRating(item = {}) {
   return rating > 0 && (votes >= 10 || rank > 0);
 }
 
-function isSubjectCatalogEligible(item, { sort = 'date', todayKey = '' } = {}) {
+function isSubjectCatalogEligible(item, { todayKey = '' } = {}) {
   if (!hasSubjectIdentity(item)) return false;
   const release = subjectReleaseState(item, todayKey);
-  if (release.state === 'future') return false;
-
-  if (sort === 'date' || sort === 'latest') {
-    return release.state === 'released-dated';
-  }
-  if (sort === 'score' || sort === 'rating') {
-    const hasReleaseEvidence = release.state === 'released-dated' || release.state === 'released-undated';
-    return hasReleaseEvidence && hasQualifiedRating(item);
-  }
-  return true;
+  return release.state === 'released-dated' || release.state === 'released-undated';
 }
 
 module.exports = {

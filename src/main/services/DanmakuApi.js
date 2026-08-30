@@ -16,6 +16,7 @@ const HttpClient = require('../utils/HttpClient');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const { DanmakuProviderRegistry, parseBilibiliXml } = require('./danmaku/DanmakuProviderRegistry');
 
 class DanmakuApi {
   constructor() {
@@ -32,16 +33,41 @@ class DanmakuApi {
         'Accept': 'application/json'
       }
     });
+    this.providerRegistry = new DanmakuProviderRegistry();
+    this.providerRegistry.setDandanplay(this);
   }
 
-  setDatabase(db) { this.db = db; }
+  setDatabase(db) {
+    this.db = db;
+    this.providerRegistry.setDatabase(db);
+  }
 
   setTimeout(timeout) {
     this.timeout = Math.max(3000, parseInt(timeout, 10) || 10000);
     this.http.setTimeout(this.timeout);
+    this.providerRegistry.setTimeout(this.timeout);
   }
 
-  setProxy(proxyUrl) { this.http.setProxy(proxyUrl); }
+  setProxy(proxyUrl) {
+    this.http.setProxy(proxyUrl);
+    this.providerRegistry.setProxy(proxyUrl);
+  }
+
+  configureProviders(config = {}) {
+    return this.providerRegistry.configure(config);
+  }
+
+  listProviders() {
+    return this.providerRegistry.listProviders();
+  }
+
+  resolveComments(context = {}) {
+    return this.providerRegistry.resolve(context);
+  }
+
+  searchProviders(context = {}) {
+    return this.providerRegistry.search(context);
+  }
 
   /**
    * 设置 dandanplay 认证凭证
@@ -219,36 +245,28 @@ class DanmakuApi {
    * 解析 XML 字符串内容
    */
   _parseXmlContent(content) {
-    if (!content) return [];
-    const result = [];
-    // 用正则提取 <d p="...">文本</d>，避免依赖 XML 解析库
-    const regex = /<d\s+[^>]*p="([^"]+)"[^>]*>([^<]*)<\/d>/gi;
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const p = match[1].split(',');
-      const text = (match[2] || '').trim();
-      if (!text) continue;
-      const time = parseFloat(p[0]) || 0;
-      const rawType = parseInt(p[1], 10) || 1;
-      const color = parseInt(p[2], 10) || 0xFFFFFF;
-      let type = 'scroll';
-      if (rawType === 4) type = 'bottom';
-      else if (rawType === 5) type = 'top';
-      result.push({ time, color, text, type });
-    }
-    return result;
+    return parseBilibiliXml(content, 'local').map(({ source: _source, ...comment }) => comment);
   }
 
   /**
    * 测试 API 连通性
    */
   async test() {
-    if (!this.isReady()) {
-      return { ok: false, msg: '未配置 dandanplay AppID/AppSecret' };
-    }
     try {
-      const result = await this.searchAnime('测试');
-      return { ok: true, count: result.length };
+      const sources = await this.searchProviders({
+        animeName: '葬送的芙莉莲',
+        episodeNumber: 1,
+        providerIds: ['bilibili', 'acfun']
+      });
+      const online = sources.filter(source => source.status === 'ok');
+      if (online.length > 0) {
+        return {
+          ok: true,
+          count: online.reduce((total, source) => total + (source.candidates?.length || 0), 0),
+          sources
+        };
+      }
+      return { ok: false, msg: '免配置弹幕源当前不可达', sources };
     } catch (err) {
       return { ok: false, msg: err.message };
     }

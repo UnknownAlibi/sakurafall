@@ -75,7 +75,13 @@ export default {
     this.modeObserver = new MutationObserver(this.syncMode);
     this.modeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-ui-effects', 'data-scroll-state', 'data-performance-pressure', 'data-software-rendering']
+      attributeFilter: [
+        'data-ui-effects',
+        'data-scroll-state',
+        'data-performance-pressure',
+        'data-software-rendering',
+        'data-player-cursor-hidden'
+      ]
     });
 
     document.addEventListener('mousemove', this.handleMove, { passive: true });
@@ -108,12 +114,13 @@ export default {
       const reducedMotion = this.reducedMotionQuery?.matches === true;
       const scrolling = document.documentElement.getAttribute('data-scroll-state') === 'scrolling';
       const pressure = document.documentElement.getAttribute('data-performance-pressure') === 'high';
+      const playerCursorHidden = document.documentElement.getAttribute('data-player-cursor-hidden') === 'true';
       // 软件渲染下逐帧移动 DOM 光标开销过大，直接禁用回退原生指针
       const softwareRendering = document.documentElement.getAttribute('data-software-rendering') === 'true';
       this.enabled = effectsMode === 'anime' && !coarsePointer && !reducedMotion && !scrolling && !pressure && !softwareRendering && !this.surfaceSuspended;
       document.documentElement.classList.toggle('anime-cursor-ready', this.enabled);
 
-      if (!this.enabled) {
+      if (!this.enabled || playerCursorHidden) {
         this.visible = false;
         this.lastTarget = null;
         if (this.rafId) {
@@ -126,6 +133,10 @@ export default {
     },
 
     handleMove(event) {
+      if (document.documentElement.getAttribute('data-player-cursor-hidden') === 'true') {
+        this.visible = false;
+        return;
+      }
       if (event.target !== this.lastTarget) {
         this.lastTarget = event.target;
         this.updateSurfaceSuspension(event.target);

@@ -4,7 +4,6 @@
 
 <script>
 import DanmakuEngine from './DanmakuEngine.js';
-import { selectDanmakuEpisode } from '../../utils/danmakuMatch.js';
 
 export default {
   name: 'DanmakuLayer',
@@ -19,6 +18,9 @@ export default {
     animeName: { type: String, default: '' },
     // 当前播放集数，用于匹配正确的 episodeId
     episodeNumber: { type: Number, default: 0 },
+    animeMetadata: { type: Object, default: () => ({}) },
+    providerIds: { type: Array, default: () => [] },
+    sourceOverrides: { type: Object, default: () => ({}) },
     // 弹弹play episodeId（外部指定，可选，保留旧 prop 名以兼容现有调用）
     danmakuAnimeId: { type: [String, Number], default: '' },
     // 弹幕设置
@@ -34,6 +36,7 @@ export default {
       loaded: false,
       loading: false,
       loadToken: 0,
+      runtimeOverrides: {},
       // dandanplay 搜索候选（用户未指定 animeId 时用于手动选择）
       searchCandidates: []
     };
@@ -63,6 +66,7 @@ export default {
     displayAreaRatio(val) { if (this.engine) this.engine.setDisplayAreaRatio(val); },
     // 切换番剧时重新加载
     animeName() {
+      this.runtimeOverrides = this.readStoredOverrides();
       this.loaded = false;
       if (this.enabled) this.loadDanmaku();
     },
@@ -76,6 +80,7 @@ export default {
     }
   },
   mounted() {
+    this.runtimeOverrides = this.readStoredOverrides();
     this.engine = new DanmakuEngine(this.$refs.canvas);
     this.engine.setFontSize(this.fontSize);
     this.engine.setOpacity(this.opacity);
@@ -97,10 +102,28 @@ export default {
     }
   },
   methods: {
+    matchStorageKey() {
+      const metadata = this.animeMetadata || {};
+      const identity = metadata.bgmId || metadata.bgm_id || metadata.subjectId || metadata.id || this.animeName;
+      return `danmaku-match:${String(identity || '').trim().toLowerCase()}`;
+    },
+
+    readStoredOverrides() {
+      try {
+        return JSON.parse(localStorage.getItem(this.matchStorageKey()) || '{}');
+      } catch (_) {
+        return {};
+      }
+    },
+
+    saveStoredOverrides() {
+      try { localStorage.setItem(this.matchStorageKey(), JSON.stringify(this.runtimeOverrides || {})); } catch (_) { /* optional */ }
+    },
+
     /**
-     * 加载弹幕：优先使用指定 animeId，否则用番剧名搜索
+     * 通过主进程统一解析多个弹幕源；单个源失败不会中断其它来源。
      */
-    async loadDanmaku() {
+    async loadDanmaku(forceRefresh = false) {
       const token = ++this.loadToken;
       this.loading = true;
       this.$emit('status', {
@@ -111,42 +134,49 @@ export default {
       });
 
       try {
-        let comments = [];
-        let match = null;
-
+        const metadata = this.animeMetadata || {};
+        const aliases = [
+          metadata.name_cn,
+          metadata.nameCn,
+          metadata.original_name,
+          metadata.originalName,
+          metadata.rawName,
+          ...(Array.isArray(metadata.aliases) ? metadata.aliases : []),
+          ...(Array.isArray(metadata.alias) ? metadata.alias : [])
+        ].filter(Boolean);
+        const overrides = {
+          ...JSON.parse(JSON.stringify(this.sourceOverrides || {})),
+          ...JSON.parse(JSON.stringify(this.runtimeOverrides || {}))
+        };
         if (this.danmakuAnimeId) {
-          // 已指定弹弹play episodeId
-          comments = await window.electronAPI.danmakuGetComments(this.danmakuAnimeId);
-        } else if (this.animeName) {
-          // 用番剧名搜索弹弹play，再精确匹配当前集的 episodeId
-          const ready = await window.electronAPI.danmakuIsReady();
-          if (!ready) {
-            const error = new Error('请先在设置中配置弹弹play AppID 和 AppSecret，或导入本地 XML 弹幕');
-            error.code = 'DANMAKU_NOT_CONFIGURED';
-            throw error;
-          }
-          const candidates = await window.electronAPI.danmakuSearch(this.animeName);
-          if (token !== this.loadToken) return;
-          if (candidates && candidates.length > 0) {
-            this.searchCandidates = candidates;
-            match = selectDanmakuEpisode(candidates, this.animeName, this.episodeNumber);
-            if (match?.episodeId) {
-              comments = await window.electronAPI.danmakuGetComments(match.episodeId);
-              if (token !== this.loadToken) return;
-            }
-          }
+          overrides.dandanplay = { ...(overrides.dandanplay || {}), episodeId: this.danmakuAnimeId };
         }
+        const result = await window.electronAPI.danmakuResolve({
+          animeName: this.animeName,
+          aliases,
+          bgmId: metadata.bgmId || metadata.bgm_id || metadata.subjectId || metadata.id || '',
+          episodeNumber: this.episodeNumber,
+          duration: metadata.duration || 0,
+          providerIds: this.providerIds,
+          overrides,
+          forceRefresh
+        });
+        if (token !== this.loadToken) return;
+        const comments = result?.comments || [];
+        const successful = (result?.sources || []).filter(source => source.status === 'ok');
+        const match = successful[0]?.match || null;
+        this.searchCandidates = (result?.sources || []).flatMap(source => source.candidates || []);
 
         if (token !== this.loadToken) return;
         if (comments && comments.length > 0) {
           this.engine.setComments(comments);
           this.engine.setTime(this.currentTime);
           this.loaded = true;
-          this.$emit('loaded', { count: comments.length, match });
+          this.$emit('loaded', { count: comments.length, match, sources: result?.sources || [], cached: result?.cached === true });
         } else {
           this.engine.setComments([]);
           this.loaded = true;
-          this.$emit('loaded', { count: 0, match });
+          this.$emit('loaded', { count: 0, match, sources: result?.sources || [], error: result?.error || '' });
         }
       } catch (e) {
         if (token !== this.loadToken) return;
@@ -155,6 +185,24 @@ export default {
       } finally {
         if (token === this.loadToken) this.loading = false;
       }
+    },
+
+    async loadWithOverride(providerId, candidate) {
+      if (!providerId || !candidate) return;
+      if (providerId === 'bilibili') {
+        this.runtimeOverrides = {
+          ...this.runtimeOverrides,
+          bilibili: { seasonId: candidate.seasonId || candidate.id, title: candidate.title || '' }
+        };
+      } else if (providerId === 'acfun') {
+        this.runtimeOverrides = {
+          ...this.runtimeOverrides,
+          acfun: { albumId: candidate.albumId || candidate.id, title: candidate.title || '' }
+        };
+      }
+      this.saveStoredOverrides();
+      this.loaded = false;
+      await this.loadDanmaku(true);
     },
 
     /**
@@ -186,11 +234,19 @@ export default {
       const token = ++this.loadToken;
       this.loading = true;
       try {
-        const comments = await window.electronAPI.danmakuParseXml(filePath);
+        const localComments = await window.electronAPI.danmakuParseXml(filePath);
         if (token !== this.loadToken || !this.engine) return;
-        this.engine.setComments(comments || []);
+        const comments = [
+          ...(this.engine.comments || []),
+          ...(localComments || []).map(comment => ({ ...comment, source: 'local' }))
+        ].sort((a, b) => a.time - b.time);
+        this.engine.setComments(comments);
         this.loaded = true;
-        this.$emit('loaded', { count: (comments || []).length, source: 'local' });
+        this.$emit('loaded', {
+          count: comments.length,
+          source: 'local',
+          sources: [{ id: 'local', name: '本地 XML', status: 'ok', count: (localComments || []).length }]
+        });
       } catch (e) {
         if (token !== this.loadToken) return;
         this.$emit('error', e.message);

@@ -35,6 +35,14 @@ const state = {
     danmakuOpacity: 1.0,            // 不透明度 0.1-1.0
     danmakuSpeed: 1.0,              // 速度倍率 0.5-2.0
     danmakuDisplayArea: 0.75,       // 显示区域比例 0.25-1.0
+    danmakuProviders: {
+        bilibili: true,
+        acfun: true,
+        dandanplay: true,
+        custom: true
+    },
+    danmakuCustomEndpoint: '',
+    danmakuCustomToken: '',
     // dandanplay 凭证（用户自行注册）
     dandanplayAppId: '',
     dandanplayAppSecret: '',
@@ -126,6 +134,15 @@ const mutations = {
     SET_DANMAKU_DISPLAY_AREA(state, val) {
         state.danmakuDisplayArea = val;
     },
+    SET_DANMAKU_PROVIDERS(state, val) {
+        state.danmakuProviders = { ...state.danmakuProviders, ...(val || {}) };
+    },
+    SET_DANMAKU_CUSTOM_ENDPOINT(state, val) {
+        state.danmakuCustomEndpoint = String(val || '').trim();
+    },
+    SET_DANMAKU_CUSTOM_TOKEN(state, val) {
+        state.danmakuCustomToken = String(val || '').trim();
+    },
     SET_DANDANPLAY_APP_ID(state, val) {
         state.dandanplayAppId = val;
     },
@@ -154,7 +171,9 @@ const mutations = {
         state.updateReminderInterval = val;
     },
     SET_SETTINGS(state, settings) {
+        const providerDefaults = { ...state.danmakuProviders };
         Object.assign(state, settings);
+        state.danmakuProviders = { ...providerDefaults, ...(settings?.danmakuProviders || {}) };
         state.seekStepSeconds = normalizeSeekStepSeconds(settings?.seekStepSeconds);
     }
 };
@@ -310,6 +329,18 @@ const actions = {
         commit('SET_DANMAKU_DISPLAY_AREA', val);
         dispatch('saveSettings');
     },
+    updateDanmakuProviders({ commit, dispatch }, val) {
+        commit('SET_DANMAKU_PROVIDERS', val);
+        dispatch('saveSettings');
+    },
+    updateDanmakuCustomEndpoint({ commit, dispatch }, val) {
+        commit('SET_DANMAKU_CUSTOM_ENDPOINT', val);
+        dispatch('saveSettings');
+    },
+    updateDanmakuCustomToken({ commit, dispatch }, val) {
+        commit('SET_DANMAKU_CUSTOM_TOKEN', val);
+        dispatch('saveSettings');
+    },
     updateDandanplayAppId({ commit, dispatch }, val) {
         commit('SET_DANDANPLAY_APP_ID', val);
         dispatch('saveSettings');
@@ -387,6 +418,9 @@ const getters = {
     danmakuOpacity: state => state.danmakuOpacity,
     danmakuSpeed: state => state.danmakuSpeed,
     danmakuDisplayArea: state => state.danmakuDisplayArea,
+    danmakuProviders: state => state.danmakuProviders,
+    danmakuCustomEndpoint: state => state.danmakuCustomEndpoint,
+    danmakuCustomToken: state => state.danmakuCustomToken,
     dandanplayAppId: state => state.dandanplayAppId,
     dandanplayAppSecret: state => state.dandanplayAppSecret,
     // 字幕

@@ -4,6 +4,7 @@
     :class="{ visible }"
     @mouseenter="$emit('controls-hover', true)"
     @mouseleave="$emit('controls-hover', false)"
+    @pointerup="releasePointerFocus"
     @click.stop
     @dblclick.stop
   >
@@ -343,6 +344,11 @@
           </button>
           <transition name="fade-scale">
             <div v-show="showDanmakuMenu" class="danmaku-menu" @mouseleave="showDanmakuMenu = false">
+              <div v-if="danmakuSources.length" class="danmaku-source-summary">
+                <span v-for="source in danmakuSources" :key="source.id" :class="`is-${source.status}`">
+                  <i></i>{{ source.name }}<b v-if="source.count">{{ source.count }}</b>
+                </span>
+              </div>
               <button
                 :class="['danmaku-option', { active: danmakuEnabled }]"
                 @click="$emit('toggle-danmaku'); showDanmakuMenu = false;"
@@ -351,6 +357,12 @@
               </button>
               <button class="danmaku-option" @click="$emit('danmaku-import-xml'); showDanmakuMenu = false;">
                 导入本地 XML
+              </button>
+              <button class="danmaku-option" @click="$emit('danmaku-refresh'); showDanmakuMenu = false;">
+                重新匹配当前集
+              </button>
+              <button class="danmaku-option" @click="$emit('danmaku-correct-match'); showDanmakuMenu = false;">
+                手动校正匹配
               </button>
               <button class="danmaku-option" @click="$emit('open-settings'); showDanmakuMenu = false;">
                 弹幕设置
@@ -502,6 +514,10 @@ export default {
       type: Boolean,
       default: false
     },
+    danmakuSources: {
+      type: Array,
+      default: () => []
+    },
     // 字幕是否启用（控制按钮高亮）
     subtitleEnabled: {
       type: Boolean,
@@ -584,6 +600,8 @@ export default {
     'next-episode',
     'toggle-danmaku',
     'danmaku-import-xml',
+    'danmaku-refresh',
+    'danmaku-correct-match',
     'open-settings',
     'toggle-subtitle',
     'subtitle-load-file',
@@ -685,6 +703,21 @@ export default {
     }
   },
   methods: {
+    releasePointerFocus(event) {
+      const target = event?.target;
+      const interactive = target instanceof Element
+        ? target.closest('button, input[type="range"]')
+        : null;
+      if (interactive && this.$el?.contains(interactive) && document.activeElement === interactive) {
+        interactive.blur();
+      }
+    },
+
+    hasOpenInteraction() {
+      return this.isDragging || this.showRateMenu || this.showQualityMenu ||
+        this.showDanmakuMenu || this.showSubtitleMenu || this.showSettingsMenu;
+    },
+
     /** 关闭全部菜单；返回是否有菜单被关闭（供 Escape 拦截判断） */
     closeAllMenus() {
       const hadOpen = this.showRateMenu || this.showQualityMenu ||
@@ -1279,7 +1312,39 @@ export default {
   border: 1px solid rgba(255, 138, 176, 0.14);
   border-radius: 8px;
   padding: 4px 0;
-  min-width: 120px;
+  min-width: 190px;
+}
+
+.danmaku-source-summary {
+  display: grid;
+  gap: 4px;
+  padding: 7px 10px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.danmaku-source-summary span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
+}
+
+.danmaku-source-summary i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.danmaku-source-summary .is-ok i { background: #69d5a2; }
+.danmaku-source-summary .is-error i { background: #ff788d; }
+.danmaku-source-summary .is-needs-config i { background: #e6b968; }
+
+.danmaku-source-summary b {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 500;
 }
 
 .danmaku-option {

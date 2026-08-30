@@ -317,12 +317,20 @@ export default {
       this.bootstrapped = true;
       // 启动轻量性能标记（dev 模式输出首屏耗时与 long task）
       startPerfMarks();
-      // 启动时把 dandanplay 凭证同步到主进程
-      if (window.electronAPI && window.electronAPI.danmakuSetCredentials) {
-        const s = this.$store.state.settings;
-        if (s.dandanplayAppId && s.dandanplayAppSecret) {
-          window.electronAPI.danmakuSetCredentials(s.dandanplayAppId, s.dandanplayAppSecret);
-        }
+      // 启动时同步弹幕凭证和多源配置到主进程。
+      const danmakuSettings = this.$store.state.settings;
+      if (window.electronAPI?.danmakuSetCredentials) {
+        await window.electronAPI.danmakuSetCredentials(
+          danmakuSettings.dandanplayAppId || '',
+          danmakuSettings.dandanplayAppSecret || ''
+        );
+      }
+      if (window.electronAPI?.danmakuConfigureProviders) {
+        await window.electronAPI.danmakuConfigureProviders({
+          providers: danmakuSettings.danmakuProviders || {},
+          customEndpoint: danmakuSettings.danmakuCustomEndpoint || '',
+          customToken: danmakuSettings.danmakuCustomToken || ''
+        });
       }
       if (!this.isPlayerWindow) {
         // 绑定下载进度监听（主进程推送 on-download-progress 事件）

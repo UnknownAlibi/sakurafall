@@ -178,3 +178,40 @@ test('infinite loading keeps the remote total when a cold page comes from the lo
   assert.equal(context.totalItems, 28891);
   assert.equal(commits[0].payload.totalPages, 1204);
 });
+
+test('infinite loading does not rewrite the active filter total', async () => {
+  const context = {
+    isBangumiMode: true,
+    loading: false,
+    loadingMore: false,
+    loadMoreError: '',
+    loadMoreLimitReason: '',
+    hasMoreAnimePages: true,
+    currentPage: 1,
+    totalPages: 42,
+    totalItems: 1000,
+    animeList: [{ id: '1', source: 'bangumi' }],
+    searchKeyword: '',
+    _infiniteLoadToken: 0,
+    bangumiListSignature: () => 'stable-filter',
+    buildBangumiListRequest: () => ({}),
+    fetchBangumiList: async () => ({
+      data: [{ id: '2', source: 'bangumi' }],
+      page: 2,
+      total: 987,
+      totalPages: 42
+    }),
+    $store: { commit() {} },
+    checkFavoritesBatch() {},
+    scheduleBangumiListMetaEnrichment() {},
+    scheduleBangumiAdjacentPagePrefetch() {},
+    scheduleVirtualGridMeasure() {},
+    scheduleInfiniteLoadCheck() {},
+    $nextTick(callback) { callback(); }
+  };
+
+  const loaded = await animeInfiniteScroll.methods.loadNextAnimePage.call(context);
+
+  assert.equal(loaded, true);
+  assert.equal(context.totalItems, 1000);
+});

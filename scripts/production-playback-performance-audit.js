@@ -159,6 +159,13 @@ async function collectPlaybackWindow(page, durationMs = 3000) {
         mediaCadenceFps: averageMediaDelta > 0 ? 1 / averageMediaDelta : 0,
         decodedFrames: (qualityAfter.totalVideoFrames || 0) - (qualityBefore.totalVideoFrames || 0),
         droppedFrames: (qualityAfter.droppedVideoFrames || 0) - (qualityBefore.droppedVideoFrames || 0),
+        // Anime4K canvas 盖住 video 元素时，Chromium 会把"无需上屏的视频帧"计入 droppedVideoFrames，
+        // 属于合成层口径差异而非真实掉帧；真实流畅度看 longFrameRatio 与 mediaCadence。
+        droppedFramesNote: (() => {
+          const canvas = document.querySelector('.anime4k-canvas');
+          const covered = Boolean(canvas && getComputedStyle(canvas).display !== 'none' && getComputedStyle(canvas).visibility !== 'hidden');
+          return covered ? 'canvas covering video: droppedVideoFrames includes non-composited frames (benign)' : '';
+        })(),
         rafFrames: rafIntervals.length,
         rafAverageMs: rafIntervals.reduce((sum, value) => sum + value, 0) / Math.max(1, rafIntervals.length),
         rafP95Ms: percentile(0.95),

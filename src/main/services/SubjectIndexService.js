@@ -271,13 +271,10 @@ class SubjectIndexService {
     } else if (releasedOnly) {
       const today = this._todayKey();
       const currentYear = Number(today.slice(0, 4));
-      const undatedYearCondition = requireRated
-        ? 's.year IS NOT NULL AND s.year <= ?'
-        : '(s.year IS NULL OR s.year <= ?)';
       conditions.push(`(
         (s.air_date GLOB '????-??-??' AND s.air_date <= ?)
         OR ((s.air_date IS NULL OR s.air_date = '' OR s.air_date NOT GLOB '????-??-??')
-          AND ${undatedYearCondition})
+          AND s.year IS NOT NULL AND s.year <= ?)
       )`);
       params.push(today, currentYear);
     }

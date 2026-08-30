@@ -25,7 +25,10 @@
       <div class="player-section">
         <VideoPlayer
           ref="videoPlayer"
+          :has-episodes="hasEpisodes"
+          :has-next-episode="!!nextEpisode"
           @video-ended="onVideoEnded"
+          @next-episode="playNextEpisode"
           @open-enhanced-player="openEnhancedPlayer"
           @open-settings="$router.push('/settings')"
         />
@@ -333,6 +336,10 @@ export default {
           this.playEpisode(this.nextEpisode);
         }, 2000);
       }
+    },
+
+    playNextEpisode() {
+      if (this.nextEpisode) this.playEpisode(this.nextEpisode);
     },
 
     goToAnimeZone() {

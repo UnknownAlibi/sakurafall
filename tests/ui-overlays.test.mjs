@@ -106,9 +106,21 @@ test('application updater owns its layout and state after settings extraction', 
   assert.match(settings, /<UpdateSettings\s*\/>/);
   assert.doesNotMatch(settings, /async checkForUpdates\s*\(/);
   assert.match(updater, /class="update-button update-button-primary"/);
-  assert.match(updater, /\.update-toolbar\s*[,\{]/);
+  assert.match(updater, /\.update-toolbar\s*[,{]/);
   assert.match(updater, /\.update-source-input\s*\{/);
   assert.match(updater, /@keyframes update-spin/);
+});
+
+test('Bangumi stale refresh warms cache without replacing the visible filter result', () => {
+  const animeZone = fs.readFileSync(path.join(root, 'src/renderer/views/AnimeZone.vue'), 'utf8');
+  const start = animeZone.indexOf('scheduleBangumiStaleRefresh');
+  const end = animeZone.indexOf('scheduleBangumiListMetaEnrichment', start);
+  const refreshBlock = animeZone.slice(start, end);
+
+  assert.match(refreshBlock, /refresh:\s*true/);
+  assert.match(refreshBlock, /commitResult:\s*false/);
+  assert.doesNotMatch(refreshBlock, /SET_ANIME_LIST/);
+  assert.doesNotMatch(refreshBlock, /this\.totalItems\s*=/);
 });
 
 test('notification: 同屏最多 5 条，超出移除最旧的', () => {
@@ -202,4 +214,25 @@ test('纯净模式守卫：禁用路由过渡但不能用全局选择器隐藏�
   assert.match(app, /this\.uiEffectsMode !== 'performance'/, '纯净模式应从 Vue 层关闭路由过渡');
   assert.match(app, /page-forward-enter-from[\s\S]*?opacity: 1 !important;[\s\S]*?transform: none !important;/, '切档时应清理残留的透明过渡状态');
   assert.doesNotMatch(mainCss, /\[data-ui-effects="performance"\]\s+\*[,{]/, '纯净模式不能覆盖全部组件的过渡生命周期');
+});
+
+test('player pointer focus and fullscreen idle behavior stay independent', () => {
+  const player = fs.readFileSync(path.join(root, 'src/renderer/components/Player/VideoPlayer.vue'), 'utf8');
+  const controls = fs.readFileSync(path.join(root, 'src/renderer/components/Player/ControlBar.vue'), 'utf8');
+  const platform = fs.readFileSync(path.join(root, 'src/renderer/mixins/playerPlatformIntegration.js'), 'utf8');
+
+  assert.match(controls, /@pointerup="releasePointerFocus"/);
+  assert.match(controls, /target\.closest\('button, input\[type="range"\]'\)[\s\S]*?interactive\.blur\(\)/);
+  assert.match(controls, /hasOpenInteraction\(\)[\s\S]*?this\.isDragging[\s\S]*?this\.showSettingsMenu/);
+  assert.match(player, /'controls-idle': !controlsVisible && \(isPlaying \|\| isFullscreen\)/);
+  assert.match(player, /this\.controlsHovered && !this\.isFullscreen/);
+  assert.match(player, /this\.\$refs\.controlBar\?\.hasOpenInteraction\?\.\(\)/);
+  assert.match(player, /mixins: \[playerPlatformIntegration\]/);
+  assert.match(platform, /isFullscreen\(fullscreen\)[\s\S]*?this\.revealControls\(true\)/);
+  assert.match(platform, /data-player-cursor-hidden/);
+  assert.match(platform, /createPlayerMediaSession[\s\S]*?next-episode/);
+
+  const animeCursor = fs.readFileSync(path.join(root, 'src/renderer/components/Common/AnimeCursor.vue'), 'utf8');
+  assert.match(animeCursor, /attributeFilter:[\s\S]*?'data-player-cursor-hidden'/);
+  assert.match(animeCursor, /playerCursorHidden[\s\S]*?this\.visible = false/);
 });
