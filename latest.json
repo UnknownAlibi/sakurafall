@@ -1,6 +1,6 @@
 {
   "version": "1.2.0",
   "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.2.0/SakuraFall-Setup-1.2.0.exe",
-  "releaseNotes": "",
+  "releaseNotes": "新增 SakuraFall 云端元数据与封面缓存、一起看中继、樱月手帐与 Episode DNA；优化番剧索引滚动和封面加载；修复播放线路切换、错误状态、自动换源与视频代理问题；加强离线回退、性能门禁和隐私保护。",
   "releaseDate": "2026-09-02"
 }
