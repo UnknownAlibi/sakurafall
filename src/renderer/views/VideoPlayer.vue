@@ -113,6 +113,7 @@ import VideoPlayer from '../components/Player/VideoPlayer.vue';
 import episodeProgressiveRender from '../mixins/episodeProgressiveRender.js';
 import {
   findEpisodeIndex,
+  findCorrespondingEpisode,
   findLineForEpisode,
   formatLineNames,
   getAdjacentEpisode,
@@ -230,6 +231,11 @@ export default {
       if (!this.hasEpisodes) return;
       const keys = Object.keys(this.episodes);
       if (keys.length === 0) return;
+      const videoLineId = String(this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || '');
+      if (videoLineId && Array.isArray(this.episodes[videoLineId])) {
+        this.selectedLine = videoLineId;
+        return;
+      }
       // 当前线路仍有效则保留
       const currentLine = this.selectedLine && this.episodes[this.selectedLine];
       if (Array.isArray(currentLine) && findEpisodeIndex(currentLine, this.currentVideo?.episode) >= 0) return;
@@ -295,10 +301,14 @@ export default {
       }
     },
 
-    async playEpisode(episode) {
+    async playEpisode(episode, options = {}) {
       if (!episode || !this.currentVideo?.anime) return;
+      const lineId = String(options.lineId || this.selectedLine || this.currentVideo?.lineId || '');
       const playToken = ++this.episodePlayToken;
-      const isLatestPlay = () => playToken === this.episodePlayToken;
+      const player = this.$refs.videoPlayer;
+      const transitionToken = player?.beginPlaybackTransition?.(options.reason || 'episode-switch');
+      const isLatestPlay = () => playToken === this.episodePlayToken
+        && (transitionToken === undefined || player?.isPlaybackTransitionCurrent?.(transitionToken));
 
       try {
         const videoUrl = await resolveEpisodeVideoUrl(episode);
@@ -310,22 +320,38 @@ export default {
         }
 
         // 获取当前集在列表中的索引（用于记录观看进度）
-        const epIndex = this.currentLineEpisodes?.indexOf(episode) ?? -1;
+        const epIndex = getLineEpisodes(this.episodes, lineId).indexOf(episode);
 
         await this.playVideo({
           title: `${this.currentVideo.anime.name} - ${episode.title}`,
           url: videoUrl,
           anime: this.currentVideo.anime,
-          episode: { ...episode, index: epIndex },
-          episodeId: episode.id
+          episode: { ...episode, index: epIndex, lineId },
+          episodeId: episode.id,
+          sourceId: this.currentVideo.sourceId || this.currentVideo.anime.sourceId || this.currentVideo.anime.source || '',
+          sourceName: this.currentVideo.sourceName || this.currentVideo.anime.sourceName || '',
+          providerId: this.currentVideo.providerId || this.currentVideo.anime.providerId || '',
+          lineId
         });
       } catch (error) {
         this.$notify?.error('错误', '播放分集失败');
       }
     },
 
-    selectLine(lineId) {
+    async selectLine(lineId) {
+      if (!lineId || lineId === this.selectedLine) return;
+      const targetEpisode = findCorrespondingEpisode(
+        this.episodes,
+        lineId,
+        this.currentVideo?.episode,
+        this.currentEpisodeIndex
+      );
       this.selectedLine = lineId;
+      if (!targetEpisode) {
+        this.$notify?.warning('线路不可用', '该线路没有当前集，请选择其他集数');
+        return;
+      }
+      await this.playEpisode(targetEpisode, { lineId, reason: 'line-switch' });
     },
 
     onVideoEnded() {

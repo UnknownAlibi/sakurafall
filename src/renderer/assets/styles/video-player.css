@@ -343,6 +343,43 @@
   font-variant-numeric: tabular-nums;
 }
 
+.source-status-pill .sakura-route-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  color: rgba(172, 255, 213, 0.94);
+}
+
+.sakura-route-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #61e5a0;
+  box-shadow: 0 0 0 3px rgba(97, 229, 160, 0.13);
+}
+
+.sakura-route-state.is-probing,
+.sakura-route-state.is-switching {
+  color: rgba(145, 225, 255, 0.96);
+}
+
+.sakura-route-state.is-probing i,
+.sakura-route-state.is-switching i {
+  background: #73d9ff;
+  animation: route-status-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.sakura-route-state.is-degraded,
+.sakura-route-state.is-failed {
+  color: #ffb36b;
+}
+
+.sakura-route-state.is-degraded i,
+.sakura-route-state.is-failed i {
+  background: #ff9f62;
+}
+
 .source-panel-overlay {
   z-index: 45;
   pointer-events: auto;
@@ -460,6 +497,21 @@
   border-color: rgba(var(--primary-rgb), 0.35);
 }
 
+.source-candidate.recommended {
+  border-color: rgba(97, 229, 160, 0.28);
+  background: linear-gradient(90deg, rgba(97, 229, 160, 0.09), rgba(255, 255, 255, 0.045));
+}
+
+.source-panel-state.resolving {
+  color: rgba(117, 217, 204, 0.92);
+}
+
+.source-candidate.resolving {
+  border-color: rgba(var(--primary-rgb), 0.5);
+  background: rgba(var(--primary-rgb), 0.16);
+  cursor: wait;
+}
+
 .candidate-main,
 .subtitle-item-main {
   min-width: 0;
@@ -472,6 +524,31 @@
   font-size: 14px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.94);
+}
+
+.candidate-source em {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: rgba(97, 229, 160, 0.14);
+  color: #9bf0c4;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.candidate-source em.line-badge {
+  background: rgba(117, 217, 204, 0.14);
+  color: rgba(159, 232, 224, 0.9);
+}
+
+@keyframes route-status-pulse {
+  from { opacity: 0.45; transform: scale(0.84); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .candidate-episode {
@@ -805,3 +882,93 @@
 
 .danmaku-match-candidate span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .danmaku-match-candidate small { flex: none; color: rgba(255, 255, 255, 0.4); }
+
+/* ===== 一起看 P1：主机切集确认横幅 ===== */
+.wt-episode-switch {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(560px, calc(100% - 48px));
+}
+
+.wt-episode-switch-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgba(24, 16, 22, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 137, 177, 0.28);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+.wt-episode-switch-icon { flex: none; font-size: 16px; }
+
+.wt-episode-switch-text {
+  flex: none;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.wt-episode-switch-text em {
+  font-style: normal;
+  color: rgba(255, 137, 177, 0.95);
+  margin-left: 6px;
+}
+
+.wt-episode-switch-status {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wt-episode-switch-status.is-error { color: rgba(255, 120, 120, 0.9); }
+
+.wt-switch-btn {
+  flex: none;
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 160ms var(--ease-smooth, ease), border-color 160ms var(--ease-smooth, ease);
+}
+
+.wt-switch-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.wt-switch-btn.is-primary {
+  background: rgba(255, 137, 177, 0.22);
+  border-color: rgba(255, 137, 177, 0.5);
+  color: #ffd9e6;
+}
+
+.wt-switch-btn.is-primary:hover {
+  background: rgba(255, 137, 177, 0.34);
+  border-color: rgba(255, 137, 177, 0.7);
+}
+
+.wt-switch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.wt-switch-fade-enter-active,
+.wt-switch-fade-leave-active {
+  transition: opacity 220ms var(--ease-smooth, ease), transform 220ms var(--ease-smooth, ease);
+}
+
+.wt-switch-fade-enter-from,
+.wt-switch-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-8px);
+}

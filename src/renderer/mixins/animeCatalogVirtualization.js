@@ -271,16 +271,24 @@ export default {
       const visibleEndRow = Math.min(totalRows, Math.ceil(visibleBottom / rowPitch));
       const currentStartRow = Math.floor(this.virtualStartIndex / this.virtualColumnCount);
       const currentEndRow = Math.ceil(this.virtualEndIndex / this.virtualColumnCount);
-      const guardRows = 3;
+      const guardRows = 4;
       const hasTopGuard = currentStartRow === 0 || visibleStartRow >= currentStartRow + guardRows;
       const hasBottomGuard = currentEndRow === totalRows || visibleEndRow <= currentEndRow - guardRows;
       if (!force && hasTopGuard && hasBottomGuard) return;
 
-      // 保留一屏半左右的前后缓冲即可；原先至少 8 行的缓冲在 6 列布局下会常驻
-      // 近百张卡片，虚拟化的收益被明显抵消。
-      const bufferRows = Math.max(4, Math.ceil(viewportHeight / rowPitch) + 1);
-      const startRow = Math.max(0, visibleStartRow - bufferRows);
-      const endRow = Math.min(totalRows, visibleEndRow + bufferRows);
+      // 保留更宽的稳定窗口，并按固定行块移动。旧窗口只有约 4 行缓冲，扣除
+      // 3 行保护区后几乎每滚动一行都会卸载/挂载卡片，封面解码随之形成周期性掉帧。
+      const viewportRows = Math.max(1, Math.ceil(viewportHeight / rowPitch));
+      // 缓冲行数必须与视口高度解耦。此前 bufferRows = max(7, viewportRows + 3)
+      // 会随视口线性膨胀：2K 视口挂载约 150 张卡片、4K 约 190 张，光栅化面积
+      // 和封面解码量成倍增长——正是"窗口分辨率越大滚动越卡"的主要来源。
+      // 固定上下各 6 行（约 1900px）在 7500px/s 的快滚下仍有 250ms 余量，
+      // 足够 rAF 内完成窗口平移。
+      const bufferRows = 6;
+      const chunkRows = 3;
+      const rawStartRow = Math.max(0, visibleStartRow - bufferRows);
+      const startRow = Math.max(0, Math.floor(rawStartRow / chunkRows) * chunkRows);
+      const endRow = Math.min(totalRows, startRow + viewportRows + bufferRows * 2 + chunkRows);
       const startIndex = Math.min(this.animeList.length, startRow * this.virtualColumnCount);
       const endIndex = Math.min(this.animeList.length, Math.max(startIndex + this.virtualColumnCount * 4, endRow * this.virtualColumnCount));
       if (startIndex !== this.virtualStartIndex || endIndex !== this.virtualEndIndex) {

@@ -27,12 +27,10 @@ export default defineConfig({
             if (id.includes('vue') || id.includes('vue-router') || id.includes('vuex')) return 'vue-vendor';
             return 'vendor';
           }
-          if (id.includes('/components/Player/') || id.includes('\\components\\Player\\')) {
-            return 'player-core';
-          }
-          if (id.includes('/utils/episodePlayback') || id.includes('\\utils\\episodePlayback')) {
-            return 'player-utils';
-          }
+          // 不要按业务目录强制分组。Vue SFC 编译产出的共享 helper 会被卷进该目录
+          // 所在的 chunk，使入口与其它路由 chunk 反向依赖它，从而把播放器代码
+          // 推上首屏关键路径。交给 Rollup 按动态 import 边界自动分包即可。
+          return undefined;
         }
       }
     }

@@ -3,6 +3,9 @@ const VIDEO_MIME = /^video\//i;
 const MEDIA_EXTENSION = /\.(?:m3u8|mp4|m4v|webm)(?:[?#]|$)/i;
 const HLS_PATH = /(?:\/hls(?:[/?#]|$)|[?&](?:format|type|ext)=m3u8(?:&|$))/i;
 const LOW_VALUE_URL = /(?:^|[._/?=&-])(?:ad|ads|advert|commercial|preroll|midroll)(?:[._/?=&-]|$)/i;
+const MIN_EPISODE_DURATION_SECONDS = 45;
+const DIRECT_MEDIA_SETTLE_MS = 5500;
+const HLS_SETTLE_MS = 900;
 
 function normalizeCandidateUrl(url) {
   const value = String(url || '').trim();
@@ -24,10 +27,20 @@ function scoreMediaCandidate(candidate = {}) {
   const isVideo = MEDIA_EXTENSION.test(url) || VIDEO_MIME.test(mimeType) || resourceType === 'media';
   if (!isHls && !isVideo) return -1;
 
+  const duration = Number(candidate.duration);
+  if (!isHls && Number.isFinite(duration) && duration > 0 && duration < MIN_EPISODE_DURATION_SECONDS) {
+    return -1;
+  }
+
   let score = isHls ? 220 : 130;
   if (HLS_MIME.test(mimeType) || VIDEO_MIME.test(mimeType)) score += 35;
   if (resourceType === 'media') score += 20;
   if (LOW_VALUE_URL.test(url)) score -= 100;
+  if (Number.isFinite(duration) && duration >= MIN_EPISODE_DURATION_SECONDS) {
+    score += duration >= 10 * 60 ? 120 : 70;
+  }
+  const pixels = Math.max(0, Number(candidate.videoWidth) || 0) * Math.max(0, Number(candidate.videoHeight) || 0);
+  if (pixels >= 1280 * 720) score += 45;
   return score;
 }
 
@@ -35,7 +48,52 @@ function selectBestMediaCandidate(candidates = []) {
   return candidates
     .map(candidate => ({ ...candidate, score: scoreMediaCandidate(candidate) }))
     .filter(candidate => candidate.score >= 0)
-    .sort((a, b) => b.score - a.score || a.discoveredAt - b.discoveredAt)[0] || null;
+    .sort((a, b) => b.score - a.score || b.discoveredAt - a.discoveredAt)[0] || null;
+}
+
+function mergeMediaElementMetadata(candidates = [], mediaElements = []) {
+  const metadataFields = item => ({
+    duration: Number(item?.duration) || 0,
+    videoWidth: Number(item?.videoWidth) || 0,
+    videoHeight: Number(item?.videoHeight) || 0,
+    readyState: Number(item?.readyState) || 0
+  });
+  const metadataByUrl = new Map(
+    mediaElements
+      .map(item => ({ ...item, url: normalizeCandidateUrl(item?.url) }))
+      .filter(item => item.url)
+      .map(item => [item.url, item])
+  );
+  const enriched = candidates.map(candidate => ({
+    ...candidate,
+    ...(metadataByUrl.has(normalizeCandidateUrl(candidate.url))
+      ? metadataFields(metadataByUrl.get(normalizeCandidateUrl(candidate.url)))
+      : {})
+  }));
+
+  // Some players expose a blob URL on the media element even though the
+  // underlying request is a direct MP4. Associate that measured duration with
+  // the most recently observed direct-media request so a pre-roll cannot win.
+  const measured = mediaElements
+    .filter(item => Number.isFinite(Number(item?.duration)) && Number(item.duration) > 0)
+    .sort((a, b) => (Number(b.readyState) || 0) - (Number(a.readyState) || 0))[0];
+  if (!measured) return enriched;
+
+  const latestDirectIndex = enriched
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => {
+      const mimeType = String(candidate.mimeType || '');
+      return !/\.m3u8(?:[?#]|$)/i.test(candidate.url)
+        && !HLS_PATH.test(candidate.url)
+        && !HLS_MIME.test(mimeType);
+    })
+    .sort((a, b) => (Number(b.candidate.discoveredAt) || 0) - (Number(a.candidate.discoveredAt) || 0))[0]?.index;
+  if (latestDirectIndex == null || enriched[latestDirectIndex].duration > 0) return enriched;
+  enriched[latestDirectIndex] = {
+    ...enriched[latestDirectIndex],
+    ...metadataFields(measured)
+  };
+  return enriched;
 }
 
 function serializeExtraHeaders(headers = {}) {
@@ -103,6 +161,7 @@ class WebPageMediaSniffer {
       let settleTimer = null;
       let timeoutTimer = null;
       let cancellationTimer = null;
+      let finishing = false;
 
       const cleanup = async (error, result) => {
         if (settled) return;
@@ -122,9 +181,41 @@ class WebPageMediaSniffer {
       };
       this._activeCleanup = cleanup;
 
-      const finishFromCandidates = () => {
-        const best = selectBestMediaCandidate([...candidates.values()]);
-        if (best) cleanup(null, best);
+      const collectMediaElementMetadata = async () => {
+        if (webContents.isDestroyed()) return [];
+        try {
+          return await Promise.race([
+            webContents.executeJavaScript(`Array.from(document.querySelectorAll('video, audio')).map(media => ({
+              url: media.currentSrc || media.src || '',
+              duration: Number.isFinite(media.duration) ? media.duration : 0,
+              videoWidth: Number(media.videoWidth) || 0,
+              videoHeight: Number(media.videoHeight) || 0,
+              readyState: Number(media.readyState) || 0
+            }))`, true),
+            new Promise(resolve => setTimeout(() => resolve([]), 1200))
+          ]);
+        } catch (_) {
+          return [];
+        }
+      };
+
+      const finishFromCandidates = async (allowEmpty = false) => {
+        if (settled) return;
+        if (finishing) {
+          if (allowEmpty) cleanup(new Error('MEDIA_SNIFFER_METADATA_TIMEOUT'));
+          return;
+        }
+        finishing = true;
+        const mediaElements = await collectMediaElementMetadata();
+        if (settled) return;
+        const enriched = mergeMediaElementMetadata([...candidates.values()], mediaElements);
+        const best = selectBestMediaCandidate(enriched);
+        finishing = false;
+        if (best) {
+          cleanup(null, best);
+        } else if (allowEmpty) {
+          cleanup(new Error('MEDIA_SNIFFER_NO_EPISODE_MEDIA'));
+        }
       };
 
       const record = (url, mimeType = '', resourceType = '') => {
@@ -144,7 +235,8 @@ class WebPageMediaSniffer {
           candidates.set(normalized, next);
         }
         clearTimeout(settleTimer);
-        settleTimer = setTimeout(finishFromCandidates, 650);
+        const isHls = /\.m3u8(?:[?#]|$)/i.test(normalized) || HLS_PATH.test(normalized) || HLS_MIME.test(mimeType);
+        settleTimer = setTimeout(() => finishFromCandidates(false), isHls ? HLS_SETTLE_MS : DIRECT_MEDIA_SETTLE_MS);
       };
 
       isolatedSession.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
@@ -159,11 +251,7 @@ class WebPageMediaSniffer {
         callback({ responseHeaders: details.responseHeaders });
       });
 
-      timeoutTimer = setTimeout(() => {
-        const best = selectBestMediaCandidate([...candidates.values()]);
-        if (best) cleanup(null, best);
-        else cleanup(new Error('MEDIA_SNIFFER_TIMEOUT'));
-      }, timeoutMs);
+      timeoutTimer = setTimeout(() => finishFromCandidates(true), timeoutMs);
       if (typeof options.isLatest === 'function') {
         cancellationTimer = setInterval(() => {
           if (!options.isLatest()) cleanup(new Error('MEDIA_SNIFFER_CANCELLED'));
@@ -184,5 +272,6 @@ module.exports = {
   normalizeCandidateUrl,
   scoreMediaCandidate,
   selectBestMediaCandidate,
+  mergeMediaElementMetadata,
   serializeExtraHeaders
 };

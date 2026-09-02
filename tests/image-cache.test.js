@@ -61,6 +61,51 @@ test('ImageCacheService: uses Bangumi mirror resize endpoints for thumbnails', (
     'https://lain.bgm.tv/r/400/pic/crt/l/ab/cd/example.jpg'
   );
   assert.equal(cache._variantSourceUrl(mirrorCover, { type: 'original' }), mirrorCover);
+
+  const proxiedCover = `https://47.109.87.3:8443/cover?url=${encodeURIComponent(anibtCover)}`;
+  const proxiedThumbnail = new URL(cache._variantSourceUrl(
+    proxiedCover,
+    { type: 'thumbnail', width: 360 }
+  ));
+  assert.equal(
+    proxiedThumbnail.searchParams.get('url'),
+    'https://bgmimg.anibt.net/r/400/pic/cover/l/fa/da/example.jpg'
+  );
+
+  const proxiedCommonCover = `https://47.109.87.3:8443/cover?url=${encodeURIComponent(
+    'https://bgmimg.anibt.net/pic/cover/c/fa/da/example.jpg'
+  )}`;
+  const proxiedCommonThumbnail = new URL(cache._variantSourceUrl(
+    proxiedCommonCover,
+    { type: 'thumbnail', width: 480 }
+  ));
+  assert.equal(
+    proxiedCommonThumbnail.searchParams.get('url'),
+    'https://bgmimg.anibt.net/r/600/pic/cover/l/fa/da/example.jpg'
+  );
+});
+
+test('ImageCacheService: falls back to the embedded original when the cover proxy is offline', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-proxy-fallback-'));
+  const cache = new ImageCacheService({ cacheDir, maxEntries: 10 });
+  const direct = 'https://lain.bgm.tv/pic/cover/l/test.jpg';
+  const proxy = `https://47.109.87.3:8443/cover?url=${encodeURIComponent(direct)}`;
+  const attempts = [];
+  cache._fetchBuffer = async url => {
+    attempts.push(url);
+    if (url.startsWith('https://47.109.87.3:8443/')) throw new Error('service offline');
+    return { buffer: PNG_1X1, contentType: 'image/png' };
+  };
+
+  try {
+    const result = await cache.getCover(proxy);
+    assert.equal(result.success, true);
+    assert.deepEqual(attempts, [proxy, direct]);
+    assert.equal(cache._isProxyFallbackCooling(proxy), true);
+  } finally {
+    cache.clear();
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  }
 });
 
 test('ImageCacheService: stores an upstream thumbnail without decoding it again', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "sakurafall",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "sakurafall - 多源番剧元数据与可替换开源片源驱动的 Electron 桌面客户端",
   "main": "src/main/index.js",
   "scripts": {
@@ -16,9 +16,11 @@
     "build:dir": "npm run build:renderer && rimraf dist-app && electron-builder --dir --config electron-builder.config.js",
     "preview": "vite preview",
     "test:danmaku": "node --test tests/danmaku-providers.test.js tests/danmaku-api.test.js tests/danmaku-match.test.mjs",
+    "test:features": "node --test tests/episode-identity.test.mjs tests/viewing-notes.test.js tests/episode-dna.test.js tests/watch-together.test.js",
+    "test:video-proxy": "node --test tests/video-stream-proxy.test.js",
     "lint": "eslint src --ext .js,.vue",
     "test": "node --test tests/cms-api.test.js tests/title-matcher.test.js tests/bangumi-aliases.test.js tests/bangumi-network-fallback.test.js tests/anilist-fallback.test.js tests/share-page-resolver.test.js tests/http-client.test.js tests/playback-resolver.test.js tests/enhanced-player.test.js tests/source-health-score.test.js tests/update-checker.test.js tests/anime-database-cache.test.js tests/play-history-dedupe.test.js tests/continue-watching.test.mjs tests/anime-infinite-scroll.test.mjs tests/catalog-sort.test.mjs tests/episode-list.test.mjs tests/episode-metadata.test.mjs tests/episode-playback.test.mjs tests/playback-diagnostics.test.mjs tests/playback-frame-rate.test.mjs tests/player-media-session.test.mjs tests/hls-buffer-policy.test.mjs tests/hls-ad-markers.test.mjs tests/danmaku-api.test.js tests/danmaku-match.test.mjs tests/player-preferences.test.mjs tests/image-cache.test.js tests/media-library.test.js tests/subject-service-performance.test.js tests/subject-index-sort.test.js tests/subject-detail-coordinator.test.mjs tests/customization-pack.test.js tests/runtime-diagnostics.test.js tests/source-match.test.mjs tests/source-search-queries.test.mjs tests/source-provider-registry.test.js tests/theme-runtime.test.mjs tests/theme-packs-v2.test.mjs tests/performance-budget.test.mjs tests/xpath-rule-adapter.test.js tests/web-page-media-sniffer.test.js tests/ui-overlays.test.mjs tests/anime4k-webgl.test.mjs tests/anime4k-webgpu.test.mjs tests/bt-filename-parser.test.mjs tests/bt-stream.test.mjs",
-    "verify": "npm run test && npm run build:renderer && node --test tests/performance-budget.test.mjs",
+    "verify": "npm run test && npm run test:features && npm run test:video-proxy && npm run build:renderer && node --test tests/performance-budget.test.mjs",
     "smoke:packaged": "node scripts/smoke-packaged.js",
     "smoke:packaged:offline": "node scripts/smoke-packaged.js --offline",
     "audit:production": "node scripts/production-performance-audit.js",

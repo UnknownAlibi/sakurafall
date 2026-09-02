@@ -8,6 +8,7 @@ const moduleSource = await readFile(
 );
 const {
   findEpisodeIndex,
+  findCorrespondingEpisode,
   findLineForEpisode,
   formatLineNames,
   getAdjacentEpisode,
@@ -63,6 +64,16 @@ test('episode identity survives source changes via number and stored index', () 
   ];
   assert.equal(findEpisodeIndex(sourceEpisodes, { id: 'other', title: 'Episode 2' }), 1);
   assert.equal(findEpisodeIndex([{ id: 'a' }, { id: 'b' }], { id: 'other', index: 1 }), 1);
+});
+
+test('findCorrespondingEpisode: switches to the same episode on another line', () => {
+  const episodes = {
+    routeA: [{ id: 'a-1', title: '第01集' }, { id: 'a-2', title: '第02集' }],
+    routeB: [{ id: 'b-1', title: 'Episode 1' }, { id: 'b-2', title: 'Episode 2' }]
+  };
+
+  assert.equal(findCorrespondingEpisode(episodes, 'routeB', episodes.routeA[1], 1)?.id, 'b-2');
+  assert.equal(findCorrespondingEpisode(episodes, 'missing', episodes.routeA[1], 1), null);
 });
 
 test('getAdjacentEpisode/hasEpisodeLines: handles adjacent episodes and empty lists', () => {

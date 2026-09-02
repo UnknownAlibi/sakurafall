@@ -52,6 +52,10 @@ test('detail episode picker renders only reliable sources with playable episodes
   assert.match(detail, /displayPlaySources\(\)\s*\{[\s\S]*?source\.status === 'success'[\s\S]*?source\.matchReliable[\s\S]*?source\.playableEpisodeCount > 0/);
   assert.doesNotMatch(detail, /if \(this\.reliableSourceCount === 0\) return this\.playSources/);
   assert.doesNotMatch(detail, /source-hidden-summary/);
+  assert.match(detail, /displayEpisodeLineName\(line\.lineId, lineIndex\)/);
+  assert.match(detail, /displayEpisodeLineName\(lineId, index\)/);
+  assert.doesNotMatch(detail, />\s*线路 \{\{ lineIndex \+ 1 \}\}/);
+  assert.doesNotMatch(detail, />\s*线路 \{\{ index \+ 1 \}\}/);
 });
 
 test('discovery collapse controls and continue-watching delete use isolated native buttons', () => {
@@ -227,7 +231,7 @@ test('player pointer focus and fullscreen idle behavior stay independent', () =>
   assert.match(player, /'controls-idle': !controlsVisible && \(isPlaying \|\| isFullscreen\)/);
   assert.match(player, /this\.controlsHovered && !this\.isFullscreen/);
   assert.match(player, /this\.\$refs\.controlBar\?\.hasOpenInteraction\?\.\(\)/);
-  assert.match(player, /mixins: \[playerPlatformIntegration\]/);
+  assert.match(player, /mixins: \[playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats\]/);
   assert.match(platform, /isFullscreen\(fullscreen\)[\s\S]*?this\.revealControls\(true\)/);
   assert.match(platform, /data-player-cursor-hidden/);
   assert.match(platform, /createPlayerMediaSession[\s\S]*?next-episode/);

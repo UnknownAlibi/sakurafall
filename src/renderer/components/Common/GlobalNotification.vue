@@ -1,4 +1,3 @@
-<!-- filepath: c:\Users\44691\Desktop\webVideo\anime-downloader-electron\src\renderer\components\Common\GlobalNotification.vue -->
 <template>
   <div class="notification-container" role="status" aria-live="polite">
     <transition-group name="notification" tag="div">

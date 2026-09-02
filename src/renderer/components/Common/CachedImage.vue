@@ -12,6 +12,7 @@
 <script>
 import {
   clearImageCacheMemo,
+  getDirectImageFallbackUrl,
   getCachedImageUrlSync,
   getRemoteImagePreviewUrl,
   isCacheableImageUrl,
@@ -19,6 +20,42 @@ import {
 } from '../../utils/imageCache.js';
 
 const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+const LAZY_ROOT_MARGIN = '900px 0px';
+
+// 共享懒加载观察器。若每个封面各自 new IntersectionObserver，滚动过程中的
+// 交叉计算会从「一次批量」退化成「每图一次」；一屏几十张卡片时这部分开销
+// 会直接吃掉滚动帧预算。这里按 rootMargin 复用单例，回调挂在 WeakMap 上，
+// 元素被回收后条目自动失效。
+const lazyObservers = new Map();
+const lazyCallbacks = new WeakMap();
+
+function getLazyObserver(rootMargin) {
+  let observer = lazyObservers.get(rootMargin);
+  if (!observer) {
+    observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting && entry.intersectionRatio <= 0) continue;
+        const callback = lazyCallbacks.get(entry.target);
+        if (!callback) continue;
+        lazyCallbacks.delete(entry.target);
+        observer.unobserve(entry.target);
+        callback();
+      }
+    }, { rootMargin });
+    lazyObservers.set(rootMargin, observer);
+  }
+  return observer;
+}
+
+function observeLazyElement(element, rootMargin, callback) {
+  lazyCallbacks.set(element, callback);
+  getLazyObserver(rootMargin).observe(element);
+}
+
+function unobserveLazyElement(element) {
+  lazyCallbacks.delete(element);
+  for (const observer of lazyObservers.values()) observer.unobserve(element);
+}
 
 export default {
   name: 'CachedImage',
@@ -45,7 +82,8 @@ export default {
       requestToken: 0,
       triedOriginal: false,
       triedCacheFallback: false,
-      lazyObserver: null,
+      triedDirectFallback: false,
+      directFallbackSrc: '',
       cachedFallbackSrc: '',
       cacheResolvePending: false,
       pendingErrorEvent: null,
@@ -96,10 +134,22 @@ export default {
   },
   methods: {
     queueImageLoad() {
-      const source = String(this.src || '').trim();
+      const rawSource = String(this.src || '').trim();
+      // local 模式下把云服务代理 URL（…/cover?url=…）解包成直连原图；
+      // 但 local 模式新拉取的列表本来就是直连 URL（lain.bgm.tv 等），
+      // getDirectImageFallbackUrl 对它们返回 ''，必须回退到原始 URL，
+      // 否则 source 为空导致封面永久停留透明占位符。
+      const source = document.documentElement.getAttribute('data-service-mode') === 'local'
+        ? (getDirectImageFallbackUrl(rawSource) || rawSource)
+        : rawSource;
       const token = ++this.requestToken;
       this.triedOriginal = false;
       this.triedCacheFallback = false;
+      this.triedDirectFallback = false;
+      this.directFallbackSrc = getRemoteImagePreviewUrl(
+        getDirectImageFallbackUrl(source),
+        this.cacheOptions
+      );
       this.displaySrc = '';
       this.cachedFallbackSrc = '';
       this.cacheResolvePending = false;
@@ -118,12 +168,7 @@ export default {
             this.loadImage(source, token);
             return;
           }
-          this.lazyObserver = new IntersectionObserver((entries) => {
-            if (!entries.some(entry => entry.isIntersecting || entry.intersectionRatio > 0)) return;
-            this.stopLazyObserver();
-            this.loadImage(source, token);
-          }, { rootMargin: '160px 0px' });
-          this.lazyObserver.observe(element);
+          observeLazyElement(element, LAZY_ROOT_MARGIN, () => this.loadImage(source, token));
         });
         return;
       }
@@ -147,10 +192,11 @@ export default {
       if (canUseCache && this.shouldResolveCacheAsync && this.shouldPreferCachedVariant) {
         this.remoteDisplaySrc = getRemoteImagePreviewUrl(source, this.cacheOptions) || source;
         this.displaySrc = this.remoteDisplaySrc;
-        // Chromium already caches successful remote previews. Only persist the
-        // first viewport after the user stays on the page; queueing every lazy
-        // card keeps IPC downloads and old Vue instances alive across routes.
-        if (!this.shouldLazyLoad) this.scheduleCacheResolve(source, token, 12000);
+        // 持久化到应用磁盘缓存（LRU 2000 条/300MB，主进程队列限流 4 并发）：
+        // 懒加载卡片也需入队，否则只有首屏封面落盘，重启后其余封面全部
+        // 重新走慢速图床。延迟错开避免抢占当前视口的加载；组件销毁时
+        // requestToken 失效 + 定时器清理，不会泄漏旧实例。
+        this.scheduleCacheResolve(source, token, this.shouldLazyLoad ? 3500 : 1200);
         return;
       }
 
@@ -231,9 +277,8 @@ export default {
     },
 
     stopLazyObserver() {
-      if (!this.lazyObserver) return;
-      this.lazyObserver.disconnect();
-      this.lazyObserver = null;
+      const element = this.$refs.imageEl;
+      if (element) unobserveLazyElement(element);
     },
 
     onLoad(event) {
@@ -241,7 +286,7 @@ export default {
       this.originalLoaded = true;
       this.pendingErrorEvent = null;
       if (this.shouldPreferCachedVariant && this.displaySrc === this.remoteDisplaySrc && !this.shouldLazyLoad) {
-        this.scheduleCacheResolve(String(this.src || '').trim(), this.requestToken, 12000);
+        this.scheduleCacheResolve(String(this.src || '').trim(), this.requestToken, 1200);
       }
       this.$emit('load', event);
     },
@@ -249,6 +294,18 @@ export default {
     onError(event) {
       const source = String(this.src || '').trim();
       if (!this.displaySrc) return;
+
+      if (
+        this.directFallbackSrc &&
+        !this.triedDirectFallback &&
+        this.displaySrc !== this.directFallbackSrc
+      ) {
+        this.triedDirectFallback = true;
+        this.triedOriginal = true;
+        this.displaySrc = this.directFallbackSrc;
+        this.resolveCacheFallback(this.directFallbackSrc, this.requestToken).catch(() => {});
+        return;
+      }
 
       // 缓存查询进行中：暂存 error，等缓存结果再决定（避免永久隐藏）
       if (this.cacheResolvePending) {

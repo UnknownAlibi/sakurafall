@@ -271,6 +271,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cmsMultiSearchAllSources: (keyword) => ipcRenderer.invoke('cms-search-all-sources', keyword),
     cmsMultiSearchAllSourcesWithStatus: (keyword, options) => ipcRenderer.invoke('cms-search-all-sources-with-status', keyword, options),
     cmsMultiSelectBestEpisodeSource: (keyword, target) => ipcRenderer.invoke('cms-select-best-episode-source', keyword, target),
+    cmsPreheatCandidates: (candidates) => ipcRenderer.invoke('cms-preheat-candidates', toIpcSafeValue(candidates)),
     cmsReportSourcePlayback: (sourceId, result) => ipcRenderer.invoke('cms-report-source-playback', sourceId, result),
     cmsMultiSearchInSource: (sourceId, keyword, page) => ipcRenderer.invoke('cms-search-in-source', sourceId, keyword, page),
     cmsMultiTest: () => ipcRenderer.invoke('cms-test'),
@@ -299,6 +300,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     historyProgress: (animeId, source) => ipcRenderer.invoke('history-progress', animeId, source),
     historyRemove: (animeId, source) => ipcRenderer.invoke('history-remove', animeId, source),
     historyClear: () => ipcRenderer.invoke('history-clear'),
+    viewingNoteAdd: (data) => ipcRenderer.invoke('viewing-note-add', toIpcSafeValue(data)),
+    viewingNoteList: (episodeKey, limit) => ipcRenderer.invoke('viewing-note-list', String(episodeKey || ''), limit),
+    viewingNoteRemove: (id) => ipcRenderer.invoke('viewing-note-remove', Number(id)),
+    viewingNoteListWork: (bgmId, workKey) => ipcRenderer.invoke('viewing-note-list-work', toIpcSafeValue(bgmId), String(workKey || '')),
+    viewingNoteListSpoilerSafe: (bgmId, workKey) => ipcRenderer.invoke('viewing-note-list-spoiler-safe', toIpcSafeValue(bgmId), String(workKey || '')),
+    viewingNoteExport: () => ipcRenderer.invoke('viewing-note-export'),
+    viewingNoteImport: () => ipcRenderer.invoke('viewing-note-import'),
+    // Episode DNA P1：剧集时间段（片头/片尾/广告/关键剧情）与自动跳过规则
+    episodeSegmentSave: (data) => ipcRenderer.invoke('episode-segment-save', toIpcSafeValue(data)),
+    episodeSegmentList: (episodeKey) => ipcRenderer.invoke('episode-segment-list', String(episodeKey || '')),
+    episodeSegmentRemove: (id) => ipcRenderer.invoke('episode-segment-remove', Number(id)),
+    episodeSegmentAutoSkipRule: (bgmId, workKey) => ipcRenderer.invoke('episode-segment-auto-skip-rule', toIpcSafeValue(bgmId), String(workKey || '')),
 
     // 应用更新检查
     updateCheck: () => ipcRenderer.invoke('update-check'),
@@ -410,8 +423,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 创建房间（主机模式），payload: { roomName, videoInfo }
     // 返回 { success, roomCode, roomName, port, isHost, memberId, memberCount }
     wtCreateRoom: (payload) => ipcRenderer.invoke('wt-create-room', payload),
-    // 加入房间（成员模式），payload: { roomCode, hostAddress }
-    // 返回 { success, roomCode, isHost, memberId, hostAddress }
+    // 加入房间（成员模式），payload: { roomCode, forceLocal?, hostAddress?, port? }
+    // 返回 { success, roomCode, isHost, memberId, hostAddress, relay }
     wtJoinRoom: (payload) => ipcRenderer.invoke('wt-join-room', payload),
     // 离开房间，返回 { success, wasInRoom }
     wtLeaveRoom: () => ipcRenderer.invoke('wt-leave-room'),
@@ -420,6 +433,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     wtBroadcastState: (state) => ipcRenderer.invoke('wt-broadcast-state', state),
     // 发送聊天消息，返回 { success }
     wtSendChat: (text) => ipcRenderer.invoke('wt-send-chat', text),
+    // 成员：发送 RTT 探测（单调时钟时间戳原样回显，用于估计单向网络延迟）
+    wtSendPing: (ts) => ipcRenderer.invoke('wt-send-ping', ts),
     // 查询当前房间信息，返回 { success, roomCode, isHost, memberCount, ... }
     wtGetRoomInfo: () => ipcRenderer.invoke('wt-get-room-info'),
     // 监听主进程推送的"一起看"消息事件

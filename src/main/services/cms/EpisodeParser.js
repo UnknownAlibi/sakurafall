@@ -134,12 +134,24 @@ function extractEpisodeNumber(title) {
 }
 
 function findMatchingEpisode(episodesByLine, targetTitle, targetIndex = -1) {
-    if (!episodesByLine || typeof episodesByLine !== 'object') return null;
+    return findMatchingEpisodeLines(episodesByLine, targetTitle, targetIndex)[0] || null;
+}
+
+/**
+ * 与 findMatchingEpisode 相同的匹配规则，但每条线路各返回一个匹配结果。
+ * 同一源的多条线路是互备的播放路由（线路1 的 CDN 挂了线路2 常常仍可用），
+ * 只取第一条线路会让换源/自动回退错过可用的备用线路。
+ * 返回数组按线路声明顺序排列；无匹配返回 []。
+ */
+function findMatchingEpisodeLines(episodesByLine, targetTitle, targetIndex = -1) {
+    if (!episodesByLine || typeof episodesByLine !== 'object') return [];
     const targetNormalized = normalizeEpisodeTitle(targetTitle);
     const targetNum = extractEpisodeNumber(targetTitle);
+    const matches = [];
 
     for (const [lineId, episodes] of Object.entries(episodesByLine)) {
         if (!Array.isArray(episodes)) continue;
+        let lineMatch = null;
         for (let index = 0; index < episodes.length; index++) {
             const ep = episodes[index];
             if (!ep) continue;
@@ -148,18 +160,22 @@ function findMatchingEpisode(episodesByLine, targetTitle, targetIndex = -1) {
             const epNum = extractEpisodeNumber(ep.title || ep.name);
 
             if (targetIndex >= 0 && epIndex === targetIndex) {
-                return { episode: { ...ep, index: epIndex }, lineId, matchType: 'index', matchScore: 4 };
+                // index 匹配是最强匹配，直接锁定本线路结果
+                lineMatch = { episode: { ...ep, index: epIndex }, lineId, matchType: 'index', matchScore: 4 };
+                break;
             }
-            if (targetNormalized && epNormalized && targetNormalized === epNormalized) {
-                return { episode: { ...ep, index: epIndex }, lineId, matchType: 'title', matchScore: 3 };
+            if (!lineMatch && targetNormalized && epNormalized && targetNormalized === epNormalized) {
+                lineMatch = { episode: { ...ep, index: epIndex }, lineId, matchType: 'title', matchScore: 3 };
+                continue;
             }
-            if (targetNum !== null && epNum !== null && targetNum === epNum) {
-                return { episode: { ...ep, index: epIndex }, lineId, matchType: 'number', matchScore: 2 };
+            if (!lineMatch && targetNum !== null && epNum !== null && targetNum === epNum) {
+                lineMatch = { episode: { ...ep, index: epIndex }, lineId, matchType: 'number', matchScore: 2 };
             }
         }
+        if (lineMatch) matches.push(lineMatch);
     }
 
-    return null;
+    return matches;
 }
 
 function firstPlayableEpisode(episodesByLine) {
@@ -241,6 +257,7 @@ module.exports = {
     normalizeEpisodeTitle,
     extractEpisodeNumber,
     findMatchingEpisode,
+    findMatchingEpisodeLines,
     firstPlayableEpisode,
     parseM3u8Quality,
     guessQualityFromUrl,

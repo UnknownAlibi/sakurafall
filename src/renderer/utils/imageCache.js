@@ -32,15 +32,39 @@ export function isCacheableImageUrl(url) {
   return /^https?:\/\//i.test(value) || value.startsWith('//');
 }
 
+export function getDirectImageFallbackUrl(url) {
+  try {
+    const parsed = new URL(String(url || '').trim());
+    if (!/\/cover\/?$/i.test(parsed.pathname)) return '';
+    const target = new URL(parsed.searchParams.get('url') || '');
+    return target.protocol === 'http:' || target.protocol === 'https:' ? target.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
 export function getRemoteImagePreviewUrl(url, options = {}) {
   const originalUrl = String(url || '').trim();
   if (!isCacheableImageUrl(originalUrl) || options?.variant !== 'thumbnail') return originalUrl;
 
   try {
     const parsed = new URL(originalUrl.startsWith('//') ? `https:${originalUrl}` : originalUrl);
+    // The shared cover service wraps the real Bangumi image in ?url=. Resize
+    // that embedded URL as well; otherwise list cards download the full cover
+    // even though they only render at roughly 360px wide.
+    if (/\/cover\/?$/i.test(parsed.pathname)) {
+      const embedded = parsed.searchParams.get('url');
+      if (embedded) {
+        const resizedEmbedded = getRemoteImagePreviewUrl(embedded, options);
+        if (resizedEmbedded && resizedEmbedded !== embedded) {
+          parsed.searchParams.set('url', resizedEmbedded);
+          return parsed.toString();
+        }
+      }
+    }
     const host = parsed.hostname.toLowerCase();
     const width = Math.min(720, Math.max(160, parseInt(options.width, 10) || 360));
-    const resizeWidth = width <= 160 ? 200 : (width <= 360 ? 400 : 800);
+    const resizeWidth = width <= 160 ? 200 : (width <= 360 ? 400 : (width <= 600 ? 600 : 800));
     const supportsBangumiResize = host === 'lain.bgm.tv' ||
       host.endsWith('.lain.bgm.tv') ||
       host === 'lain.bangumi.lol' ||
@@ -48,7 +72,10 @@ export function getRemoteImagePreviewUrl(url, options = {}) {
 
     if (supportsBangumiResize && parsed.pathname.includes('/pic/')) {
       parsed.protocol = 'https:';
-      parsed.pathname = `/r/${resizeWidth}${parsed.pathname.replace(/^\/r\/\d+/, '')}`;
+      const originalPath = parsed.pathname
+        .replace(/^\/r\/\d+\//, '/')
+        .replace(/\/pic\/cover\/[gscm]\//i, '/pic/cover/l/');
+      parsed.pathname = `/r/${resizeWidth}${originalPath}`;
       return parsed.toString();
     }
 

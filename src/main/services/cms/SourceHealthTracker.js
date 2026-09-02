@@ -66,6 +66,9 @@ class SourceHealthTracker {
             lastPlaybackFailureAt: number(record.lastPlaybackFailureAt),
             lastContentIssueAt: number(record.lastContentIssueAt),
             cooldownUntil: number(record.cooldownUntil),
+            // 分类惩罚窗口（与 cooldown 独立）：广告反馈 / 持续卡顿
+            adPenaltyUntil: number(record.adPenaltyUntil),
+            stallPenaltyUntil: number(record.stallPenaltyUntil),
             reason: typeof record.reason === 'string' ? record.reason.slice(0, 240) : '',
             contentIssueReason: typeof record.contentIssueReason === 'string'
                 ? record.contentIssueReason.slice(0, 80)
@@ -177,6 +180,8 @@ class SourceHealthTracker {
             lastPlaybackFailureAt: health.lastPlaybackFailureAt || 0,
             lastContentIssueAt: health.lastContentIssueAt || 0,
             cooldownUntil: health.cooldownUntil || 0,
+            adPenaltyUntil: health.adPenaltyUntil || 0,
+            stallPenaltyUntil: health.stallPenaltyUntil || 0,
             reason: health.reason || '',
             contentIssueReason: health.contentIssueReason || '',
             coolingDown: !!(health.cooldownUntil && health.cooldownUntil > now)
@@ -235,6 +240,10 @@ class SourceHealthTracker {
             averagePlayedMs: this._averageMetric(prev.averagePlayedMs, playedMs, sampleCount),
             averageStallRatio: this._averageMetric(prev.averageStallRatio, stallRatio, sampleCount),
             averageDroppedFrameRatio: this._averageMetric(prev.averageDroppedFrameRatio, droppedFrameRatio, sampleCount),
+            // 持续卡顿软惩罚窗口：播放 30s+ 且卡顿率 ≥6%，3 分钟内降权
+            stallPenaltyUntil: (playedMs >= 30000 && stallRatio >= 0.06)
+                ? now + 3 * 60 * 1000
+                : (prev.stallPenaltyUntil || 0),
             averageBitrate: Number(metrics.bitrate) > 0
                 ? this._averageMetric(prev.averageBitrate, metrics.bitrate, prev.bitrateSampleCount || 0)
                 : (prev.averageBitrate || 0),
@@ -293,13 +302,39 @@ class SourceHealthTracker {
     // 兼容旧方法名
     _markSourceSuccess(sourceId, meta) { return this.markSuccess(sourceId, meta); }
 
+    /**
+     * 播放失败惩罚窗口：按故障类型区分冷却时长。
+     * DNS 解析失败 > 源站拒绝(403) > 连接超时 > 空清单 > 解码失败 > 未知
+     */
+    _playbackFailureRule(message) {
+        const text = String(message || '');
+        if (/ENOTFOUND|EAI_AGAIN|dns/i.test(text)) {
+            return { ttl: 8 * 60 * 1000, reason: 'DNS 解析失败' };
+        }
+        if (/403|forbidden|拒绝访问/i.test(text)) {
+            return { ttl: 12 * 60 * 1000, reason: '源站拒绝访问 (403)' };
+        }
+        if (/空清单|清单为空|empty[-\s]?manifest|no\s*playlist|manifestParsing/i.test(text)) {
+            return { ttl: 4 * 60 * 1000, reason: '空清单/清单异常' };
+        }
+        if (/timeout|etimedout|econnreset|超时/i.test(text)) {
+            return { ttl: 5 * 60 * 1000, reason: '连接超时' };
+        }
+        if (/decode|解码/i.test(text)) {
+            return { ttl: 3 * 60 * 1000, reason: '解码失败' };
+        }
+        return { ttl: 6 * 60 * 1000, reason: '播放失败' };
+    }
+
     markPlaybackFailure(sourceId, error) {
         if (!sourceId) return;
         const now = Date.now();
         const prev = this.sourceHealth.get(sourceId) || {};
         const playbackFailureCount = (prev.playbackFailureCount || 0) + 1;
+        const rule = this._playbackFailureRule(error?.message || error);
+        // 首次失败不冷却（可能是瞬时抖动），从第二次起按故障类型窗口指数升级
         const cooldownUntil = playbackFailureCount >= 2
-            ? Math.max(prev.cooldownUntil || 0, now + Math.min(playbackFailureCount, 3) * 2 * 60 * 1000)
+            ? Math.max(prev.cooldownUntil || 0, now + rule.ttl * Math.min(3, playbackFailureCount - 1))
             : (prev.cooldownUntil || 0);
 
         this.sourceHealth.set(sourceId, {
@@ -308,7 +343,7 @@ class SourceHealthTracker {
             lastPlaybackFailureAt: now,
             lastFailureAt: now,
             cooldownUntil,
-            reason: String(error?.message || error || 'playback failed')
+            reason: rule.reason
         });
         this._scheduleSourceHealthSave();
     }
@@ -319,11 +354,15 @@ class SourceHealthTracker {
     reportContentIssue(sourceId, issue) {
         if (!sourceId || issue !== 'advertising') return false;
         const prev = this.sourceHealth.get(sourceId) || {};
+        const count = (prev.advertisingReportCount || 0) + 1;
+        // 广告反馈惩罚窗口：10 分钟起步，最多 30 分钟（软惩罚，只降排序不断源）
+        const adPenaltyUntil = Date.now() + 10 * 60 * 1000 * Math.min(3, count);
         this.sourceHealth.set(sourceId, {
             ...prev,
-            advertisingReportCount: (prev.advertisingReportCount || 0) + 1,
+            advertisingReportCount: count,
             lastContentIssueAt: Date.now(),
-            contentIssueReason: issue
+            contentIssueReason: issue,
+            adPenaltyUntil
         });
         this._scheduleSourceHealthSave();
         return true;
@@ -365,6 +404,9 @@ class SourceHealthTracker {
             score += Math.min(8, ((health.sustainedPlaybackCount || 0) / sessionCount) * 8) * confidence;
         }
         if (health.cooldownUntil && health.cooldownUntil > now) score -= 45;
+        // 分类软惩罚窗口：窗口期内额外降分
+        if (health.adPenaltyUntil && health.adPenaltyUntil > now) score -= 10;
+        if (health.stallPenaltyUntil && health.stallPenaltyUntil > now) score -= 12;
         return Math.max(0, Math.min(100, Math.round(score)));
     }
 

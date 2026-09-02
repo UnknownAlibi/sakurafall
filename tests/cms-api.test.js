@@ -425,7 +425,9 @@ test('source health: advertising feedback lowers priority without cooling down t
     assert.equal(reported.contentIssueReason, 'advertising');
     assert.equal(reported.coolingDown, false);
     assert.equal(reported.playbackFailureCount, 0);
-    assert.equal(reported.score, baseline.score - 8);
+    // 广告反馈：次数降分 8 + 软惩罚窗口（10 分钟）内额外降 10
+    assert.ok(reported.adPenaltyUntil > Date.now(), 'ad penalty window should be active');
+    assert.equal(reported.score, baseline.score - 8 - 10);
   } finally {
     cmsApiService.sourceHealth.delete(sourceId);
   }
@@ -479,7 +481,8 @@ test('source health: persists to disk and loads into a new service', () => {
 
     assert.strictEqual(health.playbackFailureCount, 2);
     assert.strictEqual(health.coolingDown, true);
-    assert.strictEqual(health.reason, 'hls-network-error');
+    // 故障类型拆分后 reason 存储本地化的规则标签（未知类型 → '播放失败'）
+    assert.strictEqual(health.reason, '播放失败');
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

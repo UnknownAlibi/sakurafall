@@ -16,6 +16,8 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const HttpClient = require('../utils/HttpClient');
+const { UPDATE_MANIFEST_URL } = require('../config/serviceEndpoints');
+const GITHUB_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/UnknownAlibi/sakurafall/main/latest.json';
 
 function safeLog(...args) {
   try { console.log(...args); } catch (e) { /* EPIPE ignored */ }
@@ -28,8 +30,17 @@ class UpdateChecker {
   constructor() {
     this.http = new HttpClient({ timeout: 10000 });
     // 默认更新源：主仓库 main 分支的 latest.json（发布流程见 scripts/release.js）
-    this.defaultUpdateUrl = 'https://raw.githubusercontent.com/UnknownAlibi/sakurafall/main/latest.json';
+    this.defaultUpdateUrl = UPDATE_MANIFEST_URL || GITHUB_UPDATE_MANIFEST_URL;
+    this.fallbackUpdateUrls = [GITHUB_UPDATE_MANIFEST_URL];
     this._config = null;
+  }
+
+  setServiceBaseUrl(baseUrl = '') {
+    const normalized = String(baseUrl || '').trim().replace(/\/+$/, '');
+    this.defaultUpdateUrl = normalized
+      ? `${normalized}/updates/latest.json`
+      : GITHUB_UPDATE_MANIFEST_URL;
+    this.fallbackUpdateUrls = normalized ? [GITHUB_UPDATE_MANIFEST_URL] : [];
   }
 
   _isLocalHttpHost(hostname) {
@@ -115,6 +126,11 @@ class UpdateChecker {
     return app.getVersion();
   }
 
+  _updateCandidates() {
+    const candidates = [this.getUpdateUrl(), ...this.fallbackUpdateUrls];
+    return Array.from(new Set(candidates.filter(Boolean).map(url => this.normalizeUpdateUrl(url))));
+  }
+
   /**
    * 简单的 semver 版本对比
    * @returns {number} 1 if a > b, -1 if a < b, 0 if equal
@@ -162,54 +178,63 @@ class UpdateChecker {
    */
   async checkForUpdates(options = {}) {
     const currentVersion = this.getCurrentVersion();
-    const updateUrl = this.getUpdateUrl();
+    const candidates = this._updateCandidates();
+    let lastError = null;
 
-    try {
-      safeLog('[UpdateChecker] 检查更新:', updateUrl);
-      const text = await this.http.fetch(updateUrl);
-      const data = JSON.parse(text);
+    for (const updateUrl of candidates) {
+      try {
+        safeLog('[UpdateChecker] 检查更新:', updateUrl);
+        const text = await this.http.fetch(updateUrl, {
+          timeout: updateUrl === candidates[0] && candidates.length > 1 ? 2500 : 10000
+        });
+        const data = JSON.parse(text);
 
-      if (!data.version) {
-        throw new Error('latest.json 缺少 version 字段');
-      }
-
-      const hasUpdate = this._compareVersion(data.version, currentVersion) > 0;
-      const minRequiredVersion = data.minRequiredVersion || '';
-      const forceUpdate = minRequiredVersion &&
-        this._compareVersion(currentVersion, minRequiredVersion) < 0;
-
-      let downloadUrl = '';
-      if (data.downloadUrl) {
-        try {
-          downloadUrl = this.normalizeDownloadUrl(data.downloadUrl);
-        } catch (e) {
-          safeError('[UpdateChecker] 忽略不安全下载链接:', e.message);
+        if (!data.version) {
+          throw new Error('latest.json 缺少 version 字段');
         }
+
+        const hasUpdate = this._compareVersion(data.version, currentVersion) > 0;
+        const minRequiredVersion = data.minRequiredVersion || '';
+        const forceUpdate = minRequiredVersion &&
+          this._compareVersion(currentVersion, minRequiredVersion) < 0;
+
+        let downloadUrl = '';
+        if (data.downloadUrl) {
+          try {
+            downloadUrl = this.normalizeDownloadUrl(data.downloadUrl);
+          } catch (e) {
+            safeError('[UpdateChecker] 忽略不安全下载链接:', e.message);
+          }
+        }
+
+        const result = {
+          hasUpdate,
+          currentVersion,
+          latestVersion: data.version,
+          downloadUrl,
+          releaseNotes: data.releaseNotes || '',
+          releaseDate: data.releaseDate || '',
+          forceUpdate: !!forceUpdate,
+          silent: !!options.silent,
+          sourceUrl: updateUrl,
+          fallbackUsed: updateUrl !== candidates[0]
+        };
+
+        safeLog('[UpdateChecker] 检查结果:', hasUpdate ? `发现新版本 ${data.version}` : '已是最新版本');
+        return result;
+      } catch (error) {
+        lastError = error;
+        safeError(`[UpdateChecker] 更新源不可用，${updateUrl === candidates[candidates.length - 1] ? '停止检查' : '尝试备用源'}:`, error.message);
       }
-
-      const result = {
-        hasUpdate,
-        currentVersion,
-        latestVersion: data.version,
-        downloadUrl,
-        releaseNotes: data.releaseNotes || '',
-        releaseDate: data.releaseDate || '',
-        forceUpdate: !!forceUpdate,
-        silent: !!options.silent
-      };
-
-      safeLog('[UpdateChecker] 检查结果:', hasUpdate ? `发现新版本 ${data.version}` : '已是最新版本');
-      return result;
-    } catch (error) {
-      safeError('[UpdateChecker] 检查更新失败:', error.message);
-      return {
-        hasUpdate: false,
-        currentVersion,
-        latestVersion: currentVersion,
-        error: error.message,
-        silent: !!options.silent
-      };
     }
+
+    return {
+      hasUpdate: false,
+      currentVersion,
+      latestVersion: currentVersion,
+      error: lastError?.message || '所有更新源均不可用',
+      silent: !!options.silent
+    };
   }
 
   /**
@@ -277,3 +302,5 @@ class UpdateChecker {
 }
 
 module.exports = new UpdateChecker();
+module.exports.UpdateChecker = UpdateChecker;
+module.exports.GITHUB_UPDATE_MANIFEST_URL = GITHUB_UPDATE_MANIFEST_URL;

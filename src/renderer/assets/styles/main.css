@@ -529,7 +529,21 @@ a:hover {
   transition-delay: 0ms !important;
 }
 
-/* 真正检测到帧压力时才牺牲阴影，日常滚动保持稳定材质，避免整屏卡片反复重绘。 */
+/* 滚动期间阴影不会提供可感知的信息，却会让大批半透明卡片持续参与合成。 */
+[data-scroll-state="scrolling"] .anime-card,
+[data-scroll-state="scrolling"] .schedule-card,
+[data-scroll-state="scrolling"] .hot-card,
+[data-scroll-state="scrolling"] .continue-card {
+  box-shadow: none !important;
+}
+
+/* 卡内收藏按钮自带投影，一屏上百张卡片时阴影模糊是纯浪费的光栅化面积。 */
+[data-scroll-state="scrolling"] .anime-card .fav-btn,
+[data-performance-pressure="high"] .anime-card .fav-btn {
+  box-shadow: none !important;
+}
+
+/* 真正检测到帧压力时继续保持轻量材质。 */
 [data-performance-pressure="high"] .anime-card,
 [data-performance-pressure="high"] .schedule-card,
 [data-performance-pressure="high"] .hot-card,

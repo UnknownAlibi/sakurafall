@@ -8,8 +8,12 @@ protocol.registerSchemesAsPrivileged([{
     scheme: 'sakurafall-cache',
     privileges: { standard: true, secure: true, corsEnabled: true, supportFetchAPI: true }
 }, {
+    // stream: true 必须——video/audio 元素直接加载自定义协议媒体（直链 mp4 走
+    // video.src）需要流式特权，否则 Chromium 报 "Media load rejected by URL
+    // safety check"，播放器误判为源不可用并自动换源（HLS 不受影响：hls.js 走
+    // XHR+MSE，不经过 video 元素的 URL 加载管线）。
     scheme: 'sakurafall-media',
-    privileges: { standard: true, secure: true, corsEnabled: true, supportFetchAPI: true }
+    privileges: { standard: true, secure: true, corsEnabled: true, supportFetchAPI: true, stream: true }
 }]);
 
 // 防止 Electron 无终端时 console.log 写入断开的管道导致 EPIPE 崩溃
@@ -28,6 +32,7 @@ console.error = function (...args) {
 const path = require('path');
 const fs = require('fs');
 const { fileURLToPath } = require('url');
+const { SERVICE_BASE_URL } = require('./config/serviceEndpoints');
 
 const smokeUserDataArg = process.argv.find(arg => arg.startsWith('--smoke-user-data='));
 if (smokeUserDataArg) {
@@ -87,6 +92,8 @@ const { RuntimeDiagnosticsService } = require('./services/RuntimeDiagnosticsServ
 const { BtSearchService } = require('./services/bt/BtSearchService');
 const { registerBtIpc } = require('./ipc/bt');
 const { registerDanmakuIpc } = require('./ipc/danmaku');
+const { registerLibraryIpc } = require('./ipc/library');
+const { registerPlaybackHealthIpc } = require('./ipc/playbackHealth');
 const playerSvc = require('./services/LazyPlayerServices');
 const videoStreamProxy = require('./services/VideoStreamProxyService');
 
@@ -418,7 +425,9 @@ const appConfig = {
     cacheSize: 500,
     autoCleanCache: true,
     proxy: '', // Bangumi 专用代理地址，如 'http://127.0.0.1:7890'；空表示不走代理
-    bangumiMirror: '' // Bangumi API 镜像基址，空表示官方 API + 自动公共镜像兜底
+    bangumiMirror: '', // Empty value uses the SakuraFall service with upstream fallback.
+    serviceMode: 'cloud',
+    serviceBaseUrl: SERVICE_BASE_URL
 };
 
 function normalizeProxyUrl(proxyUrl) {
@@ -514,9 +523,23 @@ async function applyNetworkConfig(config = {}) {
     const bangumiMirror = config.bangumiMirror !== undefined
         ? String(config.bangumiMirror || '').trim()
         : (appConfig.bangumiMirror || '');
-    const effectiveBangumiMirror = (!proxy && bangumiMirror === 'https://api.bgm.tv') ? '' : bangumiMirror;
+    const serviceMode = config.serviceMode !== undefined
+        ? (config.serviceMode === 'local' ? 'local' : 'cloud')
+        : appConfig.serviceMode;
+    const activeServiceBaseUrl = serviceMode === 'cloud' ? SERVICE_BASE_URL : '';
+    const automaticService = !bangumiMirror && activeServiceBaseUrl;
+    const effectiveBangumiMirror = automaticService || ((!proxy && bangumiMirror === 'https://api.bgm.tv') ? '' : bangumiMirror);
     appConfig.bangumiMirror = bangumiMirror;
-    bangumiApi.setBaseUrl(effectiveBangumiMirror);
+    appConfig.serviceMode = serviceMode;
+    appConfig.serviceBaseUrl = activeServiceBaseUrl;
+    bangumiApi.setBaseUrl(effectiveBangumiMirror, {
+        allowFallback: !!automaticService,
+        fastFail: !!automaticService
+    });
+    bangumiApi.setCoverProxyBase?.(activeServiceBaseUrl);
+    updateChecker.setServiceBaseUrl?.(activeServiceBaseUrl);
+    watchTogetherService.setRelayBaseUrl?.(activeServiceBaseUrl);
+    console.log(`[Network] 数据连接方式: ${serviceMode === 'cloud' ? 'SakuraFall 云服务（带本机回退）' : '本机直连'}`);
 
     if (proxy) {
         console.log(`[Network] Bangumi 使用代理: ${proxy}（视频源与播放流保持直连）`);
@@ -1539,9 +1562,7 @@ secureIpcHandle('source-provider-catalog', (_event, providerId, options) => (
     sourceProviderRegistry.getCatalog(providerId, options || {})
 ));
 secureIpcHandle('source-provider-test', (_event, providerId) => sourceProviderRegistry.test(providerId));
-secureIpcHandle('source-provider-report-playback', (_event, providerId, result) => (
-    sourceProviderRegistry.reportPlayback(providerId, result || {})
-));
+registerPlaybackHealthIpc({ handle: secureIpcHandle, cmsApiService, sourceProviderRegistry });
 
 // 获取版本信息
 secureIpcHandle('get-versions', () => {
@@ -2263,15 +2284,6 @@ secureIpcHandle('cms-select-best-episode-source', async (event, keyword, target 
     }
 });
 
-secureIpcHandle('cms-report-source-playback', async (event, sourceId, result = {}) => {
-    try {
-        return cmsApiService.recordPlaybackResult(sourceId, result);
-    } catch (error) {
-        console.error('[CmsApi] Failed to record playback health:', error);
-        return { success: false, error: error.message };
-    }
-});
-
 secureIpcHandle('cms-test', async () => {
     return await cmsApiService.test();
 });
@@ -2410,115 +2422,7 @@ secureIpcHandle('update-download', (event, url) => updateChecker.downloadInstall
 // 启动安装程序并退出应用（覆盖安装，用户数据保留）
 secureIpcHandle('update-install', (event, filePath) => updateChecker.runInstaller(filePath));
 
-// ======
-// 收藏 / 追番 IPC 处理
-// ======
-
-// 添加收藏
-secureIpcHandle('favorite-add', async (event, anime) => {
-    try {
-        const result = await animeDb.addFavorite(anime);
-        console.log('[Favorite-add] 主进程返回:', JSON.stringify(result));
-        return result;
-    } catch (error) {
-        console.error('[Favorite] 添加收藏失败:', error);
-        return { error: error.message };
-    }
-});
-
-// 取消收藏
-secureIpcHandle('favorite-remove', async (event, animeId, source) => {
-    try {
-        return await animeDb.removeFavorite(animeId, source);
-    } catch (error) {
-        console.error('[Favorite] 取消收藏失败:', error);
-        return { error: error.message };
-    }
-});
-
-// 获取收藏列表
-secureIpcHandle('favorite-list', async (event, page = 1, limit = 50) => {
-    try {
-        return await animeDb.getFavoriteList(page, limit);
-    } catch (error) {
-        console.error('[Favorite] 获取收藏列表失败:', error);
-        return { data: [], total: 0, page, limit, totalPages: 0, error: error.message };
-    }
-});
-
-// 检查是否已收藏
-secureIpcHandle('favorite-check', async (event, animeId, source) => {
-    try {
-        return await animeDb.isFavorite(animeId, source);
-    } catch (error) {
-        console.error('[Favorite] 检查收藏状态失败:', error);
-        return false;
-    }
-});
-
-// 批量检查收藏状态
-secureIpcHandle('favorite-check-batch', async (event, items) => {
-    try {
-        return await animeDb.checkFavorites(items);
-    } catch (error) {
-        console.error('[Favorite] 批量检查收藏状态失败:', error);
-        return {};
-    }
-});
-
-// ======
-// 播放历史 / 观看进度 IPC 处理
-// ======
-
-// 更新播放进度（合并事务：收藏进度 + 播放历史一次写入）
-secureIpcHandle('history-update', async (event, data) => {
-    try {
-        return animeDb.updateFavoriteAndHistory(data);
-    } catch (error) {
-        console.error('[History] 更新播放历史失败:', error);
-        return { error: error.message };
-    }
-});
-
-// 获取最近播放历史
-secureIpcHandle('history-recent', async (event, limit = 10) => {
-    try {
-        return await animeDb.getRecentPlayHistory(limit);
-    } catch (error) {
-        console.error('[History] 获取播放历史失败:', error);
-        return [];
-    }
-});
-
-// 获取指定动漫的播放进度
-secureIpcHandle('history-progress', async (event, animeId, source) => {
-    try {
-        return await animeDb.getPlayProgress(animeId, source);
-    } catch (error) {
-        console.error('[History] 获取播放进度失败:', error);
-        return null;
-    }
-});
-
-// 删除播放历史
-secureIpcHandle('history-remove', async (event, animeId, source) => {
-    try {
-        return await animeDb.removePlayHistory(animeId, source);
-    } catch (error) {
-        console.error('[History] 删除播放历史失败:', error);
-        return { error: error.message };
-    }
-});
-
-// 清空播放历史
-secureIpcHandle('history-clear', async () => {
-    try {
-        return await animeDb.clearPlayHistory();
-    } catch (error) {
-        console.error('[History] 清空播放历史失败:', error);
-        return { error: error.message };
-    }
-});
+registerLibraryIpc({ handle: secureIpcHandle, animeDb, dialog, BrowserWindow });
 
 // ======
 // 番剧下载 IPC 处理
@@ -2911,7 +2815,7 @@ secureIpcHandle('wt-create-room', async (event, payload = {}) => {
 });
 
 // 加入房间（成员模式）
-// payload: { roomCode, hostAddress }
+// payload: { roomCode }
 secureIpcHandle('wt-join-room', async (event, payload = {}) => {
     try {
         if (!payload.roomCode) {
@@ -2919,7 +2823,8 @@ secureIpcHandle('wt-join-room', async (event, payload = {}) => {
         }
         const result = await watchTogetherService.joinRoom(
             payload.roomCode,
-            payload.hostAddress
+            payload.hostAddress,
+            { forceLocal: !!payload.forceLocal, port: payload.port }
         );
         return result;
     } catch (error) {
@@ -2954,6 +2859,16 @@ secureIpcHandle('wt-send-chat', async (event, text) => {
         return watchTogetherService.sendChat(text);
     } catch (error) {
         console.error('[WatchTogether] 发送消息失败:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+// 成员：发送 RTT 探测（单调时钟时间戳由渲染进程生成并原样回显）
+secureIpcHandle('wt-send-ping', async (event, ts) => {
+    try {
+        return watchTogetherService.sendPing(ts);
+    } catch (error) {
+        console.error('[WatchTogether] 发送 ping 失败:', error);
         return { success: false, error: error.message };
     }
 });

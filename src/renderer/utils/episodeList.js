@@ -145,6 +145,24 @@ export function findLineForEpisode(episodes, currentEpisode) {
   return null;
 }
 
+/**
+ * Resolve the equivalent episode on another playback line. Episode ids often
+ * differ between lines, so identity matching is attempted before the stable
+ * list position fallback used by legacy CMS payloads.
+ */
+export function findCorrespondingEpisode(episodes, lineId, currentEpisode, currentIndex = -1) {
+  const lineEpisodes = getLineEpisodes(episodes, lineId);
+  if (lineEpisodes.length === 0) return null;
+
+  const matchedIndex = findEpisodeIndex(lineEpisodes, currentEpisode);
+  if (matchedIndex >= 0) return lineEpisodes[matchedIndex];
+
+  const fallbackIndex = Number(currentIndex);
+  return Number.isInteger(fallbackIndex) && fallbackIndex >= 0 && fallbackIndex < lineEpisodes.length
+    ? lineEpisodes[fallbackIndex]
+    : null;
+}
+
 export function getAdjacentEpisode(episodes, currentIndex, offset) {
   if (!Array.isArray(episodes)) return null;
   const nextIndex = currentIndex + offset;

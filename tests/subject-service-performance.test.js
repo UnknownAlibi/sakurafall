@@ -289,6 +289,8 @@ test('SubjectService waits for the network collection on a tag-filtered date bro
   };
 
   try {
+    // 本测试聚焦“必须走网络集合路径”：屏蔽年份分段，保持基础排序并行扫描
+    service._browseYearSegments = () => null;
     const result = await service.browse({
       tag: '短片',
       sort: 'date',
@@ -361,6 +363,8 @@ test('SubjectService sorts one released tag collection by date and real score', 
   ];
 
   service._todayDateKey = () => '2026-08-13';
+  // 本测试聚焦“date/score 共享同一集合的排序”：屏蔽年份分段，走基础排序并行路径
+  service._browseYearSegments = () => null;
   bangumiApi._normalizeItem = item => ({
     bgm_id: item.id,
     name: item.name,
@@ -375,7 +379,12 @@ test('SubjectService sorts one released tag collection by date and real score', 
     assert.deepEqual(options.body.filter.tag, ['恋爱']);
     assert.equal(options.body.filter.meta_tags, undefined);
     assert.deepEqual(options.body.filter.air_date, ['<=2026-08-13']);
-    return { total: subjects.length, data: subjects };
+    // score 排序按真实 API 语义返回评分降序；其余排序返回原数组序。
+    // score 视图现在信任服务端顺序（append-only，分页窗口不漂移）。
+    const data = options.body.sort === 'score'
+      ? [...subjects].sort((a, b) => b.rating.score - a.rating.score)
+      : subjects;
+    return { total: subjects.length, data };
   };
 
   try {
@@ -391,6 +400,92 @@ test('SubjectService sorts one released tag collection by date and real score', 
     bangumiApi.request = originalRequest;
     bangumiApi._normalizeItem = originalNormalizeItem;
   }
+});
+
+test('SubjectService date browse scans recent quarter windows first with stable pagination', async () => {
+  // 回归：date 排序曾只用基础 score/rank/heat 扫描（高分老经典番为主），
+  // 本地按日期排序后新番 2-3 页耗尽；现在按季度窗口从新到旧完整扫描，
+  // 且翻页窗口稳定（每页固定条数，不因集合增长漂移丢条目）。
+  const service = new SubjectService();
+  service._todayDateKey = () => '2026-08-13';
+  const scanCalls = [];
+
+  service._requestBrowsePage = async ({ sort, limit, offset, dateRange }) => {
+    const range = (dateRange || []).join('..');
+    scanCalls.push(`${sort}:${range}:${limit}:${offset}`);
+    // 年份分段探测（limit=1）：y4=328，其余各 100 → 真实总量 728
+    if (limit === 1) {
+      return {
+        total: range.startsWith('>=2024-01-01') ? 328 : 100,
+        data: [{ bgm_id: 9001, name: 'probe', air_date: '2025-01-01' }]
+      };
+    }
+    // 当前季度（2026-07 ~ 2026-08-13）：100 条新番
+    if (range === '>=2026-07-01..<=2026-08-13') {
+      const remaining = Math.max(0, 100 - offset);
+      return {
+        total: 100,
+        data: Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
+          bgm_id: offset + index + 1,
+          name: `New ${offset + index + 1}`,
+          air_date: '2026-07-15',
+          rating: 7.5
+        }))
+      };
+    }
+    // 上个季度（2026-04 ~ 2026-06）：80 条较新番
+    if (range === '>=2026-04-01..<=2026-06-30') {
+      const remaining = Math.max(0, 80 - offset);
+      return {
+        total: 80,
+        data: Array.from({ length: Math.min(limit, remaining) }, (_, index) => ({
+          bgm_id: 200 + offset + index + 1,
+          name: `Recent ${offset + index + 1}`,
+          air_date: '2026-05-10',
+          rating: 7.2
+        }))
+      };
+    }
+    // 其余季度窗口暂无数据
+    if (dateRange && dateRange[0] >= '>=2025') {
+      return { total: 0, data: [] };
+    }
+    // 更老的分段/基础排序：老经典番
+    return {
+      total: 60,
+      data: Array.from({ length: Math.min(limit, Math.max(0, 60 - offset)) }, (_, index) => ({
+        bgm_id: 8000 + offset + index + 1,
+        name: 'Classic',
+        air_date: '2001-01-01',
+        rating: 9.5
+      }))
+    };
+  };
+
+  const page1 = await service.browse({ tag: '恋爱', sort: 'date', page: 1, limit: 24 });
+  const requestsAfterPage1 = scanCalls.length;
+  const page2 = await service.browse({ tag: '恋爱', sort: 'date', page: 2, limit: 24 });
+  const requestsAfterPage2 = scanCalls.length;
+  const page5 = await service.browse({ tag: '恋爱', sort: 'date', page: 5, limit: 24 });
+
+  // 首页全部是当季新番（日期 2026-07），不再被高分老番淹没
+  assert.equal(page1.data.length, 24);
+  assert.ok(page1.data.every(item => item.air_date === '2026-07-15'));
+  // 真实总量来自分段探测之和
+  assert.equal(page1.total, 728);
+  // 第 2 页不触发新扫描（当前季度已扫满 100 条），翻页窗口稳定不重叠。
+  // date 排序用集合插入序（季度窗口从新到旧扫入），第 2 页紧接第 1 页的
+  // 插入序位置（当前季度 score 顺序 1-100）。
+  assert.equal(requestsAfterPage2, requestsAfterPage1);
+  assert.deepEqual(
+    page2.data.map(item => item.bgm_id),
+    page1.data.map(item => item.bgm_id).map(id => id + 24)
+  );
+  // 第 5 页仍在输出较新番（2026-05 的上季度数据），不是老经典番
+  assert.ok(page5.data.some(item => item.air_date === '2026-05-10'));
+  assert.ok(page5.data.every(item => Number(item.air_date.slice(0, 4)) >= 2026));
+  // 扫描从当季窗口开始（首个非探测请求是 2026Q3 分段）
+  assert.ok(scanCalls.some(call => call.startsWith('score:>=2026-07-01..<=2026-08-13:20:0')));
 });
 
 test('SubjectService keeps region tags separate from official platform metadata', async () => {
@@ -476,7 +571,8 @@ test('SubjectService loads only one request round for a cold tag-filtered first 
     refresh: true
   });
 
-  assert.equal(requests, 3);
+  // total=10000 触发截断检测：3 个排序页 + 5 个年份分段探测（limit=1）
+  assert.equal(requests, 8);
   assert.equal(result.data.length, 60);
   assert.equal(result.truncated, true);
 });
@@ -505,7 +601,9 @@ test('SubjectService incrementally expands a tag collection only when a later pa
 
   assert.equal(first.data.length, 60);
   assert.equal(second.data.length, 120);
-  assert.equal(requests, 6);
+  // total=1000 触发截断检测：首次扫描 3 个排序页 + 5 个分段探测（limit=1）；
+  // 第二次（内存缓存命中 60 条 + 探测结果）只补 1 轮扩扫 = 3
+  assert.equal(requests, 11);
   assert.deepEqual(second.scannedPages, { score: 2, rank: 2, heat: 2 });
 });
 

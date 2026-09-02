@@ -3,10 +3,22 @@
     <div class="perf-header">
       <span class="perf-title">性能面板</span>
       <div class="perf-actions">
+        <button
+          class="perf-btn"
+          :class="{ 'perf-btn-on': scrollProfileOn }"
+          @click="toggleScrollProfile"
+        >滚动采样 {{ scrollProfileOn ? '开' : '关' }}</button>
         <button class="perf-btn" @click="refresh">刷新</button>
         <button class="perf-btn" @click="clear">清空</button>
         <button class="perf-btn perf-close" @click="visible = false">×</button>
       </div>
+    </div>
+    <div class="perf-live">
+      <span class="perf-live-label">实时 FPS</span>
+      <strong class="perf-live-value" :class="{ 'perf-slow': liveFps !== '—' && Number(liveFps) < 45 }">{{ liveFps }}</strong>
+      <span v-if="longFrameRatio !== null" class="perf-live-meta">长帧占比 {{ longFrameRatio }}</span>
+      <span v-else-if="scrollProfileOn" class="perf-live-meta">滚动列表即可采样</span>
+      <span v-else class="perf-live-meta">开启「滚动采样」后滚动列表</span>
     </div>
     <div class="perf-body">
       <div v-if="summary.length === 0" class="perf-empty">暂无性能数据</div>
@@ -55,32 +67,75 @@ export default {
     return {
       visible: false,
       summary: [],
-      recentRecords: []
+      recentRecords: [],
+      scrollProfileOn: false,
+      liveFps: '—',
+      longFrameRatio: null
     };
   },
   mounted() {
-    // Ctrl+Shift+P 切换性能面板（仅开发模式）
+    // Ctrl+Shift+P 切换性能面板（生产构建同样可用，方便在真机上定位卡顿）
     document.addEventListener('keydown', this.onKeyDown);
+    this.scrollProfileOn = this.readScrollProfile();
     // 每 2 秒自动刷新（面板可见时）
     this._refreshTimer = setInterval(() => {
       if (this.visible) this.refresh();
     }, 2000);
+    // FPS 需要更实时的反馈，单独用更短的周期
+    this._fpsTimer = setInterval(() => {
+      if (this.visible) this.readLiveFps();
+    }, 400);
   },
   beforeUnmount() {
     document.removeEventListener('keydown', this.onKeyDown);
     if (this._refreshTimer) clearInterval(this._refreshTimer);
+    if (this._fpsTimer) clearInterval(this._fpsTimer);
   },
   methods: {
+    readScrollProfile() {
+      if (typeof window === 'undefined') return false;
+      if (window.__sakurafallScrollProfile !== undefined) return window.__sakurafallScrollProfile === true;
+      try {
+        return window.localStorage.getItem('sakurafall:scroll-profile') === '1';
+      } catch (_error) {
+        return false;
+      }
+    },
+    toggleScrollProfile() {
+      const next = !this.scrollProfileOn;
+      try {
+        window.localStorage.setItem('sakurafall:scroll-profile', next ? '1' : '0');
+      } catch (_error) { /* 隐私模式下写失败时仍允许本次会话生效 */ }
+      window.__sakurafallScrollProfile = next;
+      this.scrollProfileOn = next;
+      if (typeof window.__sakurafallSetScrollProfile === 'function') {
+        window.__sakurafallSetScrollProfile(next);
+      }
+      if (!next) {
+        this.liveFps = '—';
+        this.longFrameRatio = null;
+      }
+    },
+    readLiveFps() {
+      const fps = document.documentElement.getAttribute('data-render-fps');
+      this.liveFps = fps ? String(fps) : '—';
+    },
     onKeyDown(e) {
       if (e.ctrlKey && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
         e.preventDefault();
         this.visible = !this.visible;
-        if (this.visible) this.refresh();
+        if (this.visible) {
+          this.refresh();
+          this.readLiveFps();
+        }
       }
     },
     refresh() {
       this.summary = perf.getSummary();
-      this.recentRecords = perf.getRecords().slice(-15).reverse();
+      const records = perf.getRecords();
+      this.recentRecords = records.slice(-15).reverse();
+      const scrollFrame = records.filter(item => item.label === 'scroll-frame').pop();
+      this.longFrameRatio = scrollFrame?.meta?.longFrameRatio ?? null;
     },
     clear() {
       perf.clear();
@@ -147,6 +202,38 @@ export default {
   font-size: 14px;
   line-height: 1;
   padding: 3px 8px;
+}
+
+.perf-btn-on {
+  background: rgba(76, 175, 122, 0.24);
+  border-color: rgba(76, 175, 122, 0.55);
+  color: #b9f0d1;
+}
+
+.perf-live {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.perf-live-label {
+  color: #9aa0a6;
+  font-size: 11px;
+}
+
+.perf-live-value {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  color: #7fd8a8;
+}
+
+.perf-live-meta {
+  margin-left: auto;
+  color: #888;
+  font-size: 11px;
 }
 
 .perf-body {

@@ -110,7 +110,7 @@
       :complete="!hasMoreAnimePages"
       :loaded="animeList.length"
       :total="totalItems"
-      @retry="loadNextAnimePage"
+      @retry="retryLoadMore"
     />
 
     <!-- 动漫详情弹窗 -->
@@ -229,12 +229,13 @@ export default {
       _mainScrollEl: null,
       _isMainScrolling: false,
       _scrollIdleTimer: null,
+      _lastMainScrollAt: 0,
       _pendingAnimeUpdates: new Map(),
       _pendingUpdateFlushTimer: null,
       _pendingUpdateIdleHandle: null,
       _coverObserverRefreshTimer: null,
       _imageRetryTimers: new Map(),
-      _imageRetriedIds: new Set(),
+      _imageRetriedIds: new Map(),
       _filterDebounceTimer: null,
       _bangumiRefreshTimer: null,
       _bangumiRefreshIdleHandle: null,
@@ -644,7 +645,7 @@ export default {
       const isLatestSourceSwitch = () => sourceSwitchToken === this._sourceSwitchToken;
       this.cancelPrefetchCovers();
       this.cancelEpisodeAvailabilityEnrichment();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.selectedGenre = '';
       this.$store.commit('anime/SET_FANZHI_SELECTED_GENRE', '');
       // 切换离开 Bangumi 时重置季度选择，下次回来默认显示本季
@@ -678,7 +679,7 @@ export default {
     // 当选择不同的非凡资源网分类时
     async onFanzhiCategoryChange() {
       this.cancelPrefetchCovers(); // 中断之前的封面预取
-      this.failedImageIds = new Set(); // 清空失败图片缓存
+      this.resetImageFailures(); // 清空失败图片缓存
       this.selectedGenre = ''; // 切换分类时清除类型筛选
       // 先更新 store 中的分类，再走 loadCurrentList 统一入口（确保 prefetchCovers 被触发）
       this.$store.commit('anime/SET_FANZHI_CURRENT_CATEGORY', this.selectedFanzhiCategory);
@@ -707,7 +708,7 @@ export default {
     // 切换 CMS 多源
     async onCmsMultiSourceChange() {
       this.cancelPrefetchCovers();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       await this.setCmsMultiSource(this.selectedCmsMultiSource);
       // 获取新源的分类并选第一个
       const categories = await window.electronAPI.cmsMultiGetCategories();
@@ -721,7 +722,7 @@ export default {
     // 切换 CMS 多源分类
     async onCmsMultiCategoryChange() {
       this.cancelPrefetchCovers();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.$store.commit('anime/SET_CMS_MULTI_CURRENT_CATEGORY', this.selectedCmsMultiCategory);
       this._scheduleFilterReload('');
     },
@@ -729,7 +730,7 @@ export default {
     // 选择类型标签
     async onGenreSelect(genre) {
       this.cancelPrefetchCovers();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.selectedGenre = genre;
       this.searchInput = '';
       await this.loadCurrentList(1, '');
@@ -738,7 +739,7 @@ export default {
     // 清除类型筛选
     async onGenreClear() {
       this.cancelPrefetchCovers();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.selectedGenre = '';
       this.$store.commit('anime/SET_FANZHI_SELECTED_GENRE', '');
       await this.loadCurrentList(1, '');
@@ -773,7 +774,7 @@ export default {
       if (this.selectedBangumiType === typeId && !this.searchKeyword) return;
       this.cancelPrefetchCovers();
       this.cancelProgressiveRender();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.selectedGenre = '';
       this.searchInput = '';
       this.selectedBangumiType = typeId;
@@ -796,7 +797,7 @@ export default {
       if (this.selectedBangumiSort === sortId) return;
       this.cancelPrefetchCovers();
       this.cancelProgressiveRender();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.selectedBangumiSort = sortId;
       if (this.dataSource !== 'bangumi') {
         await this.setDataSource('bangumi');
@@ -808,7 +809,7 @@ export default {
       if (this.selectedBangumiRegion === regionId) return;
       this.cancelPrefetchCovers();
       this.cancelProgressiveRender();
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.selectedBangumiRegion = this.bangumiRegionOptions.some(option => option.id === regionId) ? regionId : 'all';
       if (this.selectedBangumiType === 'season') this.selectedBangumiType = 'all';
       if (this.dataSource !== 'bangumi') await this.setDataSource('bangumi');
@@ -877,17 +878,73 @@ export default {
      * @param {boolean} refresh - 是否跳过缓存强制刷新
      */
 
+    /**
+     * 处理进入番剧库时携带的路由 query（从发现页/追番页/历史跳转）：
+     * - openAnimeDetail + returnTo：直接打开详情弹窗，关闭后回到来源页
+     * - openDetail：番之次元条目直接打开选集
+     * - search：以关键词搜索并加载列表
+     * mounted（首次）与 activated（KeepAlive 再进入）都会调用；
+     * 各分支处理后立即 $router.replace 清除 query，天然幂等不会重复触发。
+     */
+    async handleEnterRouteQuery() {
+      const openDetailId = this.$route.query.openDetail;
+      const openAnimeDetail = this.$route.query.openAnimeDetail;
+      const searchQuery = this.$route.query.search;
+      const sourceQuery = this.$route.query.source;
+      if (!openDetailId && !openAnimeDetail && !searchQuery) return;
+
+      if (openAnimeDetail) {
+        // 记录来源页，关闭弹窗后自动回去，避免用户被留在番剧库
+        const returnTo = this.$route.query.returnTo;
+        if (returnTo && this.$router.getRoutes().some(r => r.name === returnTo)) {
+          this._detailReturnTo = returnTo;
+        }
+        this.$router.replace({ name: 'anime-zone' }).catch(() => {});
+        this._openDetailTimer = setTimeout(() => {
+          try {
+            const animeData = JSON.parse(openAnimeDetail);
+            this.viewAnimeDetail(animeData);
+          } catch (e) {
+            console.warn('[AnimeZone] openAnimeDetail 解析失败:', e);
+          }
+        }, 400);
+      } else if (openDetailId) {
+        // 清除 query 参数，避免刷新时重复触发
+        this.$router.replace({ name: 'anime-zone' }).catch(() => {});
+        // 延迟打开，等列表加载完
+        this._openDetailTimer = setTimeout(async () => {
+          try {
+            const detail = await this.fetchFanzhiDetail({ id: openDetailId, silent: true });
+            if (detail) {
+              this.showEpisodeSelector(detail);
+            }
+          } catch { /* 静默 */ }
+        }, 800);
+      } else if (searchQuery) {
+        // 从追番页跳来搜索
+        this.$router.replace({ name: 'anime-zone' }).catch(() => {});
+        if (sourceQuery && this.dataSource !== 'bangumi') {
+          await this.setDataSource('bangumi');
+        }
+        this.searchInput = searchQuery;
+        await this.loadCurrentList(1, searchQuery);
+      }
+    },
+
     /** 类型/排序/分类切换的轻量防抖，连续点击只执行最后一次。 */
     _scheduleFilterReload(keyword = '') {
       if (this._filterDebounceTimer) {
         clearTimeout(this._filterDebounceTimer);
       }
+      // Show feedback immediately while retaining a very small coalescing window
+      // for rapid chip clicks.
+      this.$store.commit('anime/SET_LOADING', true);
       this._filterDebounceTimer = setTimeout(() => {
         this._filterDebounceTimer = null;
         this.loadCurrentList(1, keyword);
         const mainContent = document.querySelector('.main-content');
         if (mainContent) mainContent.scrollTo({ top: 0, behavior: 'auto' });
-      }, 80);
+      }, 35);
     },
 
     async loadCurrentList(page = 1, search = '', refresh = false) {
@@ -1258,10 +1315,17 @@ export default {
 
     onMainScroll() {
       this._isMainScrolling = true;
+      this._lastMainScrollAt = performance.now();
       this.scheduleVirtualGridUpdate();
       this.scheduleInfiniteLoadCheck();
-      if (this._scrollIdleTimer) clearTimeout(this._scrollIdleTimer);
-      this._scrollIdleTimer = setTimeout(() => {
+      if (this._scrollIdleTimer) return;
+
+      const finishScroll = () => {
+        const remaining = 180 - (performance.now() - this._lastMainScrollAt);
+        if (remaining > 0) {
+          this._scrollIdleTimer = setTimeout(finishScroll, remaining);
+          return;
+        }
         this._scrollIdleTimer = null;
         this._isMainScrolling = false;
         this.scheduleVirtualGridMeasure();
@@ -1270,7 +1334,8 @@ export default {
           this.startCoverPrefetchWorker(this._prefetchToken);
         }
         this.schedulePendingAnimeUpdateFlush();
-      }, 520);
+      };
+      this._scrollIdleTimer = setTimeout(finishScroll, 180);
     },
 
     queueAnimeListUpdate(id, updates) {
@@ -1388,13 +1453,15 @@ export default {
     },
 
     async refreshData() {
-      // 跳过缓存强制刷新
+      // 跳过缓存强制刷新；同时复位失败封面标记，
+      // 让瞬时故障（代理 502/网络抖动）期间被标记的封面重新加载
+      this.resetImageFailures();
       await this.loadCurrentList(1, '', true);
     },
 
     clearSearch() {
       this.searchInput = '';
-      this.failedImageIds = new Set();
+      this.resetImageFailures();
       this.loadCurrentList(1, '');
     },
 
@@ -1423,19 +1490,30 @@ export default {
       this._imageRetryTimers.clear();
     },
 
+    // 切换筛选/刷新时整体复位失败封面状态（含重试计数），给所有封面重新加载的机会
+    resetImageFailures() {
+      this.clearImageRetryTimers();
+      this._imageRetriedIds.clear();
+      this.failedImageIds = new Set();
+    },
+
     onImageError(animeId) {
       const key = String(animeId);
       this.failedImageIds.add(key);
       this.failedImageIds = new Set(this.failedImageIds);
-      // 8秒后允许重试一次（缓存可能已下载完成或网络恢复）
-      if (this._imageRetriedIds.has(key)) return;
-      this._imageRetriedIds.add(key);
+      // 瞬时故障（封面代理 502 / 网络抖动）会在几十秒内恢复，
+      // 单次重试会让卡片在整个会话内保持"无封面"死状态；
+      // 改为有界退避重试：8s / 20s / 45s 共 3 次，成功后由 clearImageFailure 复位
+      const attempts = this._imageRetriedIds.get(key) || 0;
+      const retryDelays = [8000, 20000, 45000];
+      if (attempts >= retryDelays.length) return;
+      this._imageRetriedIds.set(key, attempts + 1);
       const timer = setTimeout(() => {
         this._imageRetryTimers.delete(key);
         if (this.failedImageIds.delete(key) || this.failedImageIds.delete(animeId)) {
           this.failedImageIds = new Set(this.failedImageIds);
         }
-      }, 8000);
+      }, retryDelays[attempts]);
       this._imageRetryTimers.set(key, timer);
     },
 
@@ -1575,58 +1653,45 @@ export default {
 
     // 如果从"我的追番"跳来，自动打开详情弹窗
     if (!isActive()) return;
-    const openDetailId = this.$route.query.openDetail;
-    const openAnimeDetail = this.$route.query.openAnimeDetail;
-    const searchQuery = this.$route.query.search;
-    const sourceQuery = this.$route.query.source;
-
-    if (openAnimeDetail) {
-      // 资料主干改造：从追番/历史跳来，直接打开详情弹窗（viewAnimeDetail 会自动回查 Bangumi）
-      // 记录来源页，关闭弹窗后自动回去，避免用户被留在番剧库
-      const returnTo = this.$route.query.returnTo;
-      if (returnTo && this.$router.getRoutes().some(r => r.name === returnTo)) {
-        this._detailReturnTo = returnTo;
-      }
-      this.$router.replace({ name: 'anime-zone' }).catch(() => {});
-      this._openDetailTimer = setTimeout(() => {
-        try {
-          const animeData = JSON.parse(openAnimeDetail);
-          this.viewAnimeDetail(animeData);
-        } catch (e) {
-          console.warn('[AnimeZone] openAnimeDetail 解析失败:', e);
-        }
-      }, 400);
-    } else if (openDetailId) {
-      // 清除 query 参数，避免刷新时重复触发
-      this.$router.replace({ name: 'anime-zone' }).catch(() => {});
-      // 延迟打开，等列表加载完
-      this._openDetailTimer = setTimeout(async () => {
-        try {
-          const detail = await this.fetchFanzhiDetail({ id: openDetailId, silent: true });
-          if (detail) {
-            this.showEpisodeSelector(detail);
-          }
-        } catch { /* 静默 */ }
-      }, 800);
-    } else if (searchQuery) {
-      // 从追番页跳来搜索
-      this.$router.replace({ name: 'anime-zone' }).catch(() => {});
-      if (sourceQuery && this.dataSource !== 'bangumi') {
-        await this.setDataSource('bangumi');
-      }
-      this.searchInput = searchQuery;
-      await this.loadCurrentList(1, searchQuery);
-    }
+    this._catalogInitDone = true;
+    await this.handleEnterRouteQuery();
   },
 
   activated() {
     // Keep the catalog warm between desktop navigation tabs, but only bind
     // viewport work while the page is actually visible.
+    // 本组件被 KeepAlive 缓存，mounted 只在首次创建时执行；
+    // 之后的再进入（如从发现页/追番页点卡片跳转）只会触发 activated，
+    // 路由 query 里的详情/搜索参数必须在这里处理，否则弹窗永远不打开。
+    if (this._catalogInitDone) this.handleEnterRouteQuery();
+    const refreshForNetworkMode = sessionStorage.getItem('sakurafall:catalog-network-mode-refresh') === '1';
+    if (refreshForNetworkMode) {
+      sessionStorage.removeItem('sakurafall:catalog-network-mode-refresh');
+      // 列表将重置到第一页，丢弃 App.vue 按路由记忆的滚动位置，
+      // 避免路由级恢复逻辑把容器滚回旧位置。
+      this.$root?._routeScrollPositions?.delete?.('anime-zone');
+      const mainContent = document.querySelector('.main-content');
+      if (mainContent) mainContent.scrollTo({ top: 0, behavior: 'auto' });
+      this.resetInfiniteLoadState();
+      this.cancelVirtualGridWork();
+      this.cancelProgressiveRender();
+      this.cancelPrefetchCovers();
+      this.cancelEpisodeAvailabilityEnrichment();
+      this.resetImageFailures();
+      this.$store.commit('anime/SET_LOADING', true);
+    }
+
     window.removeEventListener('resize', this.scheduleVirtualGridMeasure);
     window.addEventListener('resize', this.scheduleVirtualGridMeasure, { passive: true });
-    this.$nextTick(() => {
+    this.$nextTick(async () => {
       this.bindMainScrollTracker();
       this.scheduleVirtualGridMeasure();
+      if (refreshForNetworkMode) {
+        if (this.dataSource !== 'bangumi') await this.setDataSource('bangumi');
+        await this.loadCurrentList(1, this.searchKeyword || '', true);
+        this.scheduleInfiniteLoadCheck(180);
+        return;
+      }
       this.scheduleInfiniteLoadCheck(180);
       if (this.isBangumiMode && this.animeList.length > 0) {
         this.scheduleBangumiListMetaEnrichment(this.animeList);

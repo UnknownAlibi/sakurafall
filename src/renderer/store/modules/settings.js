@@ -6,6 +6,7 @@ const state = {
     customCss: '',
     uiEffectsMode: 'balanced',
     videoQuality: 'high',
+    routePreference: 'stability',   // SakuraRoute P1: 稳定优先 / 清晰优先 / 低延迟优先
     autoPlay: true,
     rememberPlaybackRate: true,
     seekStepSeconds: 10,
@@ -13,6 +14,7 @@ const state = {
     maxConcurrentConnections: 5,
     cacheSize: 1000,
     autoCleanCache: true,
+    serviceMode: 'cloud', // cloud: 使用 SakuraFall 服务；local: 完全直连/公开镜像兜底
     proxy: '', // 代理地址，如 'http://127.0.0.1:7890'；空表示不走代理
     bangumiMirror: '', // Bangumi API 镜像基址，空表示官方 API + 自动公共镜像兜底
     // Phase 7: per-service 网络策略（direct / proxy / system）
@@ -77,6 +79,11 @@ const mutations = {
     SET_VIDEO_QUALITY(state, quality) {
         state.videoQuality = quality;
     },
+    SET_ROUTE_PREFERENCE(state, val) {
+        const allowed = ['stability', 'quality', 'latency'];
+        const normalized = String(val || '').toLowerCase();
+        state.routePreference = allowed.includes(normalized) ? normalized : 'stability';
+    },
     SET_AUTO_PLAY(state, autoPlay) {
         state.autoPlay = autoPlay;
     },
@@ -97,6 +104,9 @@ const mutations = {
     },
     SET_AUTO_CLEAN_CACHE(state, val) {
         state.autoCleanCache = val;
+    },
+    SET_SERVICE_MODE(state, val) {
+        state.serviceMode = val === 'local' ? 'local' : 'cloud';
     },
     SET_PROXY(state, val) {
         state.proxy = val;
@@ -173,6 +183,7 @@ const mutations = {
     SET_SETTINGS(state, settings) {
         const providerDefaults = { ...state.danmakuProviders };
         Object.assign(state, settings);
+        state.serviceMode = settings?.serviceMode === 'local' ? 'local' : 'cloud';
         state.danmakuProviders = { ...providerDefaults, ...(settings?.danmakuProviders || {}) };
         state.seekStepSeconds = normalizeSeekStepSeconds(settings?.seekStepSeconds);
     }
@@ -238,6 +249,11 @@ const actions = {
         dispatch('saveSettings');
     },
 
+    updateRoutePreference({ commit, dispatch }, preference) {
+        commit('SET_ROUTE_PREFERENCE', preference);
+        dispatch('saveSettings');
+    },
+
     updateAutoPlay({ commit, dispatch }, autoPlay) {
         commit('SET_AUTO_PLAY', autoPlay);
         dispatch('saveSettings');
@@ -270,6 +286,11 @@ const actions = {
 
     updateAutoCleanCache({ commit, dispatch }, val) {
         commit('SET_AUTO_CLEAN_CACHE', val);
+        dispatch('saveSettings');
+    },
+
+    updateServiceMode({ commit, dispatch }, val) {
+        commit('SET_SERVICE_MODE', val);
         dispatch('saveSettings');
     },
 
@@ -398,6 +419,7 @@ const getters = {
     customCss: state => state.customCss,
     uiEffectsMode: state => state.uiEffectsMode,
     videoQuality: state => state.videoQuality,
+    routePreference: state => state.routePreference,
     autoPlay: state => state.autoPlay,
     rememberPlaybackRate: state => state.rememberPlaybackRate,
     seekStepSeconds: state => state.seekStepSeconds,
@@ -405,6 +427,7 @@ const getters = {
     maxConcurrentConnections: state => state.maxConcurrentConnections,
     cacheSize: state => state.cacheSize,
     autoCleanCache: state => state.autoCleanCache,
+    serviceMode: state => state.serviceMode,
     proxy: state => state.proxy,
     bangumiMirror: state => state.bangumiMirror,
     networkPolicies: state => state.networkPolicies,

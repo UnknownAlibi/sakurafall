@@ -89,7 +89,8 @@
         <!-- 线路选择 -->
         <div v-if="Object.keys(episodes).length > 1" class="line-selector">
           <button v-for="(episodeList, lineId) in episodes" :key="lineId" @click="selectLine(lineId)"
-            :class="['line-tab', { active: selectedLine === lineId }]">
+            :class="['line-tab', { active: selectedLine === lineId, switching: pendingLineId === lineId }]"
+            :aria-busy="pendingLineId === lineId">
             {{ formattedLineNames[lineId] || lineId }}
           </button>
         </div>
@@ -129,6 +130,7 @@ import VideoPlayer from '../components/Player/VideoPlayer.vue';
 import episodeProgressiveRender from '../mixins/episodeProgressiveRender.js';
 import {
   findEpisodeIndex,
+  findCorrespondingEpisode,
   findLineForEpisode,
   formatLineNames,
   getAdjacentEpisode,
@@ -156,6 +158,7 @@ export default {
       episodeFilter: '',
       currentEpisodeEl: null,
       episodePlayToken: 0,
+      pendingLineId: '',
       autoPlayTimer: null,
       initialResolvePending: true,
       initialResolveError: '',
@@ -279,8 +282,10 @@ export default {
       this.initialResolveError = '';
       this.pendingVideoTitle = videoData.title || '';
       const sameVideo = this.currentVideo?.url === videoData.url
-        && this.currentVideo?.episodeId === videoData.episodeId;
+        && this.currentVideo?.episodeId === videoData.episodeId
+        && String(this.currentVideo?.lineId || '') === String(videoData.lineId || '');
       if (!sameVideo) {
+        this.$refs.videoPlayer?.beginPlaybackTransition?.('incoming-video');
         await this.$store.dispatch('player/playVideo', videoData);
       }
       this.episodeFilter = '';
@@ -293,6 +298,15 @@ export default {
       if (!this.hasEpisodes) return;
       const keys = Object.keys(this.episodes);
       if (keys.length === 0) return;
+      if (this.pendingLineId && Array.isArray(this.episodes[this.pendingLineId])) {
+        this.selectedLine = this.pendingLineId;
+        return;
+      }
+      const videoLineId = String(this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || '');
+      if (videoLineId && Array.isArray(this.episodes[videoLineId])) {
+        this.selectedLine = videoLineId;
+        return;
+      }
       const currentLine = this.selectedLine && this.episodes[this.selectedLine];
       if (Array.isArray(currentLine) && findEpisodeIndex(currentLine, this.currentVideo?.episode) >= 0) return;
       const found = findLineForEpisode(this.episodes, this.currentVideo?.episode);
@@ -300,12 +314,25 @@ export default {
     },
 
     isCurrentEpisode(episode) {
+      const videoLineId = String(this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || '');
+      if (videoLineId && String(this.selectedLine || '') !== videoLineId) return false;
       if (isSameEpisode(episode, this.currentVideo?.episode)) return true;
       return this.currentEpisodeIndex >= 0 && this.currentLineEpisodes[this.currentEpisodeIndex] === episode;
     },
 
-    selectLine(lineId) {
-      this.selectedLine = lineId;
+    async selectLine(lineId) {
+      if (!lineId || (lineId === this.selectedLine && !this.pendingLineId)) return;
+      const targetEpisode = findCorrespondingEpisode(
+        this.episodes,
+        lineId,
+        this.currentVideo?.episode,
+        this.currentEpisodeIndex
+      );
+      if (!targetEpisode) {
+        this.$notify?.warning('线路不可用', '该线路没有当前集，请选择其他集数');
+        return;
+      }
+      await this.playEpisode(targetEpisode, { lineId, reason: 'line-switch' });
     },
 
     pauseInternalPlayer() {
@@ -394,14 +421,25 @@ export default {
       }
     },
 
-    async playEpisode(episode) {
+    async playEpisode(episode, options = {}) {
       if (!episode || !this.currentVideo?.anime) return;
+      const lineId = String(options.lineId || this.selectedLine || this.currentVideo?.lineId || '');
       const playToken = ++this.episodePlayToken;
-      const isLatestPlay = () => playToken === this.episodePlayToken;
+      this.pendingLineId = lineId;
 
-      // Phase 5: 通知 VideoPlayer 进入 resolving 状态
       const player = this.$refs.videoPlayer;
-      player?.setPlaybackState?.('resolving');
+      const sourceId = this.currentVideo.sourceId
+        || this.currentVideo.anime.sourceId
+        || this.currentVideo.anime.source
+        || '';
+      const providerId = this.currentVideo.providerId
+        || this.currentVideo.anime.providerId
+        || episode.providerId
+        || '';
+      const transitionToken = player?.beginPlaybackTransition?.(options.reason || 'episode-switch');
+      if (transitionToken === undefined) player?.setPlaybackState?.('resolving');
+      const isLatestPlay = () => playToken === this.episodePlayToken
+        && (transitionToken === undefined || player?.isPlaybackTransitionCurrent?.(transitionToken));
 
       try {
         let videoUrl = '';
@@ -409,14 +447,13 @@ export default {
 
         // 优先使用 PlaybackResolverService（主进程，带短期缓存和 token 取消）
         if (window.electronAPI?.playbackResolve) {
-          const sourceId = this.currentVideo.anime.source || this.currentVideo.anime.sourceId || '';
-          const sourceName = this.currentVideo.anime.sourceName || '';
-          const safeEpisode = toIpcPlainObject(episode, {});
+          const sourceName = this.currentVideo.sourceName || this.currentVideo.anime.sourceName || '';
+          const safeEpisode = toIpcPlainObject({ ...episode, lineId }, {});
           const result = await window.electronAPI.playbackResolve({
-            providerId: this.currentVideo.anime.providerId || episode.providerId || '',
+            providerId,
             sourceId,
             sourceName,
-            sourceType: this.currentVideo.anime.sourceType || 'cms',
+            sourceType: this.currentVideo.sourceType || this.currentVideo.anime.sourceType || 'cms',
             sourceAnimeId: String(this.currentVideo.anime.id || this.currentVideo.anime.anime_id || ''),
             episode: safeEpisode
           });
@@ -434,10 +471,9 @@ export default {
               userMessage: result?.userMessage || result?.error || '视频地址解析失败',
               elapsedMs: result?.elapsedMs || 0
             };
-            player?.setPlaybackState?.('failed');
-            player.lastPlaybackFailure = failure;
-            player.error = failure.userMessage;
-            this.$notify?.error('播放失败', failure.userMessage);
+            await this.fallbackAfterEpisodeResolutionFailure(player, failure, {
+              sourceId, providerId, lineId
+            });
             return;
           }
 
@@ -457,20 +493,24 @@ export default {
             reason: 'invalid-source',
             hint: '请尝试换源或重新选择剧集'
           };
-          player?.setPlaybackState?.('failed');
-          player.lastPlaybackFailure = failure;
-          player.error = failure.message;
-          this.$notify?.error('播放失败', '视频地址解析失败，请重试或切换其他分集');
+          await this.fallbackAfterEpisodeResolutionFailure(player, failure, {
+            sourceId, providerId, lineId
+          });
           return;
         }
 
-        const epIndex = this.currentLineEpisodes?.indexOf(episode) ?? -1;
+        const lineEpisodes = getLineEpisodes(this.episodes, lineId);
+        const epIndex = lineEpisodes.indexOf(episode);
         await this.$store.dispatch('player/playVideo', {
           title: `${this.currentVideo.anime.name} - ${episode.title}`,
           url: videoUrl,
           anime: this.currentVideo.anime,
-          episode: { ...episode, index: epIndex },
+          episode: { ...episode, index: epIndex, lineId },
           episodeId: episode.id,
+          sourceId,
+          sourceName: this.currentVideo.sourceName || this.currentVideo.anime.sourceName || '',
+          providerId,
+          lineId,
           // Phase 5: 附带 ResolvedVideo 的 headers，供 hls.js / native 加载使用
           resolvedVideo
         });
@@ -483,11 +523,27 @@ export default {
           reason: 'unknown',
           hint: '请重试或换源'
         };
-        player?.setPlaybackState?.('failed');
-        player.lastPlaybackFailure = failure;
-        player.error = failure.message;
-        this.$notify?.error('播放失败', '请重试或切换其他分集');
+        await this.fallbackAfterEpisodeResolutionFailure(player, failure, {
+          sourceId, providerId, lineId
+        });
+      } finally {
+        if (playToken === this.episodePlayToken) this.pendingLineId = '';
       }
+    },
+
+    async fallbackAfterEpisodeResolutionFailure(player, failure, context = {}) {
+      if (!player) return false;
+      player.rememberFallbackAttempt?.(
+        context.sourceId,
+        context.providerId,
+        context.lineId
+      );
+      player.recordPlaybackFailure?.(failure);
+      player.error = null;
+      player.recoveryMessage = failure?.userMessage
+        || '\u5f53\u524d\u7ebf\u8def\u4e0d\u53ef\u64ad\uff0c\u6b63\u5728\u5c1d\u8bd5\u540c\u96c6\u5176\u4ed6\u7ebf\u8def';
+      player.setPlaybackState?.('recovering');
+      return player.autoFallbackToOtherSource?.(failure) || false;
     },
 
     /**
@@ -587,6 +643,7 @@ export default {
     this.$nextTick(() => this.scrollCurrentIntoView());
   },
   beforeUnmount() {
+    this.episodePlayToken += 1;
     if (this.removeStateListener) this.removeStateListener();
     if (this.removeLoadNewListener) this.removeLoadNewListener();
     if (this.autoPlayTimer) {
@@ -896,6 +953,14 @@ export default {
   background: linear-gradient(135deg, #fb7299, #9c7bff);
   color: #fff;
   border-color: transparent;
+}
+
+.line-tab.switching {
+  animation: line-switch-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes line-switch-pulse {
+  to { box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.18); }
 }
 
 /* 集数搜索框 */

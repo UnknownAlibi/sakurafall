@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const updateChecker = require('../src/main/services/UpdateChecker');
+const { UpdateChecker, GITHUB_UPDATE_MANIFEST_URL } = require('../src/main/services/UpdateChecker');
 
 test('_compareVersion: 相同版本返回 0', () => {
   assert.strictEqual(updateChecker._compareVersion('1.0.0', '1.0.0'), 0);
@@ -64,4 +65,38 @@ test('normalizeDownloadUrl: 阻止非 http/https 下载链接', () => {
   );
   assert.throws(() => updateChecker.normalizeDownloadUrl('http://example.com/SakuraFall.exe'), /https/);
   assert.throws(() => updateChecker.normalizeDownloadUrl('file:///C:/Windows/notepad.exe'), /http\/https/);
+});
+
+test('setServiceBaseUrl: 本机模式恢复 GitHub 更新源', () => {
+  const checker = new UpdateChecker();
+  checker.setServiceBaseUrl('https://service.example.com/');
+  assert.strictEqual(checker.defaultUpdateUrl, 'https://service.example.com/updates/latest.json');
+  assert.deepStrictEqual(checker.fallbackUpdateUrls, [GITHUB_UPDATE_MANIFEST_URL]);
+
+  checker.setServiceBaseUrl('');
+  assert.strictEqual(checker.defaultUpdateUrl, GITHUB_UPDATE_MANIFEST_URL);
+  assert.deepStrictEqual(checker.fallbackUpdateUrls, []);
+});
+
+test('checkForUpdates: 服务端离线时自动回退 GitHub 清单', async () => {
+  const checker = new UpdateChecker();
+  checker.defaultUpdateUrl = 'https://service.example.com/updates/latest.json';
+  checker.fallbackUpdateUrls = ['https://github.example.com/latest.json'];
+  checker._config = {};
+  checker.getCurrentVersion = () => '1.0.0';
+  const calls = [];
+  checker.http.fetch = async url => {
+    calls.push(url);
+    if (url.includes('service.example.com')) throw new Error('service offline');
+    return JSON.stringify({ version: '1.1.0', downloadUrl: 'https://github.example.com/setup.exe' });
+  };
+
+  const result = await checker.checkForUpdates({ silent: true });
+  assert.deepStrictEqual(calls, [
+    'https://service.example.com/updates/latest.json',
+    'https://github.example.com/latest.json'
+  ]);
+  assert.strictEqual(result.hasUpdate, true);
+  assert.strictEqual(result.fallbackUsed, true);
+  assert.strictEqual(result.sourceUrl, 'https://github.example.com/latest.json');
 });

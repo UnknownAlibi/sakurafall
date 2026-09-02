@@ -91,8 +91,10 @@ export default {
   opacity: 0;
 }
 
-/* 纯净模式：不渲染进度条动效（直接隐藏） */
-:global([data-ui-effects='performance']) .top-loading-bar {
+/* 纯净模式：不渲染进度条动效（直接隐藏）
+   :global() 必须包住整条选择器——写成 :global(X) Y 时 Vue scoped 编译会丢弃 Y，
+   规则只剩 [data-ui-effects=...]，等于给根元素加 display:none。 */
+:global([data-ui-effects='performance'] .top-loading-bar) {
   display: none;
 }
 </style>

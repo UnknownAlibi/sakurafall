@@ -39,7 +39,7 @@
             :src="anime.cover"
             :alt="anime.name"
             cache-variant="thumbnail"
-            :cache-width="360"
+            :cache-width="480"
             data-cache-resolve="true"
             width="360"
             height="508"
@@ -162,9 +162,9 @@ export default {
       const rating = Number(value);
       return Number.isFinite(rating) ? rating.toFixed(1) : value;
     },
-    // 卡片入场 staggered delay：每张延迟 30ms，最多 8 张后不再增加
+    // 卡片入场保持轻微错峰，但首屏最后一张不再晚约四分之一秒出现。
     cardEnterStyle(index) {
-      const delay = Math.min(index, 8) * 30;
+      const delay = Math.min(index, 6) * 16;
       return { '--enter-delay': `${delay}ms` };
     },
     // skeleton 淡入：loading 显现后下一帧触发 opacity 0 -> 1
@@ -283,6 +283,14 @@ export default {
 .anime-card.card-entered:hover { transform: translateY(-4px); border-color: rgba(240, 100, 141, 0.35); box-shadow: var(--shadow-anime); transition-duration: 0.18s; transition-delay: 0ms; }
 .anime-card.card-entered:active { transform: scale(0.98); transition-duration: 0.1s; transition-delay: 0ms; }
 .anime-card:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+/* 滚动中/高压状态下挂载的卡片直接就位：连续滚动时虚拟窗口每平移一次会
+   批量挂载约 24 张卡片，若每张都跑 300ms 入场过渡 + 封面 0.2s 淡入，
+   会形成持续的合成层提升与光栅化churn（大窗口下尤为明显）。
+   停止滚动后规则失效，未入场卡片恢复正常入场动画。 */
+[data-scroll-state="scrolling"] .anime-card,
+[data-performance-pressure="high"] .anime-card,
+[data-scroll-state="scrolling"] .anime-card :deep(img),
+[data-performance-pressure="high"] .anime-card :deep(img) { transition: none !important; }
 .anime-poster { position: relative; width: 100%; aspect-ratio: 360 / 508; overflow: hidden; background: var(--primary-light); }
 .anime-poster :deep(img) { width: 100%; height: 100%; display: block; object-fit: cover; opacity: 0; transition: opacity 0.2s ease, transform 0.24s ease; }
 .anime-poster :deep(img.loaded) { opacity: 1; }
@@ -307,12 +315,12 @@ export default {
 .anime-type-tag { max-width: 90px; overflow: hidden; padding: 2.5px 8px; border-radius: var(--radius-pill); background: var(--primary-light); color: var(--text-secondary); font-size: 10.5px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
 .anime-year { background: rgba(54, 189, 215, 0.1); color: var(--brand-cyan-deep); }
 .anime-type-tag { color: var(--primary-color); }
-.skeleton { pointer-events: none; opacity: 0; transition: opacity 0.3s var(--ease-smooth); }
+.skeleton { pointer-events: none; opacity: 0.38; transition: opacity 0.22s var(--ease-smooth); }
 .skeleton-fade-in .skeleton { opacity: 1; }
 /* 骨架卡交错上浮入场：与真实卡片入场语言一致 */
 .skeleton-fade-in .skeleton { animation: skeleton-card-in 0.5s var(--ease-smooth) both; }
 @keyframes skeleton-card-in {
-  from { opacity: 0; transform: translateY(14px); }
+  from { opacity: 0.38; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .skeleton-title { width: 70%; height: 16px; margin-bottom: 8px; }
@@ -329,6 +337,4 @@ export default {
 @media (max-width: 1100px) { .anime-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 860px) { .anime-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .anime-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } }
-:global([data-scroll-state="scrolling"]) .anime-card { transition: none; opacity: 1 !important; transform: none !important; }
-:global([data-scroll-state="scrolling"]) .anime-poster :deep(img) { transition: none; }
 </style>

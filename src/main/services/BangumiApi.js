@@ -42,6 +42,9 @@ class BangumiApi {
     // 默认官方 API；直连失败时会自动尝试公开反代镜像。
     this.defaultBaseUrl = 'https://api.bgm.tv';
     this.baseUrl = this.defaultBaseUrl;
+    this.coverProxyBase = '';
+    this.fastFailConfiguredBase = false;
+    this.fastFailTimeoutMs = 1800;
     this.publicApiMirrors = [
       'https://bgmapi.anibt.net',
       'https://api.bangumi.lol',
@@ -106,20 +109,27 @@ class BangumiApi {
    *   - https://your-worker.example.com （自建反代）
    * @param {string} url
    */
-  setBaseUrl(url) {
+  setBaseUrl(url, options = {}) {
     const trimmed = String(url || '').trim().replace(/\/+$/, '');
     const nextBaseUrl = trimmed || this.defaultBaseUrl;
-    const nextFallbackMode = !trimmed;
+    const nextFallbackMode = !trimmed || !!options.allowFallback;
+    const nextFastFailMode = !!options.fastFail;
     if (
       this.baseUrl === nextBaseUrl &&
-      this.enablePublicMirrorFallback === nextFallbackMode
+      this.enablePublicMirrorFallback === nextFallbackMode &&
+      this.fastFailConfiguredBase === nextFastFailMode
     ) return;
     this.baseUrl = nextBaseUrl;
     this.enablePublicMirrorFallback = nextFallbackMode;
+    this.fastFailConfiguredBase = nextFastFailMode;
     this._preferredMirrorBase = '';
     this._baseProbePromises.clear();
     this._baseSessionSuccessAt.clear();
     console.log(`[BangumiApi] API 基址切换为: ${this.baseUrl}`);
+  }
+
+  setCoverProxyBase(url) {
+    this.coverProxyBase = String(url || '').trim().replace(/\/+$/, '');
   }
 
   _unique(values) {
@@ -217,9 +227,10 @@ class BangumiApi {
       : 12;
     const officialBias = base === this.defaultBaseUrl ? (this.http.proxy ? 4 : -10) : 0;
     const publicMirrorBias = !this.http.proxy && this.publicApiMirrors.includes(base) ? 6 : 0;
+    const configuredBaseBias = base === this.baseUrl && this.baseUrl !== this.defaultBaseUrl ? 20 : 0;
     const freshnessBonus = health.lastSuccessAt && Date.now() - health.lastSuccessAt < 10 * 60 * 1000 ? 8 : 0;
     const cooldownPenalty = health.cooldownUntil && health.cooldownUntil > Date.now() ? 100 : 0;
-    return successRate * 60 + latencyScore + officialBias + publicMirrorBias + freshnessBonus - cooldownPenalty;
+    return successRate * 60 + latencyScore + officialBias + publicMirrorBias + configuredBaseBias + freshnessBonus - cooldownPenalty;
   }
 
   _loadMirrorHealth() {
@@ -269,6 +280,7 @@ class BangumiApi {
     const bases = this._unique([
       matchedBase,
       this._preferredMirrorBase,
+      this.defaultBaseUrl,
       ...this.publicApiMirrors
     ]);
     const activeBases = bases
@@ -297,6 +309,12 @@ class BangumiApi {
     if (normalized.startsWith('//')) normalized = `https:${normalized}`;
     normalized = normalized.replace(/^http:\/\/lain\.bgm\.tv/i, 'https://lain.bgm.tv');
     normalized = normalized.replace(/^http:\/\/(lain\.bangumi\.lol|bgmimg\.anibt\.net)/i, 'https://$1');
+    if (
+      this.coverProxyBase &&
+      /^https:\/\/(?:lain\.bgm\.tv|lain\.bangumi\.lol|bgmimg\.anibt\.net)\//i.test(normalized)
+    ) {
+      return `${this.coverProxyBase}/cover?url=${encodeURIComponent(normalized)}`;
+    }
     // 配置了镜像且镜像不是官方 api.bgm.tv 时，lain.bgm.tv 图片改写到镜像对应的图片域名
     if (this.baseUrl && this.baseUrl !== 'https://api.bgm.tv') {
       if (/^https:\/\/lain\.bgm\.tv/i.test(normalized)) {
@@ -356,6 +374,16 @@ class BangumiApi {
       const startedAt = Date.now();
       try {
         const requestOptions = { ...options };
+        if (
+          this.fastFailConfiguredBase &&
+          candidates.length > 1 &&
+          base === this.baseUrl
+        ) {
+          requestOptions.timeout = Math.min(
+            Number(options.timeout) || this.timeout,
+            this.fastFailTimeoutMs
+          );
+        }
         if (
           candidates.length > 1 &&
           candidate !== candidates[candidates.length - 1] &&
@@ -939,7 +967,9 @@ class BangumiApi {
   _normalizeItem(item, weekday = '') {
     // 处理 Calendar API 和 Search API 不同的字段
     const name = item.name_cn || item.name || '未知';
-    const cover = this._normalizeImageUrl(item.images?.large || item.images?.medium || item.images?.common || item.images?.grid || '');
+    // List cards only need a bounded thumbnail. Detail pages retain the large
+    // image through _normalizeDetail.
+    const cover = this._normalizeImageUrl(item.images?.common || item.images?.medium || item.images?.large || item.images?.grid || '');
     const rating = item.rating?.score || item.score || 0;
     const rank = item.rating?.rank || item.rank || 0;
     const airDate = item.air_date || item.date || '';

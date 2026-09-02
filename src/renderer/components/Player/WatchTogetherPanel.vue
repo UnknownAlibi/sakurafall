@@ -39,11 +39,17 @@
           <span>房间号</span>
           <input v-model="joinForm.roomCode" type="text" maxlength="6" placeholder="6 位数字" inputmode="numeric" @keydown.enter="onJoinRoom" />
         </label>
-        <label class="wt-field">
-          <span>主机地址</span>
-          <input v-model="joinForm.hostAddress" type="text" placeholder="localhost 或 IP 地址" @keydown.enter="onJoinRoom" />
+        <label class="wt-local-toggle">
+          <input v-model="joinForm.localMode" type="checkbox" />
+          <span>局域网备用模式</span>
         </label>
-        <p class="wt-tip">同机调试可填 localhost；跨设备填写对方局域网 IP。</p>
+        <label v-if="joinForm.localMode" class="wt-field">
+          <span>主机地址</span>
+          <input v-model="joinForm.hostAddress" type="text" placeholder="例如 192.168.1.20" @keydown.enter="onJoinRoom" />
+        </label>
+        <p class="wt-tip">
+          {{ joinForm.localMode ? '服务器离线时，可填写房主显示的局域网地址。' : '房间通过 SakuraFall 中继连接，只需输入朋友分享的房间号。' }}
+        </p>
         <button class="wt-primary-btn" :disabled="joining" @click="onJoinRoom">
           {{ joining ? '加入中...' : '加入房间' }}
         </button>
@@ -81,15 +87,22 @@
             <span class="wt-dot"></span>{{ statusText }}
           </span>
         </div>
-        <div v-if="!roomInfo.isHost && roomInfo.hostAddress" class="wt-room-row">
-          <span class="wt-label">主机</span>
-          <span class="wt-host-addr">{{ roomInfo.hostAddress }}:{{ roomInfo.port || 9876 }}</span>
+        <div v-if="roomInfo.relay" class="wt-room-row">
+          <span class="wt-label">连接</span>
+          <span class="wt-host-addr">SakuraFall 中继</span>
+        </div>
+        <div v-else class="wt-room-row">
+          <span class="wt-label">连接</span>
+          <span class="wt-host-addr">局域网 {{ roomInfo.hostAddress }}:{{ roomInfo.port || 9876 }}</span>
         </div>
       </div>
 
       <!-- 同步提示 -->
       <div class="wt-sync-hint">
-        <template v-if="roomInfo.isHost">
+        <template v-if="!roomInfo.relay">
+          <span>中继服务离线：当前房间仅限同一局域网设备加入</span>
+        </template>
+        <template v-else-if="roomInfo.isHost">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
             <path d="M12 6v6l4 2"/>
@@ -154,7 +167,7 @@ export default {
     return {
       mode: 'create',
       createForm: { roomName: '' },
-      joinForm: { roomCode: '', hostAddress: 'localhost' },
+      joinForm: { roomCode: '', localMode: false, hostAddress: '' },
       creating: false,
       joining: false,
       leaving: false,
@@ -166,7 +179,8 @@ export default {
         memberCount: 1,
         hostAddress: '',
         port: 9876,
-        connected: false
+        connected: false,
+        relay: false
       },
       chatMessages: [],
       chatInput: '',
@@ -221,7 +235,8 @@ export default {
             memberCount: info.memberCount || 1,
             hostAddress: info.hostAddress || '',
             port: info.port || 9876,
-            connected: !!info.connected
+            connected: !!info.connected,
+            relay: !!info.relay
           };
           this.$emit('room-changed', { ...this.roomInfo });
         }
@@ -234,6 +249,9 @@ export default {
         case 'joined':
         case 'member-joined':
         case 'member-left':
+        case 'member-count':
+        case 'host-connected':
+        case 'host-disconnected':
           this.refreshRoomInfo();
           break;
         case 'sync':
@@ -263,7 +281,8 @@ export default {
             memberCount: 1,
             hostAddress: '',
             port: 9876,
-            connected: false
+            connected: false,
+            relay: false
           };
           this.chatMessages.push({
             from: 'system',
@@ -282,7 +301,8 @@ export default {
             memberCount: 1,
             hostAddress: '',
             port: 9876,
-            connected: false
+            connected: false,
+            relay: false
           };
           this.chatMessages = [];
           this.$emit('room-changed', { ...this.roomInfo });
@@ -328,8 +348,13 @@ export default {
       }
       this.joining = true;
       try {
+        if (this.joinForm.localMode && !String(this.joinForm.hostAddress || '').trim()) {
+          this.formError = '请输入房主显示的局域网地址';
+          return;
+        }
         const result = await window.electronAPI.wtJoinRoom({
           roomCode: code,
+          forceLocal: this.joinForm.localMode,
           hostAddress: this.joinForm.hostAddress || 'localhost'
         });
         if (!result || !result.success) {
@@ -357,7 +382,8 @@ export default {
           memberCount: 1,
           hostAddress: '',
           port: 9876,
-          connected: false
+          connected: false,
+          relay: false
         };
         this.chatMessages = [];
         this.$emit('room-changed', { ...this.roomInfo });
@@ -523,6 +549,22 @@ export default {
 
 .wt-field input:focus {
   border-color: rgba(var(--primary-rgb), 0.55);
+}
+
+.wt-local-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.wt-local-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary-color);
 }
 
 .wt-tip {

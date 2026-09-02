@@ -103,14 +103,17 @@
       </div>
     </div>
 
-    <button v-if="!loading && !error && currentVideo?.anime?.name && controlsVisible" class="source-switch-btn" title="换源同集" @click.stop="switchToSameEpisode">
+    <button v-if="!loading && !error && currentVideo?.anime?.name && controlsVisible" class="source-switch-btn" title="SakuraRoute 智能线路" @click.stop="switchToSameEpisode">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M7 7h11l-3-3"/><path d="M17 17H6l3 3"/><path d="M18 7l-5 5"/><path d="M6 17l5-5"/>
       </svg>
-      <span>换源</span>
+      <span>线路</span>
     </button>
 
-    <div v-show="!loading && !error && !autoRecovering && controlsVisible && (currentSourceLabel || playbackStatsLabel || anime4kRuntime.presenting)" class="source-status-pill">
+    <div v-show="!loading && !error && !autoRecovering && controlsVisible && (routeStatus.active || currentSourceLabel || playbackStatsLabel || anime4kRuntime.presenting)" class="source-status-pill">
+      <span v-if="routeStatus.active" class="sakura-route-state" :class="`is-${routeStatus.phase}`" :title="routeStatus.detail">
+        <i aria-hidden="true"></i>{{ routeStatus.label }}
+      </span>
       <span v-if="currentSourceLabel">{{ currentSourceLabel }}</span>
       <span v-if="currentSourceQualityLabel && !playbackStatsLabel">{{ currentSourceQualityLabel }}</span>
       <span v-if="playbackStatsLabel" class="playback-stats" :title="playbackStatsTitle">{{ playbackStatsLabel }}</span>
@@ -123,38 +126,48 @@
       <div class="source-panel">
         <div class="source-panel-header">
           <div>
-            <h3>换源播放</h3>
-            <p>{{ currentVideo?.episode?.title || currentVideo?.anime?.name || '当前视频' }}</p>
+            <h3>SakuraRoute 智能线路</h3>
+            <p>{{ currentVideo?.episode?.title || currentVideo?.anime?.name || '当前视频' }} · {{ routeStatus.detail }}</p>
           </div>
           <button class="source-panel-close" @click="closeSourcePanel" title="关闭">×</button>
         </div>
 
         <div v-if="sourcePanelLoading" class="source-panel-state">
           <div class="loading-spinner small"></div>
-          <span>正在测速...</span>
+          <span>正在解析剧集并预检线路...</span>
         </div>
-        <div v-else-if="sourcePanelError" class="source-panel-state error">
-          {{ sourcePanelError }}
-        </div>
-        <div v-else-if="sourceCandidates.length === 0" class="source-panel-state">
-          未找到可用候选源
-        </div>
-        <div v-else class="source-candidate-list">
-          <button v-for="candidate in sourceCandidates" :key="`${candidate.sourceId}-${candidate.url}`" class="source-candidate" @click="playSourceCandidate(candidate)">
-            <span class="candidate-main">
-              <span class="candidate-source">{{ candidate.sourceName || candidate.sourceId }}</span>
-              <span class="candidate-episode">{{ candidate.episodeTitle || candidate.episode?.title }}</span>
-            </span>
-            <span class="candidate-meta">
-              <span class="candidate-chip quality">{{ formatCandidateQuality(candidate) }}</span>
-              <span class="candidate-chip" :class="candidateHealthClass(candidate)">健康 {{ candidate.healthScore ?? '--' }}</span>
-              <span v-if="candidate.health?.playbackSessionCount" class="candidate-chip" :title="candidateHealthTitle(candidate)">首帧 {{ formatCandidateStartup(candidate) }}</span>
-              <span v-if="candidate.health?.playbackSessionCount" class="candidate-chip" :class="candidateStallClass(candidate)">卡顿 {{ formatCandidateRatio(candidate.health.averageStallRatio) }}</span>
-              <span v-if="candidate.health?.advertisingReportCount" class="candidate-chip issue-ad">广告反馈 {{ candidate.health.advertisingReportCount }}</span>
-              <span class="candidate-chip">{{ formatMatchType(candidate.matchType) }}</span>
-            </span>
-          </button>
-        </div>
+        <template v-else>
+          <div v-if="sourcePanelResolving" class="source-panel-state resolving">
+            <div class="loading-spinner small"></div>
+            <span>正在解析 {{ sourcePanelResolving.sourceName || sourcePanelResolving.sourceId || '候选源' }}，请稍候...</span>
+          </div>
+          <div v-else-if="sourcePanelError" class="source-panel-state error">
+            {{ sourcePanelError }}
+          </div>
+          <div v-else-if="sourceCandidates.length === 0" class="source-panel-state">
+            未找到可用候选源
+          </div>
+          <div v-else class="source-candidate-list">
+            <button v-for="(candidate, index) in sourceCandidates" :key="`${candidate.sourceId}-${candidate.lineId}-${candidate.url}`" class="source-candidate" :class="{ recommended: index === 0, resolving: sourcePanelResolving === candidate }" @click="playSourceCandidate(candidate)">
+              <span class="candidate-main">
+                <span class="candidate-source">
+                  {{ candidate.sourceName || candidate.sourceId }}
+                  <em v-if="index === 0">推荐</em>
+                  <em v-if="sourceLineCounts[candidate.sourceId] > 1 && candidate.lineId" class="line-badge">{{ formatLineName(candidate.lineId) }}</em>
+                </span>
+                <span class="candidate-episode">{{ candidate.episodeTitle || candidate.episode?.title }}</span>
+              </span>
+              <span class="candidate-meta">
+                <span class="candidate-chip quality">{{ formatCandidateQuality(candidate) }}</span>
+                <span class="candidate-chip" :class="candidateHealthClass(candidate)">健康 {{ candidate.healthScore ?? '--' }}</span>
+                <span v-if="candidate.health?.playbackSessionCount" class="candidate-chip" :title="candidateHealthTitle(candidate)">首帧 {{ formatCandidateStartup(candidate) }}</span>
+                <span v-if="candidate.health?.playbackSessionCount" class="candidate-chip" :class="candidateStallClass(candidate)">卡顿 {{ formatCandidateRatio(candidate.health.averageStallRatio) }}</span>
+                <span v-if="candidate.health?.advertisingReportCount" class="candidate-chip issue-ad">广告反馈 {{ candidate.health.advertisingReportCount }}</span>
+                <span class="candidate-chip">{{ formatMatchType(candidate.matchType) }}</span>
+              </span>
+            </button>
+          </div>
+        </template>
 
         <div v-if="sourceSkipped.length > 0" class="source-skipped">
           已跳过 {{ sourceSkipped.length }} 个冷却源
@@ -335,6 +348,8 @@
       :subtitle-enabled="showSubtitle"
       :casting="casting"
       :watch-together-active="watchTogetherActive"
+      :notebook-active="notebookVisible"
+      :dna-active="dnaVisible"
       :auto-play="autoPlay"
       :remember-playback-rate="rememberPlaybackRate"
       :danmaku-font-size="danmakuFontSize"
@@ -347,8 +362,10 @@
       :anime4k-degraded="anime4kRuntime.presenting && anime4kRuntime.degraded"
       :anime4k-preset="anime4kPreset"
       :ad-ranges="detectedAdRanges"
+      :note-markers="noteMarkers"
       :is-muted="videoMuted"
       @controls-hover="onControlsHover"
+      @note-marker-click="handleSeek"
       @toggle-play="togglePlay"
       @seek="handleSeek"
       @seek-relative="seekRelative"
@@ -368,6 +385,8 @@
       @subtitle-load-file="loadSubtitleFile"
       @subtitle-search="onSubtitleSearch"
       @cast-toggle="onCastToggle"
+      @notebook-toggle="notebookVisible = !notebookVisible"
+      @dna-toggle="dnaVisible = !dnaVisible"
       @watch-together-toggle="onWatchTogetherToggle"
       @seek-step-change="updateSeekStepSeconds"
       @auto-play-change="updateAutoPlay"
@@ -389,6 +408,50 @@
       @close="watchTogetherPanelVisible = false"
       @room-changed="onWtRoomChanged"
     />
+
+    <!-- 一起看 P1：主机切集确认横幅 -->
+    <transition name="wt-switch-fade">
+      <div v-if="wtEpisodeSwitchRequest" class="wt-episode-switch">
+        <div class="wt-episode-switch-body">
+          <span class="wt-episode-switch-icon">📡</span>
+          <span class="wt-episode-switch-text">
+            主机已切到第 {{ wtEpisodeSwitchRequest.episodeIndex }} 集
+            <em v-if="wtEpisodeSwitchRequest.episodeTitle">{{ wtEpisodeSwitchRequest.episodeTitle }}</em>
+          </span>
+          <span v-if="wtEpisodeSwitching" class="wt-episode-switch-status">正在确认本地候选源...</span>
+          <span v-else-if="wtEpisodeSwitchError" class="wt-episode-switch-status is-error">{{ wtEpisodeSwitchError }}</span>
+          <template v-else>
+            <button type="button" class="wt-switch-btn is-primary" :disabled="wtEpisodeSwitching" @click="followWtEpisode">跟随主机</button>
+            <button type="button" class="wt-switch-btn" :disabled="wtEpisodeSwitching" @click="dismissWtEpisodeSwitch">留在本集</button>
+          </template>
+        </div>
+      </div>
+    </transition>
+
+    <ViewingNotebookPanel
+      v-if="notebookVisible"
+      :identity="currentEpisodeIdentity"
+      :current-time="currentTime"
+      :duration="duration"
+      :source-id="getCurrentSourceId()"
+      @close="notebookVisible = false"
+      @seek="handleSeek"
+      @changed="loadNoteMarkers"
+    />
+
+    <!-- Episode DNA：片头/片尾/广告段标记与候选确认 -->
+    <EpisodeDnaPanel
+      v-if="dnaVisible"
+      :identity="currentEpisodeIdentity"
+      :current-time="currentTime"
+      :duration="duration"
+      :source-id="getCurrentSourceId()"
+      :dna-candidates="dnaCandidates"
+      @close="dnaVisible = false"
+      @seek="handleSeek"
+      @changed="loadDnaAutoSkipRule"
+      @rule-updated="onDnaRuleUpdated"
+    />
   </div>
 </template>
 
@@ -400,25 +463,44 @@ import SubtitleLayer from './SubtitleLayer.vue';
 import Anime4KCanvas from './Anime4KCanvas.vue';
 import WatchTogetherPanel from './WatchTogetherPanel.vue';
 import CastDialog from './CastDialog.vue';
+import ViewingNotebookPanel from './ViewingNotebookPanel.vue';
+import EpisodeDnaPanel from './EpisodeDnaPanel.vue';
+import { EpisodeDnaCollector } from '../../player/episodeDnaCollector.js';
+import { analyzeIntroFeatures, destroyIntroAnalyzer } from '../../player/episodeDnaClient.js';
 import {
-  describeNativeVideoError,
-  formatPlaybackFailureForDisplay,
-  classifyPlaybackFailure,
-  classifyHlsFailure
+  classifyPlaybackFailure
 } from '../../utils/playbackDiagnostics.js';
 import {
-  estimateSourceFrameRate,
   formatSourceFrameRate,
   normalizeDeclaredFrameRate
 } from '../../utils/playbackFrameRate.js';
 import { collectHlsAdRanges, findActiveAdRange } from '../../utils/hlsAdMarkers.js';
 import { toIpcPlainObject } from '../../utils/ipcPayload.js';
-import { extractEpisodeNumber } from '../../utils/episodeList.js';
+import { extractEpisodeNumber, formatLineName } from '../../utils/episodeList.js';
+import { createEpisodeIdentity } from '../../utils/episodeIdentity.js';
+import {
+  beginRouteProbe,
+  beginRouteSwitch,
+  completeRouteProbe,
+  createSakuraRouteSession,
+  describeSakuraRoute,
+  failRouteAttempt,
+  markRouteStable,
+  updateSakuraRoute
+} from '../../utils/sakuraRouteSession.js';
 import { formatCandidateQuality, formatMatchType, candidateHealthClass, candidateStallClass,
   formatCandidateStartup, formatCandidateRatio, candidateHealthTitle } from '../../utils/sourceCandidatePresentation.js';
 import { formatAnime4kPreset, formatAnime4kRuntimeTitle } from '../../utils/anime4kPresentation.js';
 import { applyRuntimeHlsBufferPolicy, toHlsBufferConfig } from '../../utils/hlsBufferPolicy.js';
 import playerPlatformIntegration from '../../mixins/playerPlatformIntegration.js';
+import watchTogetherMixin from '../../mixins/watchTogether.js';
+import playerPlaybackLifecycle from '../../mixins/playerPlaybackLifecycle.js';
+import playerPlaybackStats from '../../mixins/playerPlaybackStats.js';
+import { isSuspiciousSniffedMediaEnd } from '../../utils/episodePlaybackPolicy.js';
+
+// Automatic fallback is allowed only after serialized recovery attempts for
+// the current media generation have been exhausted.
+const AUTO_FALLBACK_ENABLED = true;
 
 let hlsClassPromise = null;
 
@@ -436,8 +518,8 @@ function loadHlsClass() {
 
 export default {
   name: 'VideoPlayer',
-  components: { ControlBar, DanmakuLayer, SubtitleLayer, Anime4KCanvas, CastDialog, WatchTogetherPanel },
-  mixins: [playerPlatformIntegration],
+  components: { ControlBar, DanmakuLayer, SubtitleLayer, Anime4KCanvas, CastDialog, WatchTogetherPanel, ViewingNotebookPanel, EpisodeDnaPanel },
+  mixins: [playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats],
   emits: ['video-ended', 'next-episode', 'open-enhanced-player', 'open-settings'],
   props: {
     // 是否有剧集列表（控制下一集按钮显隐），由父视图传入
@@ -489,11 +571,16 @@ export default {
       frameRateSamples: [],
       progressSaveTimer: null,
       hlsErrorCount: 0,
+      hlsRecoveryAttemptPending: false,
       hlsRecoveryWatchdog: null,
+      playbackStartupWatchdog: null,
+      nativeFallbackConfirmationPending: false,
       maxHlsRecoveryAttempts: 3,
       maxFallbackSourceAttempts: 3,
       triedFallbackSourceIds: [],
       fallbackRequestToken: 0,
+      fallbackCyclePromise: null,
+      fallbackCycleGeneration: -1,
       autoRecovering: false,
       recoveryMessage: '',
       lastPlaybackFailure: null,
@@ -503,7 +590,12 @@ export default {
       reportedPlaybackFailureKey: '',
       reportedAdvertisingKeys: [],
       mediaLoadGeneration: 0,
+      activeMediaGeneration: -1,
+      activeMediaMode: '',
+      activeMediaUrl: '',
+      playbackTransitionToken: 0,
       playbackIntent: false,
+      playRetryCount: 0,
       suppressPauseEventsUntil: 0,
       unexpectedPauseRecoveryTimer: null,
       pendingResumeTime: 0,
@@ -526,15 +618,34 @@ export default {
       sourcePanelVisible: false,
       sourcePanelLoading: false,
       sourcePanelError: '',
+      // 正在解析的候选（点击换源后到 playVideo 前的反馈状态）
+      sourcePanelResolving: null,
       sourcePanelRequestToken: 0,
       sourceCandidates: [],
       sourceSkipped: [],
+      sakuraRoute: createSakuraRouteSession(),
+      notebookVisible: false,
+      // 当前进集的手帐时光签（进度条标记数据源）
+      noteMarkers: [],
+      _noteMarkersToken: 0,
+      // ===== Episode DNA P1 =====
+      // DNA 面板是否可见
+      dnaVisible: false,
+      // Worker 产出的片头候选（仅建议，用户在面板中确认后生效）
+      dnaCandidates: [],
+      // 作品级自动跳过规则（三集稳定确认后由数据库升级）
+      dnaAutoSkipRule: null,
+      // 本集已应用过自动跳过的标记（identity.key），避免重复 seek
+      dnaAutoSkippedKey: '',
+      _dnaRuleToken: 0,
       qualityLevels: [], // hls.js 可用画质列表
       currentQuality: -1, // -1=自动, 0..n=指定画质索引
       _timeUpdateFrame: null,
       _lastCommittedTime: 0,
       _lastDurationCommit: 0,
       _lastBufferProgress: 0,
+      lastPlaybackProgressAt: 0,
+      lastPlaybackProgressTime: 0,
       _lastMouseMoveAt: 0,
       _volumeSaveTimer: null,
       // ===== Phase 5: 播放状态机 =====
@@ -563,26 +674,21 @@ export default {
       // 投屏对话框是否可见
       castDialogVisible: false,
       // 是否正在投屏（用于 ControlBar 按钮高亮）
-      casting: false,
-      // ===== 一起看（同步播放）相关 =====
-      // 一起看面板是否可见
-      watchTogetherPanelVisible: false,
-      // 当前是否在房间中（用于 ControlBar 按钮高亮）
-      watchTogetherActive: false,
-      // 房间信息（含 isHost 字段，决定本机是主机还是成员）
-      wtRoomInfo: { isHost: false, roomCode: null },
-      // 主机周期广播状态的定时器
-      wtHostBroadcastTimer: null,
-      // 成员同步节流：上次 seek 时间，避免频繁 seek 卡顿
-      wtLastSeekAt: 0,
-      // 成员正在应用主机同步状态时，本地播放事件不应再触发广播
-      wtApplyingRemoteState: false,
-      // 主进程消息订阅取消函数
-      wtUnsubscribe: null
+      casting: false
+      // "一起看"相关状态与方法见 mixins/watchTogether.js
     };
   },
   computed: {
     ...mapGetters('player', ['currentVideo', 'isPlaying', 'isFullscreen', 'currentTime', 'duration', 'volume', 'playbackRate']),
+    // 各源在候选面板中出现的线路数：同源多线路时在候选上标注线路名
+    sourceLineCounts() {
+      const counts = {};
+      for (const candidate of this.sourceCandidates || []) {
+        if (!candidate?.sourceId) continue;
+        counts[candidate.sourceId] = (counts[candidate.sourceId] || 0) + 1;
+      }
+      return counts;
+    },
     ...mapGetters('settings', [
       'autoPlay', 'rememberPlaybackRate', 'videoQuality', 'seekStepSeconds',
       // 弹幕设置
@@ -670,6 +776,22 @@ export default {
     currentSourceAdReported() {
       return !!this.currentAdvertisingKey && this.reportedAdvertisingKeys.includes(this.currentAdvertisingKey);
     },
+    currentEpisodeIdentity() {
+      return createEpisodeIdentity(this.currentVideo || {});
+    },
+    playbackMediaKey() {
+      const video = this.currentVideo;
+      if (!video?.url) return '';
+      return [
+        video.url,
+        video.sourceId || video.anime?.sourceId || video.anime?.source || '',
+        video.lineId || video.episode?.lineId || '',
+        video.episodeId || video.episode?.id || video.episode?.index || ''
+      ].join('|');
+    },
+    routeStatus() {
+      return describeSakuraRoute(this.sakuraRoute);
+    },
     danmakuAnimeMetadata() {
       return this.currentVideo?.anime || {};
     },
@@ -677,18 +799,7 @@ export default {
       const configured = this.danmakuProviders || {};
       return ['bilibili', 'acfun', 'dandanplay', 'custom'].filter(id => configured[id] !== false);
     },
-    // 创建房间时传递给 WatchTogetherPanel 的当前视频信息
-    wtVideoInfoForRoom() {
-      const v = this.currentVideo;
-      if (!v) return null;
-      return {
-        title: v.title || '',
-        url: v.url || '',
-        animeName: v.anime?.name || '',
-        episodeTitle: v.episode?.title || '',
-        episodeIndex: v.episode?.index ?? -1
-      };
-    },
+    // wtVideoInfoForRoom 见 mixins/watchTogether.js
     // ===== Phase 5: 失败分类 =====
     classifiedFailure() {
       return classifyPlaybackFailure(this.lastPlaybackFailure);
@@ -725,6 +836,7 @@ export default {
     }
   },
   methods: {
+    formatLineName,
     formatCandidateQuality,
     formatMatchType,
     candidateHealthClass,
@@ -749,6 +861,25 @@ export default {
       'updateDanmakuFontSize',
       'updateSubtitleFontSize'
     ]),
+
+    ensureSakuraRouteSession() {
+      const identity = this.currentEpisodeIdentity;
+      const sourceId = this.getCurrentSourceId();
+      const sourceName = this.currentSourceLabel;
+      if (!this.sakuraRoute?.id || this.sakuraRoute.episodeKey !== identity.key) {
+        this.sakuraRoute = createSakuraRouteSession({
+          episodeKey: identity.key,
+          sourceId,
+          sourceName
+        });
+      } else if (sourceId && this.sakuraRoute.phase === 'idle') {
+        this.sakuraRoute = updateSakuraRoute(this.sakuraRoute, {
+          currentSourceId: sourceId,
+          currentSourceName: sourceName
+        });
+      }
+      return this.sakuraRoute;
+    },
 
     scheduleVideoInitialization(delay = 120) {
       this.clearTrackedTimers();
@@ -781,6 +912,7 @@ export default {
       this.beginPlaybackSession(generation, url);
       // 进入 loading 状态：URL 已就绪，开始加载视频
       this.setPlaybackState('loading');
+      this.schedulePlaybackStartupWatchdog(generation, url);
 
       this.trackTimer(setTimeout(() => {
         if (generation !== this.mediaLoadGeneration || this.currentVideo?.url !== url) return;
@@ -792,63 +924,18 @@ export default {
       }, 80));
     },
 
-    /**
-     * Phase 5: 统一播放状态机入口
-     * 状态：idle | resolving | resolved | loading | playing | recovering | failed
-     * - idle: 无视频
-     * - resolving: 正在调用 PlaybackResolverService 解析 URL（由 PlayerWindow 触发）
-     * - resolved: URL 已解析完成，等待 initializeVideo 加载
-     * - loading: 视频正在加载（hls.js / native 正在拉流）
-     * - playing: 视频已就绪，可播放
-     * - recovering: 自动换源中
-     * - failed: 播放失败，需要用户介入
-     */
-    setPlaybackState(state) {
-      this.playbackState = state;
-      // 同步 legacy 标志位，保持向后兼容
-      switch (state) {
-        case 'idle':
-          this.loading = false;
-          this.error = null;
-          this.autoRecovering = false;
-          break;
-        case 'resolving':
-          this.loading = true;
-          this.error = null;
-          this.autoRecovering = false;
-          break;
-        case 'resolved':
-          // resolved 状态极短，立即进入 loading
-          this.loading = true;
-          break;
-        case 'loading':
-          this.loading = true;
-          this.error = null;
-          this.autoRecovering = false;
-          break;
-        case 'playing':
-          this.loading = false;
-          this.error = null;
-          this.autoRecovering = false;
-          break;
-        case 'recovering':
-          this.autoRecovering = true;
-          this.error = null;
-          this.loading = false;
-          break;
-        case 'failed':
-          this.loading = false;
-          this.autoRecovering = false;
-          break;
-        default:
-          break;
-      }
-    },
-
     forceStopAndClean(reason = 'cleanup') {
+      // Clear ownership before touching <video>; Chromium may synchronously emit
+      // error/pause while src is removed and those events belong to the old URL.
+      this.activeMediaGeneration = -1;
+      this.activeMediaMode = '';
+      this.activeMediaUrl = '';
       this.finalizePlaybackSession(reason);
       this.stopPlaybackStats(true);
       this.clearHlsRecoveryWatchdog();
+      this.clearPlaybackStartupWatchdog();
+      // Episode DNA：切源/清理时静默销毁采集器（不触发分析）
+      this.stopDnaCollection(true);
       if (this.unexpectedPauseRecoveryTimer) {
         clearTimeout(this.unexpectedPauseRecoveryTimer);
         this.unexpectedPauseRecoveryTimer = null;
@@ -886,6 +973,9 @@ export default {
       this.lastPlaybackFailure = null;
       this.lastAutoFallbackCandidate = null;
       this.hlsErrorCount = 0;
+      this.hlsRecoveryAttemptPending = false;
+      this.nativeFallbackConfirmationPending = false;
+      this.playRetryCount = 0;
       if (this.preserveFallbackSourceIdsOnce) {
         this.preserveFallbackSourceIdsOnce = false;
       } else {
@@ -904,12 +994,16 @@ export default {
       this._lastCommittedTime = 0;
       this._lastDurationCommit = 0;
       this._lastBufferProgress = 0;
+      this.lastPlaybackProgressAt = 0;
+      this.lastPlaybackProgressTime = 0;
       // 切换视频时重置缓冲进度，避免显示上一集的缓冲条
       this.bufferProgress = 0;
     },
 
     isHLSStream(url) {
-      return url.includes('.m3u8') || url.toLowerCase().includes('hls');
+      const value = String(url || '');
+      return /\.m3u8(?:[?#]|$)|[?&](?:format|type|ext)=m3u8(?:&|$)/i.test(value)
+        || /[?&]media=hls(?:&|$)/i.test(value);
     },
 
     applyHlsBufferPolicy(overrides = {}) {
@@ -919,17 +1013,11 @@ export default {
     async initHLSPlayer(url, generation = this.mediaLoadGeneration) {
       const video = this.$refs.videoElement;
 
-      if (video?.canPlayType('application/vnd.apple.mpegurl')) {
-        if (generation !== this.mediaLoadGeneration) return;
-        video.src = url;
-        this.startBufferedPlayback(generation, 'native-hls');
-        return;
-      }
-
       let Hls;
       try {
         Hls = await loadHlsClass();
       } catch (error) {
+        if (generation !== this.mediaLoadGeneration || this.currentVideo?.url !== url) return;
         this.lastPlaybackFailure = {
           source: 'hls',
           reason: 'hls-loader-unavailable',
@@ -953,7 +1041,7 @@ export default {
         }
 
         const bufferPolicy = this.applyHlsBufferPolicy({ live: false, bitrate: 0 });
-        this.hls = new Hls({
+        const hlsInstance = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
           ...toHlsBufferConfig(bufferPolicy),
@@ -961,14 +1049,18 @@ export default {
           capLevelToPlayerSize: false,
           enableInterstitialPlayback: false
         });
+        this.hls = hlsInstance;
+        this.activeMediaGeneration = generation;
+        this.activeMediaMode = 'hls';
+        this.activeMediaUrl = url;
 
-        this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (generation !== this.mediaLoadGeneration || !this.hls) return;
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (generation !== this.mediaLoadGeneration || this.hls !== hlsInstance) return;
           this.error = null;
 
           // 画质优化：根据用户设置选择初始画质
           // hls.levels 按 bitrate 升序排列，索引越大画质越高
-          const levels = this.hls.levels || [];
+          const levels = hlsInstance.levels || [];
           this.qualityLevels = levels.map((lv, i) => ({
             index: i,
             label: this._formatQualityLabel(lv, i, levels.length),
@@ -981,14 +1073,14 @@ export default {
             // 多画质：根据用户设置选择
             // videoQuality: 'high'=最高, 'auto'=自动, 'low'=最低（省流）
             if (this.videoQuality === 'low' && levels.length > 0) {
-              this.hls.currentLevel = 0; // 最低画质
+              hlsInstance.currentLevel = 0; // 最低画质
               this.currentQuality = 0;
             } else if (this.videoQuality === 'auto') {
-              this.hls.currentLevel = -1; // 自动（由 hls.js 根据带宽决定）
+              hlsInstance.currentLevel = -1; // 自动（由 hls.js 根据带宽决定）
               this.currentQuality = -1;
             } else {
               // 'high' 或默认：选最高画质
-              this.hls.currentLevel = levels.length - 1;
+              hlsInstance.currentLevel = levels.length - 1;
               this.currentQuality = levels.length - 1;
             }
           } else {
@@ -1004,40 +1096,59 @@ export default {
           this.startBufferedPlayback(generation, 'manifest-parsed');
         });
 
-        this.hls.on(Hls.Events.LEVEL_LOADED, (_, data) => {
-          if (generation !== this.mediaLoadGeneration) return;
+        hlsInstance.on(Hls.Events.LEVEL_LOADED, (_, data) => {
+          if (generation !== this.mediaLoadGeneration || this.hls !== hlsInstance) return;
           this.updateMarkedAdRanges(data?.details);
           this.applyHlsBufferPolicy({ live: data?.details?.live === true });
         });
 
         // 监听画质切换，同步 currentQuality 给 ControlBar
-        this.hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+        hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+          if (generation !== this.mediaLoadGeneration || this.hls !== hlsInstance) return;
           this.currentQuality = data.level;
           this.updateManifestFrameRate(data.level);
-          const level = this.hls?.levels?.[data.level];
+          const level = hlsInstance.levels?.[data.level];
           this.applyHlsBufferPolicy({ bitrate: Number(level?.bitrate) || 0 });
         });
 
-        this.hls.on(Hls.Events.ERROR, (event, data) => {
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+          if (generation !== this.mediaLoadGeneration || this.hls !== hlsInstance) return;
           if (data.fatal) {
-            this.handleHLSError(data, Hls);
+            this.handleHLSError(data, Hls, hlsInstance, generation);
           }
         });
 
-        this.hls.attachMedia(video);
-        this.hls.loadSource(url);
+        hlsInstance.attachMedia(video);
+        hlsInstance.loadSource(url);
 
-      } else {
+      } else if (video?.canPlayType('application/vnd.apple.mpegurl')) {
         this.initNativePlayer(url, generation);
+      } else {
+        const failure = {
+          source: 'hls',
+          reason: 'hls-unsupported',
+          message: '当前运行环境不支持 HLS 播放',
+          userMessage: '当前运行环境不支持该视频格式',
+          hint: '请尝试增强播放或切换其他线路。'
+        };
+        this.recordPlaybackFailure(failure);
+        this.setPlaybackState('recovering');
+        this.autoFallbackToOtherSource(failure);
       }
     },
 
     initNativePlayer(url, generation = this.mediaLoadGeneration) {
       const video = this.$refs.videoElement;
       if (!video || generation !== this.mediaLoadGeneration) return;
+      this.activeMediaGeneration = -1;
+      this.activeMediaMode = '';
+      this.activeMediaUrl = '';
       video.removeAttribute('src');
       video.load();
       video.src = url;
+      this.activeMediaGeneration = generation;
+      this.activeMediaMode = 'native';
+      this.activeMediaUrl = url;
       this.error = null;
 
       // 移除上一次未触发的 canplay 监听器，避免快速切换视频时累积
@@ -1052,78 +1163,6 @@ export default {
       };
       this._nativeCanPlayHandler = onCanPlay;
       video.addEventListener('canplay', onCanPlay);
-    },
-
-    handleHLSError(data, Hls) {
-      this.hlsErrorCount++;
-      if (this.hlsErrorCount > this.maxHlsRecoveryAttempts) {
-        this.clearHlsRecoveryWatchdog();
-        const failure = this.createHlsFailure(data, Hls);
-        this.recordPlaybackFailure(failure);
-        if (this.hls) {
-          this.hls.destroy();
-          this.hls = null;
-        }
-        this.setPlaybackState('recovering');
-        this.autoFallbackToOtherSource(failure);
-        return;
-      }
-
-      switch (data.type) {
-        case Hls.ErrorTypes.NETWORK_ERROR:
-          this.recoveryMessage = `视频网络异常，正在尝试恢复 (${this.hlsErrorCount}/${this.maxHlsRecoveryAttempts})`;
-          this.setPlaybackState('recovering');
-          this.trackTimer(setTimeout(() => this.hls?.startLoad(), 1000));
-          this.scheduleHlsRecoveryWatchdog(data, Hls);
-          break;
-        case Hls.ErrorTypes.MEDIA_ERROR:
-          this.recoveryMessage = `视频解码异常，正在尝试恢复 (${this.hlsErrorCount}/${this.maxHlsRecoveryAttempts})`;
-          this.setPlaybackState('recovering');
-          this.trackTimer(setTimeout(() => this.hls?.recoverMediaError(), 1000));
-          this.scheduleHlsRecoveryWatchdog(data, Hls);
-          break;
-        default:
-          this.clearHlsRecoveryWatchdog();
-          this.recordPlaybackFailure(this.createHlsFailure(data, Hls));
-          if (this.hls) {
-            this.hls.destroy();
-            this.hls = null;
-          }
-          this.setPlaybackState('recovering');
-          this.autoFallbackToOtherSource(this.lastPlaybackFailure);
-          break;
-      }
-    },
-
-    createHlsFailure(data, Hls) {
-      // Phase 5: 使用 classifyHlsFailure 获得带分类的失败对象
-      const failure = classifyHlsFailure(data, Hls);
-      failure.attempts = this.hlsErrorCount;
-      if (data?.type === Hls.ErrorTypes.NETWORK_ERROR) {
-        failure.userMessage = '视频加载失败，正在尝试自动切换其他源';
-      } else if (data?.type === Hls.ErrorTypes.MEDIA_ERROR) {
-        failure.userMessage = '视频解码失败，正在尝试自动切换其他源';
-      }
-      return failure;
-    },
-
-    createNativeVideoFailure() {
-      const video = this.$refs.videoElement;
-      return describeNativeVideoError(video?.error);
-    },
-
-    recordPlaybackFailure(failure) {
-      this.lastPlaybackFailure = failure;
-      this.reportSourcePlaybackResult(false, failure?.reason || 'playback-failed', failure);
-    },
-
-    formatFailureForDisplay(failure) {
-      return formatPlaybackFailureForDisplay(failure);
-    },
-
-    finalPlaybackErrorMessage(failure) {
-      const base = failure?.message || '视频播放失败';
-      return `自动换源未成功：${base}`;
     },
 
     /**
@@ -1151,8 +1190,115 @@ export default {
       this.currentQuality = level;
     },
 
-    getCurrentSourceId() {
-      return this.currentVideo?.anime?.source || this.currentVideo?.sourceId || '';
+    /** 加载当前剧集的手帐时光签 → 进度条标记（带 token 防止切集后旧结果覆盖） */
+    async loadNoteMarkers() {
+      const identity = this.currentEpisodeIdentity;
+      const episodeKey = identity?.key;
+      if (!episodeKey) { this.noteMarkers = []; return; }
+      const token = ++this._noteMarkersToken;
+      try {
+        const notes = await window.electronAPI?.viewingNoteList?.(episodeKey, 300) || [];
+        if (token !== this._noteMarkersToken) return; // 已切到其他集，丢弃
+        this.noteMarkers = (Array.isArray(notes) ? notes : [])
+          .map(note => ({
+            id: note.id,
+            position: Number(note.position) || 0,
+            category: note.category || '',
+            note: note.note || ''
+          }))
+          .sort((a, b) => a.position - b.position);
+      } catch (error) {
+        if (token === this._noteMarkersToken) this.noteMarkers = [];
+      }
+    },
+
+    // ===== Episode DNA P1：特征采集 → Worker 分析 → 候选确认 =====
+
+    /** 播放开始后启动低频被动采集（每集仅一次，采集 4 分钟窗口） */
+    startDnaCollection() {
+      const video = this.$refs.videoElement;
+      if (this._dnaCollector || !video || !this.currentEpisodeIdentity?.key) return;
+      if (this.casting || this.watchTogetherActive) return; // 投屏/同步播放时不采集
+      try {
+        this._dnaCollector = new EpisodeDnaCollector(video, {
+          windowMs: 500,
+          maxSeconds: 240,
+          onDone: (features) => this.onDnaCollectionDone(features)
+        });
+        this._dnaCollector.start();
+      } catch (_) {
+        this._dnaCollector = null;
+      }
+    },
+
+    /** 采集完成（或超窗）后交给 Worker 分析片头候选 */
+    stopDnaCollection(silent = false) {
+      if (!this._dnaCollector) return;
+      const collector = this._dnaCollector;
+      this._dnaCollector = null;
+      if (silent) collector.destroy();
+      else collector.stop();
+    },
+
+    async onDnaCollectionDone(features) {
+      if (this._dnaCollector) {
+        this._dnaCollector = null;
+      }
+      if (!features) return; // 数据不足或全降级，静默放弃
+      const episodeKey = this.currentEpisodeIdentity?.key;
+      try {
+        const candidates = await analyzeIntroFeatures(features);
+        if (!episodeKey || episodeKey !== this.currentEpisodeIdentity?.key) return; // 已切集，丢弃
+        this.dnaCandidates = Array.isArray(candidates) ? candidates : [];
+      } catch (_) {
+        // Worker 异常不影响播放，候选保持为空
+      }
+    },
+
+    /** 加载作品级自动跳过规则（三集稳定确认后生效） */
+    async loadDnaAutoSkipRule() {
+      const identity = this.currentEpisodeIdentity;
+      if (!identity?.workKey) {
+        this.dnaAutoSkipRule = null;
+        return;
+      }
+      const token = ++this._dnaRuleToken;
+      try {
+        const rule = await window.electronAPI?.episodeSegmentAutoSkipRule?.(identity.bgmId, identity.workKey);
+        if (token !== this._dnaRuleToken) return;
+        this.dnaAutoSkipRule = rule || null;
+      } catch (_) {
+        if (token === this._dnaRuleToken) this.dnaAutoSkipRule = null;
+      }
+    },
+
+    /** 面板保存后规则升级（达到 3 集稳定）时立即生效 */
+    onDnaRuleUpdated(rule) {
+      this.dnaAutoSkipRule = rule || null;
+      this.dnaAutoSkippedKey = '';
+    },
+
+    /** 三集稳定确认后的片头自动跳过（timeupdate 驱动） */
+    maybeAutoSkipDnaIntro(currentTime) {
+      const rule = this.dnaAutoSkipRule;
+      const episodeKey = this.currentEpisodeIdentity?.key;
+      if (!rule || !episodeKey || this.dnaAutoSkippedKey === episodeKey) return;
+      // 一起看同步中不自动跳，避免破坏房间时钟
+      if (this.watchTogetherActive || this.casting) return;
+      const start = Number(rule.start) || 0;
+      const end = Number(rule.end) || 0;
+      if (end <= start || currentTime < start || currentTime >= end - 0.5) return;
+      const video = this.$refs.videoElement;
+      if (!video) return;
+      this.dnaAutoSkippedKey = episodeKey;
+      this.markIntentionalSeek?.();
+      video.currentTime = Math.min(end + 0.05, video.duration || end + 0.05);
+      this.adSkipNotice = `已自动跳过片头 ${Math.max(1, Math.round(end - currentTime))} 秒`;
+      if (this._adSkipNoticeTimer) clearTimeout(this._adSkipNoticeTimer);
+      this._adSkipNoticeTimer = setTimeout(() => {
+        this._adSkipNoticeTimer = null;
+        this.adSkipNotice = '';
+      }, 2200);
     },
 
     getCurrentProviderId() {
@@ -1227,6 +1373,7 @@ export default {
 
     beginPlaybackSession(generation, url) {
       const now = Date.now();
+      this.ensureSakuraRouteSession();
       this.playbackSession = {
         generation,
         url,
@@ -1451,37 +1598,11 @@ export default {
       poll();
     },
 
-    async requestPlayback(trigger = 'auto') {
-      const video = this.$refs.videoElement;
-      if (!video || this.casting) return false;
-      this.playbackIntent = true;
-      try {
-        await video.play();
-        return true;
-      } catch (error) {
-        if (error?.name !== 'AbortError') {
-          this.playbackIntent = false;
-          this.setPlaying(false);
-          this.showCenterPlay = true;
-          this.revealControls(false);
-          console.warn(`[VideoPlayer] play rejected (${trigger}):`, error?.message || error);
-        }
-        return false;
-      }
-    },
-
-    pausePlayback(reason = 'user') {
-      const video = this.$refs.videoElement;
-      if (!video) return;
-      this.playbackIntent = false;
-      if (reason !== 'user') this.suppressPauseEventsUntil = performance.now() + 500;
-      video.pause();
-    },
-
     closeSourcePanel() {
       this.sourcePanelRequestToken += 1;
       this.sourcePanelVisible = false;
       this.sourcePanelLoading = false;
+      this.sourcePanelResolving = null;
       this.sourcePanelError = '';
     },
 
@@ -1500,25 +1621,31 @@ export default {
       this.sourcePanelError = '';
       this.sourceCandidates = [];
       this.sourceSkipped = [];
+      this.sakuraRoute = beginRouteProbe(this.ensureSakuraRouteSession());
 
       try {
         const result = await window.electronAPI.cmsMultiSelectBestEpisodeSource(animeName, {
           episodeTitle: this.currentVideo?.episode?.title || '',
           episodeIndex: this.currentVideo?.episode?.index ?? -1,
           excludeSourceIds,
-          allowFirstFallback: true
+          allowFirstFallback: true,
+          routePreference: this.$store.state.settings.routePreference || 'stability'
         });
         if (requestToken !== this.sourcePanelRequestToken || result?.cancelled) return;
 
         const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
         this.sourceCandidates = candidates.filter(candidate => candidate?.url);
         this.sourceSkipped = result?.skipped || [];
+        this.sakuraRoute = completeRouteProbe(this.sakuraRoute, this.sourceCandidates, this.sourceSkipped);
+        // SakuraRoute P1：候选面板打开后并行预热前两条候选线路（清单+极小分片），用户点击播放时即可命中缓存
+        this.preheatTopCandidates(this.sourceCandidates);
         if (result?.error && this.sourceCandidates.length === 0) {
           this.sourcePanelError = result.error;
         }
       } catch (error) {
         if (requestToken !== this.sourcePanelRequestToken) return;
         this.sourcePanelError = error.message || '加载候选源失败';
+        this.sakuraRoute = failRouteAttempt(this.sakuraRoute, error);
       } finally {
         if (requestToken === this.sourcePanelRequestToken) {
           this.sourcePanelLoading = false;
@@ -1526,18 +1653,42 @@ export default {
       }
     },
 
-    async playSourceCandidate(candidate) {
+    // SakuraRoute P1：并行预热前两条候选线路，fire-and-forget，失败不影响选线流程
+    preheatTopCandidates(candidates = []) {
+      if (!window.electronAPI?.cmsPreheatCandidates) return;
+      const top = (Array.isArray(candidates) ? candidates : [])
+        .slice(0, 2)
+        .map(candidate => ({ sourceId: candidate?.sourceId || '', url: candidate?.url || '' }))
+        .filter(item => item.url && /^https?:\/\//i.test(item.url));
+      if (top.length === 0) return;
+      window.electronAPI.cmsPreheatCandidates(top)
+        .then(result => {
+          if (result?.preheated > 0) {
+            this.sakuraRoute = { ...this.sakuraRoute, preheatedLines: result.preheated };
+          }
+        })
+        .catch(() => { /* 预热失败静默忽略 */ });
+    },
+
+    async playSourceCandidate(candidate, options = {}) {
       const plainCandidate = toIpcPlainObject(candidate, null);
       if (!plainCandidate?.url || !plainCandidate?.anime || !plainCandidate?.episode) {
         this.sourcePanelError = '候选源数据不完整';
         return false;
       }
 
+      const manualRequestToken = typeof options.isCurrent === 'function'
+        ? 0
+        : ++this.sourcePanelRequestToken;
+      const isCandidateCurrent = () => (
+        (manualRequestToken === 0 || manualRequestToken === this.sourcePanelRequestToken)
+        && (typeof options.isCurrent !== 'function' || options.isCurrent())
+      );
+
       try {
         const resumeAt = Number(this.$refs.videoElement?.currentTime) || Number(this.currentTime) || 0;
-        if (plainCandidate.sourceId && !this.triedFallbackSourceIds.includes(plainCandidate.sourceId)) {
-          this.triedFallbackSourceIds.push(plainCandidate.sourceId);
-        }
+        this.sakuraRoute = beginRouteSwitch(this.ensureSakuraRouteSession(), plainCandidate, resumeAt);
+        this.rememberFallbackAttempt(plainCandidate.sourceId, plainCandidate.providerId, plainCandidate.lineId);
         const anime = {
           ...plainCandidate.anime,
           source: plainCandidate.anime.source || plainCandidate.sourceId,
@@ -1550,6 +1701,11 @@ export default {
         let resolvedVideo = null;
         let videoUrl = plainCandidate.url;
         if (window.electronAPI?.playbackResolve) {
+          // 解析中反馈：慢源（分享页解析/webview 嗅探）需要数秒，无反馈会被误以为
+          // 没点上而重复点击，第二次点击的解析会把本次全局取消。
+          // 存原始引用（而非 plainCandidate 拷贝），保证模板 :class 高亮比对生效
+          this.sourcePanelResolving = candidate;
+          this.sourcePanelError = '';
           resolvedVideo = await window.electronAPI.playbackResolve({
             providerId: anime.providerId,
             sourceId: anime.sourceId,
@@ -1558,36 +1714,68 @@ export default {
             sourceAnimeId: String(anime.id || ''),
             episode
           });
+          if (!isCandidateCurrent()) return false;
           if (!resolvedVideo?.success || !resolvedVideo.url) {
+            // cancelled = 被更新的解析请求取代（如用户再次点击了其他候选），
+            // 不是该源的错误：静默丢弃，由更新的请求接管 UI
+            if (resolvedVideo?.category === 'cancelled') {
+              if (this.sourcePanelResolving === candidate) {
+                this.sourcePanelResolving = null;
+              }
+              return false;
+            }
             const reason = resolvedVideo?.error || '候选源视频地址不可用';
             this.sourcePanelVisible = true;
+            this.sourcePanelResolving = null;
             this.sourcePanelError = `${plainCandidate.sourceName || plainCandidate.sourceId || '候选源'}：${reason}`;
+            this.sakuraRoute = failRouteAttempt(this.sakuraRoute, reason);
             return false;
           }
           videoUrl = resolvedVideo.url;
         }
 
+        if (!isCandidateCurrent()) {
+          if (this.sourcePanelResolving === candidate) {
+            this.sourcePanelResolving = null;
+          }
+          return false;
+        }
+
         this.preserveFallbackSourceIdsOnce = true;
         this.sourcePanelVisible = false;
+        this.sourcePanelResolving = null;
         this.sourcePanelError = '';
         this.error = null;
-        this.lastAutoFallbackCandidate = plainCandidate;
         this.pendingResumeTime = resumeAt > 1 ? resumeAt : 0;
+
+        // Resolve first so a bad manual candidate does not interrupt the
+        // currently playing route. Once verified, atomically retire old media.
+        if (manualRequestToken !== 0) this.beginPlaybackTransition('source-candidate');
+        this.lastAutoFallbackCandidate = plainCandidate;
 
         await this.playVideo({
           title: `${anime.name} - ${episode.title}`,
           url: videoUrl,
           anime,
-          episode: { ...episode, index: episode.index ?? 0 },
+          episode: {
+            ...episode,
+            index: episode.index ?? 0,
+            lineId: plainCandidate.lineId || episode.lineId || ''
+          },
+          episodeIdentity: this.currentEpisodeIdentity,
           episodeId: episode.id || videoUrl,
           sourceId: plainCandidate.sourceId,
           sourceName: plainCandidate.sourceName,
+          lineId: plainCandidate.lineId || '',
           resolvedVideo
         });
         return true;
       } catch (error) {
+        if (!isCandidateCurrent()) return false;
         this.sourcePanelVisible = true;
+        this.sourcePanelResolving = null;
         this.sourcePanelError = error.message || '切换候选源失败';
+        this.sakuraRoute = failRouteAttempt(this.sakuraRoute, error);
         return false;
       }
     },
@@ -1705,14 +1893,21 @@ export default {
     },
 
     onTimeUpdate() {
+      if (!this.isCurrentMediaSession()) return;
       const video = this.$refs.videoElement;
       this.updateBufferAhead();
       if (!video || this._timeUpdateFrame) return;
       this._timeUpdateFrame = requestAnimationFrame(() => {
         this._timeUpdateFrame = null;
         const current = this.$refs.videoElement?.currentTime || 0;
+        if (current >= this.lastPlaybackProgressTime + 0.05) {
+          this.lastPlaybackProgressTime = current;
+          this.lastPlaybackProgressAt = performance.now();
+          this.clearPlaybackStartupWatchdog();
+        }
         if (current > 0 && !this.$refs.videoElement?.paused) this.markPlaybackSessionPlaying();
         this.maybeAutoSkipMarkedAd(current);
+        this.maybeAutoSkipDnaIntro(current);
         if (Math.abs(current - this._lastCommittedTime) < 0.22 && this.isPlaying) return;
         this._lastCommittedTime = current;
         this.setCurrentTime(current);
@@ -1720,6 +1915,7 @@ export default {
     },
 
     onLoadedMetadata() {
+      if (!this.isCurrentMediaSession()) return;
       this.samplePlaybackStats(true);
       if (this.$refs.videoElement && !this.isUpdatingDuration) {
         this.isUpdatingDuration = true;
@@ -1764,6 +1960,30 @@ export default {
     },
 
     onVideoEnded() {
+      if (!this.isCurrentMediaSession()) return;
+      this.clearPlaybackStartupWatchdog();
+      const video = this.$refs.videoElement;
+      if (isSuspiciousSniffedMediaEnd({
+        duration: video?.duration,
+        resolvedBy: this.currentVideo?.resolvedVideo?.resolvedBy
+      })) {
+        const failure = {
+          source: 'media-sniffer',
+          category: 'invalid-source',
+          reason: 'sniffed-short-media',
+          message: '\u7f51\u9875\u7ebf\u8def\u8fd4\u56de\u4e86\u8fc7\u77ed\u7684\u5a92\u4f53\u7247\u6bb5\uff0c\u53ef\u80fd\u662f\u5e7f\u544a\u6216\u9884\u544a\u7247',
+          userMessage: '\u68c0\u6d4b\u5230\u77ed\u7247\u6bb5\uff0c\u6b63\u5728\u5c1d\u8bd5\u5176\u4ed6\u7ebf\u8def',
+          hint: '\u64ad\u653e\u5668\u5df2\u963b\u6b62\u5c06\u77ed\u7247\u6bb5\u8bef\u5224\u4e3a\u6b63\u7247\u7ed3\u675f\u3002'
+        };
+        this.playbackIntent = false;
+        this.setPlaying(false);
+        this.showCenterPlay = true;
+        this.stopProgressSave();
+        this.recordPlaybackFailure(failure);
+        this.setPlaybackState('recovering');
+        this.autoFallbackToOtherSource(failure);
+        return;
+      }
       this.finalizePlaybackSession('ended');
       this.playbackIntent = false;
       this.setPlaying(false);
@@ -1775,6 +1995,7 @@ export default {
     },
 
     onWaiting() {
+      if (!this.isCurrentMediaSession()) return;
       // 如果已有视频画面（非初始加载），只标记缓冲中，保留最后一帧
       if (this.loading) return; // 初始加载中，不用管
       this.buffering = true;
@@ -1783,6 +2004,7 @@ export default {
     },
 
     onCanPlay() {
+      if (!this.isCurrentMediaSession()) return;
       this.updateBufferAhead();
       if (this.startupBuffering || this.smoothRebuffering) return;
       this.markPlaybackSessionPlaying(false);
@@ -1792,11 +2014,20 @@ export default {
       this.autoRecovering = false;
       this.recoveryMessage = '';
       this.lastPlaybackFailure = null;
+      this.hlsErrorCount = 0;
+      this.hlsRecoveryAttemptPending = false;
       this.setPlaybackState('playing');
+      this.sakuraRoute = markRouteStable(this.ensureSakuraRouteSession(), {
+        sourceId: this.getCurrentSourceId(),
+        sourceName: this.currentSourceLabel
+      });
       this.reportSourcePlaybackResult(true, 'canplay');
+      const video = this.$refs.videoElement;
+      if (this.playbackIntent && video?.paused) this.requestPlayback('canplay-ready');
     },
 
     onSeeked() {
+      if (!this.isCurrentMediaSession()) return;
       const video = this.$refs.videoElement;
       if (!video) return;
       const current = Number(video.currentTime) || 0;
@@ -1812,18 +2043,18 @@ export default {
     },
 
     onVideoError() {
+      if (!this.isCurrentMediaSession('native')) return;
+      const video = this.$refs.videoElement;
+      if (!video?.error) return;
+      this.clearPlaybackStartupWatchdog();
       this.loading = false;
       this.buffering = false;
-      if (this.hls && this.currentVideo?.url?.includes('.m3u8')) {
-        return;
-      }
       const failure = this.createNativeVideoFailure();
-      this.recordPlaybackFailure(failure);
-      this.setPlaybackState('recovering');
-      this.autoFallbackToOtherSource(failure);
+      this.scheduleNativeFallbackConfirmation(failure);
     },
 
     onProgress() {
+      if (!this.isCurrentMediaSession()) return;
       const video = this.$refs.videoElement;
       this.updateBufferAhead();
       if (!video || !video.buffered || !video.duration) return;
@@ -1852,7 +2083,9 @@ export default {
     },
 
     onPlay() {
+      if (!this.isCurrentMediaSession()) return;
       this.playbackIntent = true;
+      this.playRetryCount = 0;
       this.startupBuffering = false;
       this.smoothRebuffering = false;
       this.loading = false;
@@ -1863,9 +2096,12 @@ export default {
       this.showCenterPlay = false;
       this.startPlaybackStats();
       this.scheduleControlsHide();
+      // Episode DNA：播放开始后启动被动特征采集（每集一次）
+      this.startDnaCollection();
     },
 
     onPause() {
+      if (!this.isCurrentMediaSession()) return;
       this.pausePlaybackSession();
       const video = this.$refs.videoElement;
       const unexpected = this.playbackIntent
@@ -1917,9 +2153,40 @@ export default {
     },
 
     async autoFallbackToOtherSource(failure = this.lastPlaybackFailure) {
+      // 开关关闭：直接进入失败态展示错误，不做任何自动切换
+      if (!AUTO_FALLBACK_ENABLED) {
+        this.autoRecovering = false;
+        this.recoveryMessage = '';
+        // userMessage 尾部带"正在尝试切换其他源"，开关关闭时未发生切换，
+        // 用 message（去掉该尾缀的前半句）避免误导
+        this.error = failure?.message || failure?.userMessage || '视频播放失败';
+        this.setPlaybackState('failed');
+        return false;
+      }
+      const generation = this.mediaLoadGeneration;
+      if (this.fallbackCyclePromise && this.fallbackCycleGeneration === generation) {
+        return this.fallbackCyclePromise;
+      }
+
+      const cycle = this.runAutoFallbackCycle(failure, generation);
+      this.fallbackCyclePromise = cycle;
+      this.fallbackCycleGeneration = generation;
+      try {
+        return await cycle;
+      } finally {
+        if (this.fallbackCyclePromise === cycle) {
+          this.fallbackCyclePromise = null;
+          this.fallbackCycleGeneration = -1;
+        }
+      }
+    },
+
+    async runAutoFallbackCycle(failure = this.lastPlaybackFailure, generation = this.mediaLoadGeneration) {
+      if (generation !== this.mediaLoadGeneration) return false;
       if (this.triedFallbackSourceIds.length >= this.maxFallbackSourceAttempts) {
         this.autoRecovering = false;
         this.error = this.finalPlaybackErrorMessage(failure);
+        this.sakuraRoute = failRouteAttempt(this.ensureSakuraRouteSession(), failure?.message || this.error, true);
         this.setPlaybackState('failed');
         return false;
       }
@@ -1927,33 +2194,40 @@ export default {
       this.setPlaybackState('recovering');
       this.error = null;
       this.recoveryMessage = '正在自动选择可用播放源...';
-      const switched = await this.tryFallbackToOtherSource();
+      const switched = await this.tryFallbackToOtherSource(generation);
+      if (generation !== this.mediaLoadGeneration) return false;
       if (!switched) {
         this.autoRecovering = false;
         this.error = this.finalPlaybackErrorMessage(failure);
+        this.sakuraRoute = failRouteAttempt(this.ensureSakuraRouteSession(), failure?.message || this.error, true);
         this.setPlaybackState('failed');
       }
       return switched;
     },
 
-    async tryFallbackToOtherSource() {
+    async tryFallbackToOtherSource(generation = this.mediaLoadGeneration) {
       const animeName = this.currentVideo?.anime?.name;
       if (!animeName) return false;
 
       const fallbackToken = ++this.fallbackRequestToken;
-      const isLatestFallback = () => fallbackToken === this.fallbackRequestToken;
+      const isLatestFallback = () => fallbackToken === this.fallbackRequestToken
+        && generation === this.mediaLoadGeneration;
       const currentEpTitle = this.currentVideo?.episode?.title || '';
       const currentEpIndex = this.currentVideo?.episode?.index ?? -1;
       const currentSourceId = this.getCurrentSourceId();
-      if (currentSourceId && !this.triedFallbackSourceIds.includes(currentSourceId)) {
-        this.triedFallbackSourceIds.push(currentSourceId);
-      }
+      // 已知当前线路时按线路排除（当前源的其他线路仍可参与回退），否则整源排除
+      this.rememberFallbackAttempt(
+        currentSourceId,
+        this.currentVideo?.providerId || this.currentVideo?.anime?.providerId,
+        this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || ''
+      );
       const excludeSourceIds = [...new Set(this.triedFallbackSourceIds.filter(Boolean))];
 
       try {
         this.autoRecovering = true;
         this.error = null;
         this.recoveryMessage = '正在探测其他播放源...';
+        this.sakuraRoute = beginRouteProbe(this.ensureSakuraRouteSession());
         const result = await window.electronAPI.cmsMultiSelectBestEpisodeSource(animeName, {
           episodeTitle: currentEpTitle,
           episodeIndex: currentEpIndex,
@@ -1964,130 +2238,47 @@ export default {
 
         this.sourceCandidates = Array.isArray(result?.candidates) ? result.candidates.filter(candidate => candidate?.url) : [];
         this.sourceSkipped = result?.skipped || [];
+        this.sakuraRoute = completeRouteProbe(this.sakuraRoute, this.sourceCandidates, this.sourceSkipped);
+        // 主进程已按线路过滤 `sourceId|lineId` 排除 key，这里再按本地 tried 列表
+        // 过滤一遍（面板手动点过的线路同样不再出现在自动回退候选里）
 
         const candidates = [result?.best, ...this.sourceCandidates]
           .filter(candidate => candidate?.url && candidate?.anime && candidate?.episode)
+          .filter(candidate => {
+            const candidateIds = [candidate.sourceId, candidate.providerId]
+              .map(id => this.normalizeFallbackSourceId(id))
+              .filter(Boolean);
+            if (candidateIds.some(id => excludeSourceIds.includes(id))) return false;
+            // 线路级 key（`sourceId|lineId`）：只排除该线路，同源其他线路保留
+            if (candidate.lineId) {
+              const lineKey = `${this.normalizeFallbackSourceId(candidate.sourceId)}|${candidate.lineId}`;
+              if (excludeSourceIds.includes(lineKey)) return false;
+            }
+            return true;
+          })
           .filter((candidate, index, items) => items.findIndex(item => (
-            item.sourceId === candidate.sourceId && item.url === candidate.url
+            item.sourceId === candidate.sourceId && item.lineId === candidate.lineId && item.url === candidate.url
           )) === index)
           .slice(0, this.maxFallbackSourceAttempts);
         for (const candidate of candidates) {
           if (!isLatestFallback()) return false;
-          this.recoveryMessage = `正在验证 ${candidate.sourceName || candidate.sourceId || '候选源'}...`;
-          if (await this.playSourceCandidate(candidate)) return true;
+          const lineLabel = candidate.lineId && candidates.filter(c => c.sourceId === candidate.sourceId).length > 1
+            ? ` · ${candidate.lineId}`
+            : '';
+          this.recoveryMessage = `正在验证 ${candidate.sourceName || candidate.sourceId || '候选源'}${lineLabel}...`;
+          if (await this.playSourceCandidate(candidate, { isCurrent: isLatestFallback })) return true;
         }
 
         if (!isLatestFallback()) return false;
         this.recoveryMessage = '其他源未找到可播放的链接';
+        this.sakuraRoute = failRouteAttempt(this.sakuraRoute, this.recoveryMessage, true);
         return false;
       } catch (err) {
         if (!isLatestFallback()) return false;
         this.recoveryMessage = '换源失败：' + (err.message || '未知错误');
+        this.sakuraRoute = failRouteAttempt(this.sakuraRoute, err, true);
         return false;
       }
-    },
-
-    readDecodedFrameCount(video) {
-      const quality = video?.getVideoPlaybackQuality?.();
-      if (Number.isFinite(quality?.totalVideoFrames)) {
-        this.playbackTotalFrames = Number(quality.totalVideoFrames) || 0;
-        this.playbackDroppedFrames = Number(quality.droppedVideoFrames) || 0;
-        return quality.totalVideoFrames;
-      }
-      return Number.isFinite(video?.webkitDecodedFrameCount) ? video.webkitDecodedFrameCount : null;
-    },
-
-    samplePlaybackStats(resetBaseline = false) {
-      const video = this.$refs.videoElement;
-      if (!video) return;
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
-        this.playbackWidth = video.videoWidth;
-        this.playbackHeight = video.videoHeight;
-      }
-
-      const totalFrames = this.readDecodedFrameCount(video);
-      const sampledAt = performance.now();
-      if (resetBaseline || !Number.isFinite(totalFrames) || !Number.isFinite(this._statsLastFrames)) {
-        this._statsLastFrames = totalFrames;
-        this._statsLastSampleAt = sampledAt;
-        return;
-      }
-
-      const frameDelta = totalFrames - this._statsLastFrames;
-      const elapsedSeconds = (sampledAt - this._statsLastSampleAt) / 1000;
-      if (elapsedSeconds < 1.8) return;
-      this._statsLastFrames = totalFrames;
-      this._statsLastSampleAt = sampledAt;
-      if (video.paused || frameDelta <= 0 || elapsedSeconds > 5) return;
-
-      const measuredFps = frameDelta / elapsedSeconds / Math.max(0.1, Number(video.playbackRate) || 1);
-      if (measuredFps < 1 || measuredFps > 240) return;
-      const smoothedFps = this.playbackDecodedFps > 0
-        ? this.playbackDecodedFps * 0.7 + measuredFps * 0.3
-        : measuredFps;
-      this.playbackDecodedFps = Math.round(smoothedFps * 10) / 10;
-
-      if (this.sourceFrameRateOrigin !== 'manifest' && !this.sourceFrameRate) {
-        this.frameRateSamples = [...this.frameRateSamples.slice(-7), measuredFps];
-        const estimatedRate = estimateSourceFrameRate(this.frameRateSamples);
-        if (estimatedRate) {
-          this.sourceFrameRate = estimatedRate;
-          this.sourceFrameRateOrigin = 'estimated';
-        }
-      }
-    },
-
-    startPlaybackStats() {
-      this.stopPlaybackStats();
-      this.samplePlaybackStats(true);
-      this._playbackStatsTimer = setInterval(() => this.samplePlaybackStats(), 1000);
-    },
-
-    stopPlaybackStats(reset = false) {
-      if (this._playbackStatsTimer) {
-        clearInterval(this._playbackStatsTimer);
-        this._playbackStatsTimer = null;
-      }
-      this._statsLastFrames = null;
-      this._statsLastSampleAt = 0;
-      if (reset) {
-        this.playbackWidth = 0;
-        this.playbackHeight = 0;
-        this.sourceFrameRate = 0;
-        this.sourceFrameRateOrigin = '';
-        this.playbackDecodedFps = 0;
-        this.playbackTotalFrames = 0;
-        this.playbackDroppedFrames = 0;
-        this.frameRateSamples = [];
-      }
-    },
-
-    clearHlsRecoveryWatchdog() {
-      if (!this.hlsRecoveryWatchdog) return;
-      clearTimeout(this.hlsRecoveryWatchdog);
-      this.hlsRecoveryWatchdog = null;
-    },
-
-    scheduleHlsRecoveryWatchdog(data, Hls) {
-      this.clearHlsRecoveryWatchdog();
-      const recoveringInstance = this.hls;
-      this.hlsRecoveryWatchdog = setTimeout(() => {
-        this.hlsRecoveryWatchdog = null;
-        if (this.hls !== recoveringInstance || this.playbackState === 'playing') return;
-
-        const failure = this.createHlsFailure(data, Hls);
-        failure.reason = `${failure.reason || 'hls-error'}-recovery-timeout`;
-        failure.message = '当前视频线路恢复超时';
-        failure.userMessage = '当前线路持续无响应，正在自动切换其他源';
-        failure.hint = '播放器已跳过无响应线路。';
-        this.recordPlaybackFailure(failure);
-        if (this.hls) {
-          this.hls.destroy();
-          this.hls = null;
-        }
-        this.setPlaybackState('recovering');
-        this.autoFallbackToOtherSource(failure);
-      }, 7000);
     },
 
     revealControls(autoHide = true) {
@@ -2102,7 +2293,7 @@ export default {
 
     scheduleControlsHide() {
       const canAutoHide = this.isPlaying || this.isFullscreen;
-      if (!canAutoHide || (this.controlsHovered && !this.isFullscreen)) return;
+      if (!canAutoHide || this.notebookVisible || this.dnaVisible || (this.controlsHovered && !this.isFullscreen)) return;
       if (this.hideControlsTimer) clearTimeout(this.hideControlsTimer);
       this.hideControlsTimer = setTimeout(() => {
         this.hideControlsTimer = null;
@@ -2721,175 +2912,22 @@ export default {
     onCastStop() {
       this.casting = false;
     },
-
-    // ===== 一起看（同步播放）相关方法 =====
-
-    /**
-     * 切换"一起看"面板显隐（由 ControlBar 按钮触发）
-     */
-    onWatchTogetherToggle() {
-      this.watchTogetherPanelVisible = !this.watchTogetherPanelVisible;
-    },
-
-    /**
-     * 房间状态变化回调（由 WatchTogetherPanel 触发）
-     * 同步本组件状态、启动/停止主机广播定时器
-     */
-    onWtRoomChanged(roomInfo) {
-      const prevActive = this.watchTogetherActive;
-      this.wtRoomInfo = {
-        isHost: !!roomInfo?.isHost,
-        roomCode: roomInfo?.roomCode || null
-      };
-      this.watchTogetherActive = !!roomInfo?.roomCode;
-
-      // 进入/退出房间时同步状态
-      if (this.watchTogetherActive && !prevActive) {
-        // 刚进入房间：主机则启动周期广播，成员则等待同步
-        if (this.wtRoomInfo.isHost) {
-          this.startWtHostBroadcast();
-        }
-      } else if (!this.watchTogetherActive && prevActive) {
-        // 离开房间：清理定时器
-        this.stopWtHostBroadcast();
-      }
-
-      // 角色切换时调整定时器
-      if (this.watchTogetherActive && !this.wtRoomInfo.isHost) {
-        this.stopWtHostBroadcast();
-      }
-    },
-
-    /**
-     * 主机：启动周期性广播播放状态（每 2 秒一次）
-     */
-    startWtHostBroadcast() {
-      this.stopWtHostBroadcast();
-      this.wtHostBroadcastTimer = setInterval(() => {
-        this.broadcastWtState();
-      }, 2000);
-      // 立即广播一次，让新成员尽快同步
-      this.broadcastWtState();
-    },
-
-    stopWtHostBroadcast() {
-      if (this.wtHostBroadcastTimer) {
-        clearInterval(this.wtHostBroadcastTimer);
-        this.wtHostBroadcastTimer = null;
-      }
-    },
-
-    /**
-     * 主机：广播当前播放状态给所有成员
-     */
-    broadcastWtState() {
-      if (!this.wtRoomInfo.isHost || !this.watchTogetherActive) return;
-      if (!window.electronAPI?.wtBroadcastState) return;
-      const video = this.$refs.videoElement;
-      const state = {
-        isPlaying: this.isPlaying,
-        currentTime: video?.currentTime || this.currentTime || 0,
-        duration: video?.duration || this.duration || 0,
-        playbackRate: this.playbackRate || 1,
-        episodeIndex: this.currentVideo?.episode?.index ?? -1,
-        episodeTitle: this.currentVideo?.episode?.title || '',
-        videoUrl: this.currentVideo?.url || ''
-      };
-      try {
-        window.electronAPI.wtBroadcastState(state);
-      } catch (_) { /* ignore */ }
-    },
-
-    /**
-     * 成员：处理主机发来的同步消息，对齐本地播放器
-     */
-    applyWtSyncState(state) {
-      if (this.wtRoomInfo.isHost) return; // 主机不需要同步自己
-      const video = this.$refs.videoElement;
-      if (!video) return;
-
-      this.wtApplyingRemoteState = true;
-      try {
-        // 1. 对齐播放/暂停状态
-        if (state.isPlaying && video.paused) {
-          this.requestPlayback('watch-together');
-        } else if (!state.isPlaying && !video.paused) {
-          this.pausePlayback('watch-together');
-        }
-
-        // 2. 对齐播放进度（时间差 > 1.5s 才 seek，避免频繁跳动）
-        const targetTime = Number(state.currentTime) || 0;
-        const localTime = video.currentTime || 0;
-        const diff = Math.abs(targetTime - localTime);
-        const now = Date.now();
-        if (diff > 1.5 && now - this.wtLastSeekAt > 800) {
-          this.wtLastSeekAt = now;
-          if (isFinite(targetTime)) {
-            this.markIntentionalSeek();
-            video.currentTime = Math.max(0, Math.min(targetTime, video.duration || targetTime));
-            // 通知弹幕/字幕层重置
-            if (this.$refs.danmakuLayer) {
-              this.$refs.danmakuLayer.onSeek(video.currentTime);
-            }
-            if (this.$refs.subtitleLayer) {
-              this.$refs.subtitleLayer.onSeek(video.currentTime);
-            }
-          }
-        }
-
-        // 3. 对齐倍速
-        if (state.playbackRate && Math.abs(state.playbackRate - (video.playbackRate || 1)) > 0.01) {
-          video.playbackRate = state.playbackRate;
-          this.setPlaybackRate(state.playbackRate);
-        }
-      } finally {
-        // 异步释放标志位，让本轮事件回调跳过广播；纳入 pendingTimers 跟踪避免卸载后执行
-        this.trackTimer(setTimeout(() => { this.wtApplyingRemoteState = false; }, 0));
-      }
-    },
-
-    /**
-     * 收到主进程推送的"一起看"消息
-     */
-    onWtMessage(msg) {
-      if (!msg || !msg.type) return;
-      switch (msg.type) {
-        case 'sync':
-          this.applyWtSyncState(msg.state || {});
-          break;
-        case 'joined':
-          // 成员加入房间成功
-          this.wtRoomInfo = { isHost: false, roomCode: msg.roomCode };
-          this.watchTogetherActive = !!msg.roomCode;
-          break;
-        case 'member-joined':
-          // 有新成员加入，主机立即广播一次状态让其同步
-          if (this.wtRoomInfo.isHost) {
-            this.broadcastWtState();
-          }
-          break;
-        case 'room-closed':
-        case 'left':
-          this.stopWtHostBroadcast();
-          this.wtRoomInfo = { isHost: false, roomCode: null };
-          this.watchTogetherActive = false;
-          break;
-        default:
-          break;
-      }
-    }
+    // 一起看相关方法已抽离至 mixins/watchTogether.js
   },
 
   watch: {
-    'currentVideo.url': {
-      handler(newUrl, oldUrl) {
+    playbackMediaKey: {
+      handler(newKey, oldKey) {
+        const newUrl = this.currentVideo?.url || '';
         // 切换视频前先保存"旧视频"的进度
         // 注意：此时 currentVideo 已是新视频，必须用 playedSnapshot（旧视频快照）
         // 否则会把旧视频的 currentTime 写到新视频的记录里，造成进度错乱
-        if (oldUrl && this.playedSnapshot) {
+        if (oldKey && this.playedSnapshot) {
           this.savePlayProgress(this.playedSnapshot);
         }
-        if (newUrl && newUrl !== oldUrl) {
+        if (newUrl && newKey !== oldKey) {
+          this.notebookVisible = false;
+          this.dnaVisible = false;
           this.anime4kRuntime = this.anime4kEnabled
             ? { active: false, presenting: false, state: 'initializing' }
             : { active: false, presenting: false };
@@ -2898,7 +2936,7 @@ export default {
           // 切换视频时清空旧字幕（新视频需要重新加载字幕）
           this.subtitleCues = [];
           this.showSubtitle = false;
-        } else if (!newUrl && oldUrl) {
+        } else if (!newUrl && oldKey) {
           this.clearTrackedTimers();
           this.mediaLoadGeneration += 1;
           this.forceStopAndClean('source-cleared');
@@ -2911,6 +2949,18 @@ export default {
       if (window.electronAPI?.subtitleSetApiKey) {
         window.electronAPI.subtitleSetApiKey(val || '').catch(() => {});
       }
+    },
+    // 剧集身份变化时加载该集的手帐时光签（供进度条标记）
+    'currentEpisodeIdentity.key': {
+      handler(key) {
+        if (key) this.loadNoteMarkers();
+        else this.noteMarkers = [];
+        // Episode DNA：切集后重置候选并加载作品级自动跳过规则
+        this.dnaCandidates = [];
+        this.dnaAutoSkippedKey = '';
+        this.loadDnaAutoSkipRule();
+      },
+      immediate: true
     }
   },
 
@@ -2938,13 +2988,7 @@ export default {
     }
     // 应用设置中的字幕开关偏好
     this.showSubtitle = !!this.enableSubtitle && this.subtitleCues.length > 0;
-
-    // 订阅"一起看"主进程消息
-    if (window.electronAPI?.onWtMessage) {
-      this.wtUnsubscribe = window.electronAPI.onWtMessage((msg) => {
-        this.onWtMessage(msg);
-      });
-    }
+    // "一起看"消息订阅见 mixins/watchTogether.js（mounted 钩子）
   },
 
   beforeUnmount() {
@@ -2970,12 +3014,10 @@ export default {
     }
     this.casting = false;
 
-    // 清理"一起看"相关资源：定时器与消息订阅
-    this.stopWtHostBroadcast();
-    if (this.wtUnsubscribe) {
-      this.wtUnsubscribe();
-      this.wtUnsubscribe = null;
-    }
+    // "一起看"定时器/订阅清理见 mixins/watchTogether.js（beforeUnmount 钩子）
+    // 清理 Episode DNA 采集器与分析 Worker
+    this.stopDnaCollection(true);
+    destroyIntroAnalyzer();
 
     // 清理所有跟踪的 setTimeout，防止组件卸载后仍触发 initializeVideo 创建 Hls 导致泄漏
     if (this.playFeedbackTimer) {

@@ -62,3 +62,19 @@ test('BangumiApi shares one failed endpoint probe across concurrent requests', a
     await mirror.close();
   }
 });
+
+test('SakuraFall service mode keeps upstream fallback and rewrites allowlisted covers', () => {
+  const api = new BangumiApi();
+  api.setBaseUrl('https://47.109.87.3:8443', { allowFallback: true, fastFail: true });
+  api.setCoverProxyBase('https://47.109.87.3:8443/');
+
+  const candidates = api._buildApiCandidates('https://47.109.87.3:8443/v0/subjects/42');
+  assert.equal(candidates[0], 'https://47.109.87.3:8443/v0/subjects/42');
+  assert.ok(candidates.includes('https://api.bgm.tv/v0/subjects/42'));
+  assert.equal(
+    api._normalizeImageUrl('http://bgmimg.anibt.net/pic/cover/test.jpg'),
+    'https://47.109.87.3:8443/cover?url=https%3A%2F%2Fbgmimg.anibt.net%2Fpic%2Fcover%2Ftest.jpg'
+  );
+  assert.equal(api.fastFailConfiguredBase, true);
+  assert.equal(api.fastFailTimeoutMs, 1800);
+});

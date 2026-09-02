@@ -1,6 +1,8 @@
 const CHECK_WINDOW_MS = 60 * 1000;
 const MAX_CHECKS_PER_WINDOW = 18;
-const INITIAL_IDLE_DELAY_MS = 700;
+// Give eager covers time to download and decode before starting non-critical
+// per-subject episode requests. Cached counts still arrive shortly afterward.
+const INITIAL_IDLE_DELAY_MS = 1600;
 // Episode metadata is non-critical UI. A single worker avoids competing with
 // cover decoding and list rendering while the user is browsing quickly.
 const WORKER_COUNT = 1;

@@ -37,6 +37,25 @@
             :style="adRangeStyle(range)"
           ></span>
         </div>
+        <!-- 手帐时光签标记：按分类着色，点击跳到时间点 -->
+        <div
+          v-if="noteMarkers.length && duration"
+          class="note-markers"
+          :class="{ visible }"
+          role="button"
+          tabindex="-1"
+        >
+          <button
+            v-for="marker in noteMarkers"
+            :key="marker.id"
+            type="button"
+            class="note-marker"
+            :class="`is-${marker.category || 'plain'}`"
+            :style="noteMarkerStyle(marker)"
+            :title="`${formatTime(marker.position)}${marker.note ? ' · ' + marker.note : ''}`"
+            @click.stop="$emit('note-marker-click', marker.position)"
+          ></button>
+        </div>
         <!-- 悬停/拖动时间气泡：预览目标时间 -->
         <div
           v-if="hoverTime != null"
@@ -379,6 +398,28 @@
           </svg>
         </button>
 
+        <!-- 樱月手帐：记录当前时间点 -->
+        <button
+          :class="['control-btn', 'notebook-btn', { active: notebookActive }]"
+          @click="$emit('notebook-toggle')"
+          :title="notebookActive ? '收起樱月手帐' : '樱月手帐'"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+          </svg>
+        </button>
+
+        <!-- Episode DNA：片头/片尾/广告段标记 -->
+        <button
+          :class="['control-btn', 'dna-btn', { active: dnaActive }]"
+          @click="$emit('dna-toggle')"
+          :title="dnaActive ? '收起剧集片段' : '剧集片段（片头/片尾）'"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12h3l2-6 4 12 2-6h7"/>
+          </svg>
+        </button>
+
         <!-- 一起看按钮（多人同步播放） -->
         <button
           :class="['control-btn', 'watch-together-btn', { active: watchTogetherActive }]"
@@ -528,6 +569,15 @@ export default {
       type: Boolean,
       default: false
     },
+    notebookActive: {
+      type: Boolean,
+      default: false
+    },
+    // Episode DNA 面板是否打开（控制按钮高亮）
+    dnaActive: {
+      type: Boolean,
+      default: false
+    },
     casting: {
       type: Boolean,
       default: false
@@ -581,6 +631,11 @@ export default {
       type: Array,
       default: () => []
     },
+    // 手帐时光签标记（进度条上方小竖标，点击跳转）
+    noteMarkers: {
+      type: Array,
+      default: () => []
+    },
     // 静音状态（真源在父组件 video.muted，保证按钮/滑块/快捷键一致）
     isMuted: {
       type: Boolean,
@@ -591,6 +646,7 @@ export default {
     'toggle-play',
     'seek',
     'seek-relative',
+    'note-marker-click',
     'volume-change',
     'toggle-mute',
     'fullscreen-toggle',
@@ -606,6 +662,8 @@ export default {
     'toggle-subtitle',
     'subtitle-load-file',
     'subtitle-search',
+    'notebook-toggle',
+    'dna-toggle',
     'watch-together-toggle',
     'controls-hover',
     'seek-step-change',
@@ -815,6 +873,14 @@ export default {
       };
     },
 
+    /** 手帐时光签标记在进度条上的定位 */
+    noteMarkerStyle(marker) {
+      const max = Number(this.duration) || 0;
+      if (!max || !marker || !Number.isFinite(marker.position)) return { display: 'none' };
+      const position = Math.max(0, Math.min(max, marker.position));
+      return { left: `${(position / max) * 100}%` };
+    },
+
     toggleRateMenu() {
       this.showRateMenu = !this.showRateMenu;
       if (this.showRateMenu) {
@@ -959,6 +1025,47 @@ export default {
   border-radius: 999px;
   box-shadow: 0 0 4px rgba(255, 176, 32, 0.5);
 }
+
+/* 手帐时光签标记：进度条上方的小竖标 */
+.note-markers {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 7px;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.note-marker {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  transform: translateX(-2px);
+  background: var(--accent-cyan, #8edfff);
+  opacity: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: opacity 0.18s ease, transform 0.18s ease, height 0.18s ease;
+}
+
+.note-markers.visible .note-marker { opacity: 0.9; }
+
+.note-marker:hover, .note-marker:focus-visible {
+  opacity: 1;
+  height: 10px;
+  transform: translateX(-2px) translateY(-1.5px);
+}
+
+.note-marker.is-line { background: #8edfff; }
+.note-marker.is-foreshadow { background: #c79bff; }
+.note-marker.is-art { background: #ffb46a; }
+.note-marker.is-music { background: #7de8a4; }
+.note-marker.is-plain { background: var(--accent-cyan, #8edfff); }
 
 /* 悬停/拖动时间气泡 */
 .progress-tooltip {

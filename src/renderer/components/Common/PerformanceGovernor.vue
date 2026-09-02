@@ -15,8 +15,12 @@ const LONG_TASK_THRESHOLD = 8;
 const LONG_TASK_WINDOW_MS = 5000;
 const PRESSURE_RECOVERY_MS = 3000;
 
+// 滚动帧率采样默认关闭，不占用生产环境的帧预算。但门槛不能是 perf.isDev：
+// 打包后页面跑在 file:// 下，isDev 恒为 false，用户机器上永远采不到数据，
+// 这类"只在开发机复现不了"的卡顿就无从定位。改为显式开关控制。
 function scrollProfilingEnabled() {
-  if (!perf.isDev || typeof window === 'undefined') return false;
+  if (typeof window === 'undefined') return false;
+  if (window.__sakurafallScrollProfile !== undefined) return window.__sakurafallScrollProfile === true;
   try {
     return window.localStorage.getItem('sakurafall:scroll-profile') === '1';
   } catch (_error) {
@@ -38,6 +42,7 @@ export default {
       frameSampleLastAt: 0,
       frameSamples: [],
       lastFrameSampleAt: 0,
+      lastScrollAt: 0,
       enableScrollProfiling: false
     };
   },
@@ -45,6 +50,16 @@ export default {
     this.root = document.documentElement;
     this.handleScroll = this.handleScroll.bind(this);
     this.enableScrollProfiling = scrollProfilingEnabled();
+
+    // 性能面板可以在运行时切换开关，无需重启
+    window.__sakurafallSetScrollProfile = enabled => {
+      this.enableScrollProfiling = !!enabled;
+      if (!enabled) {
+        this.root.removeAttribute('data-render-fps');
+        if (this.frameSampleId) cancelAnimationFrame(this.frameSampleId);
+        this.frameSampleId = null;
+      }
+    };
 
     document.addEventListener('wheel', this.handleScroll, { passive: true, capture: true });
     document.addEventListener('scroll', this.handleScroll, { passive: true, capture: true });
@@ -74,6 +89,8 @@ export default {
     this.longTaskObserver?.disconnect?.();
     this.root?.removeAttribute('data-scroll-state');
     this.root?.removeAttribute('data-performance-pressure');
+    this.root?.removeAttribute('data-render-fps');
+    delete window.__sakurafallSetScrollProfile;
   },
   methods: {
     handleScroll() {
@@ -81,12 +98,20 @@ export default {
         this.root.setAttribute('data-scroll-state', 'scrolling');
       }
 
-      if (this.scrollIdleTimer) clearTimeout(this.scrollIdleTimer);
+      this.lastScrollAt = performance.now();
       if (this.enableScrollProfiling) this.startFrameSample();
-      this.scrollIdleTimer = setTimeout(() => {
+      if (this.scrollIdleTimer) return;
+
+      const finishScroll = () => {
+        const remaining = SCROLL_IDLE_MS - (performance.now() - this.lastScrollAt);
+        if (remaining > 0) {
+          this.scrollIdleTimer = setTimeout(finishScroll, remaining);
+          return;
+        }
         this.scrollIdleTimer = null;
         this.root.removeAttribute('data-scroll-state');
-      }, SCROLL_IDLE_MS);
+      };
+      this.scrollIdleTimer = setTimeout(finishScroll, SCROLL_IDLE_MS);
     },
 
     startFrameSample() {

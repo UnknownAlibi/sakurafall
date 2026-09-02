@@ -9,7 +9,7 @@ const {
     toPositiveInteger
 } = require('../utils/playHistoryIdentity');
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 8;
 
 class AnimeDatabase {
     constructor() {
@@ -194,6 +194,8 @@ class AnimeDatabase {
         this.db.exec(historySql);
         console.log('播放历史表就绪');
 
+        this._createViewingNotesTable();
+
         // CMS 接口缓存表（列表/详情）
         const cacheSql = `
             CREATE TABLE IF NOT EXISTS cms_cache (
@@ -369,6 +371,22 @@ class AnimeDatabase {
                         console.log(`[DB] v5 migration: removed ${duplicateIds.length} duplicate history rows`);
                     }
                 }
+            },
+            {
+                version: 6,
+                run: () => this._createViewingNotesTable()
+            },
+            {
+                version: 7,
+                run: () => {
+                    // 手帐分类：line 台词 / foreshadow 伏笔 / art 作画 / music 音乐，空串为普通感想
+                    this._addColumnIfNotExists('viewing_notes', 'category', "TEXT DEFAULT ''");
+                }
+            },
+            {
+                // Episode DNA P1：片头/片尾/广告段/关键剧情段保存与确认
+                version: 8,
+                run: () => this._createEpisodeSegmentsTable()
             }
         ];
 
@@ -383,6 +401,179 @@ class AnimeDatabase {
             currentVersion = migration.version;
             console.log(`[DB] schema 已升级到 v${currentVersion}`);
         }
+    }
+
+    _createViewingNotesTable() {
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS viewing_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_key TEXT NOT NULL,
+                work_key TEXT DEFAULT '',
+                bgm_id INTEGER DEFAULT NULL,
+                anime_name TEXT DEFAULT '',
+                episode_number INTEGER DEFAULT NULL,
+                episode_title TEXT DEFAULT '',
+                position REAL NOT NULL DEFAULT 0,
+                duration REAL NOT NULL DEFAULT 0,
+                note TEXT DEFAULT '',
+                category TEXT DEFAULT '',
+                source_id TEXT DEFAULT '',
+                created_at INTEGER NOT NULL
+            )
+        `);
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_viewing_notes_episode ON viewing_notes(episode_key, position)');
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_viewing_notes_created ON viewing_notes(created_at DESC)');
+    }
+
+    _createEpisodeSegmentsTable() {
+        // Episode DNA P1：用户确认过的片头/片尾/广告段/关键剧情时间段
+        // kind ∈ intro(片头) / outro(片尾) / ad(广告) / highlight(关键剧情)
+        // origin ∈ user(手动标记) / dna(分析候选被确认)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS episode_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_key TEXT NOT NULL,
+                work_key TEXT DEFAULT '',
+                bgm_id INTEGER DEFAULT NULL,
+                anime_name TEXT DEFAULT '',
+                episode_number INTEGER DEFAULT NULL,
+                episode_title TEXT DEFAULT '',
+                kind TEXT NOT NULL,
+                start REAL NOT NULL DEFAULT 0,
+                end REAL NOT NULL DEFAULT 0,
+                confirmed INTEGER NOT NULL DEFAULT 0,
+                origin TEXT DEFAULT 'user',
+                note TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        `);
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_episode_segments_episode ON episode_segments(episode_key, kind)');
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_episode_segments_work ON episode_segments(work_key, kind, confirmed)');
+    }
+
+    _normalizeSegmentKind(value) {
+        const allowed = ['intro', 'outro', 'ad', 'highlight'];
+        const raw = String(value || '').trim().toLowerCase();
+        return allowed.includes(raw) ? raw : '';
+    }
+
+    /**
+     * 保存剧集时间段（Episode DNA P1）。
+     * 同一集同 kind 只保留一条：保存前删除旧行。
+     * 返回 { segment, autoSkipRule }，autoSkipRule 非空表示三集稳定后升级为自动跳过规则。
+     */
+    saveEpisodeSegment(data = {}) {
+        if (!this.db) throw new Error('数据库未连接');
+        const episodeKey = String(data.episode_key || '').slice(0, 300);
+        const kind = this._normalizeSegmentKind(data.kind);
+        if (!episodeKey) throw new Error('缺少剧集身份');
+        if (!kind) throw new Error('无效的时间段类型');
+        const start = Math.max(0, Number(data.start) || 0);
+        const end = Math.max(start, Number(data.end) || start);
+        if (end - start < 0.5) throw new Error('时间段过短（需至少 0.5 秒）');
+        const now = Date.now();
+        const workKey = String(data.work_key || '').slice(0, 220);
+        const bgmId = toPositiveInteger(data.bgm_id);
+
+        const removeOld = this.db.prepare('DELETE FROM episode_segments WHERE episode_key = ? AND kind = ?');
+        const insert = this.db.prepare(`
+            INSERT INTO episode_segments (
+                episode_key, work_key, bgm_id, anime_name, episode_number, episode_title,
+                kind, start, end, confirmed, origin, note, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        const tx = this.db.transaction(() => {
+            removeOld.run(episodeKey, kind);
+            insert.run(
+                episodeKey,
+                workKey,
+                bgmId,
+                String(data.anime_name || '').slice(0, 300),
+                toPositiveInteger(data.episode_number),
+                String(data.episode_title || '').slice(0, 200),
+                kind,
+                start,
+                end,
+                data.confirmed === false ? 0 : 1,
+                String(data.origin || 'user') === 'dna' ? 'dna' : 'user',
+                String(data.note || '').trim().slice(0, 500),
+                now,
+                now
+            );
+        });
+        tx();
+        const segment = this.db
+            .prepare('SELECT * FROM episode_segments WHERE episode_key = ? AND kind = ?')
+            .get(episodeKey, kind);
+        const autoSkipRule = kind === 'intro' ? this.getWorkAutoSkipRule(bgmId, workKey) : null;
+        return { segment, autoSkipRule };
+    }
+
+    getEpisodeSegments(episodeKey = '') {
+        if (!this.db) throw new Error('数据库未连接');
+        const key = String(episodeKey || '').slice(0, 300);
+        if (!key) return [];
+        return this.db.prepare(`
+            SELECT * FROM episode_segments
+            WHERE episode_key = ?
+            ORDER BY start ASC
+        `).all(key);
+    }
+
+    removeEpisodeSegment(id) {
+        if (!this.db) throw new Error('数据库未连接');
+        const segmentId = Math.max(0, Math.floor(Number(id) || 0));
+        return { changes: segmentId ? this.db.prepare('DELETE FROM episode_segments WHERE id = ?').run(segmentId).changes : 0 };
+    }
+
+    /**
+     * 三集稳定确认后升级为自动跳过规则（Episode DNA P1）。
+     * 条件：同一作品 ≥3 集有已确认片头，且起点极差 ≤5s、终点极差 ≤8s。
+     * 返回 { kind, start, end, episodeCount, promotedAt } 或 null。
+     */
+    getWorkAutoSkipRule(bgmId = 0, workKey = '') {
+        if (!this.db) return null;
+        let rows = [];
+        const id = toPositiveInteger(bgmId);
+        if (id) {
+            rows = this.db.prepare(`
+                SELECT * FROM episode_segments
+                WHERE kind = 'intro' AND confirmed = 1 AND bgm_id = ?
+                ORDER BY episode_number ASC
+            `).all(id);
+        }
+        if (rows.length === 0) {
+            const key = String(workKey || '').trim();
+            if (!key) return null;
+            rows = this.db.prepare(`
+                SELECT * FROM episode_segments
+                WHERE kind = 'intro' AND confirmed = 1 AND work_key = ?
+                ORDER BY episode_number ASC
+            `).all(key);
+        }
+        const confirmed = rows.filter(row =>
+            Number.isFinite(Number(row.start)) && Number.isFinite(Number(row.end))
+        );
+        if (confirmed.length < 3) return null;
+
+        const starts = confirmed.map(row => Number(row.start));
+        const ends = confirmed.map(row => Number(row.end));
+        const spread = (values) => Math.max(...values) - Math.min(...values);
+        if (spread(starts) > 5 || spread(ends) > 8) return null;
+
+        const median = (values) => {
+            const sorted = [...values].sort((a, b) => a - b);
+            const mid = Math.floor(sorted.length / 2);
+            return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+        };
+        return {
+            kind: 'intro',
+            start: Math.round(median(starts) * 10) / 10,
+            end: Math.round(median(ends) * 10) / 10,
+            episodeCount: confirmed.length,
+            promotedAt: Date.now()
+        };
     }
 
     getHealthStatus() {
@@ -536,11 +727,13 @@ class AnimeDatabase {
      * 使用白名单校验防止 SQL 注入
      */
     _addColumnIfNotExists(table, column, definition) {
-        const allowedTables = ['favorites', 'play_history', 'bangumi_subjects'];
+        const allowedTables = ['favorites', 'play_history', 'bangumi_subjects', 'viewing_notes'];
         const allowedColumns = {
             favorites: ['last_episode', 'last_episode_index', 'updated_at', 'bgm_id'],
             play_history: ['play_position', 'bgm_id'],
-            bangumi_subjects: ['platform']
+            bangumi_subjects: ['platform'],
+            // 手帐 P1：分类标记（v7 迁移）
+            viewing_notes: ['category']
         };
 
         if (!allowedTables.includes(table)) {
@@ -883,6 +1076,202 @@ class AnimeDatabase {
 
         const info = this.db.prepare(`DELETE FROM play_history`).run();
         return { changes: info.changes };
+    }
+
+    // ── 樱月手帐 / 时间点记录 ─────────────────────────────
+
+    _normalizeNoteCategory(value) {
+        const allowed = ['line', 'foreshadow', 'art', 'music'];
+        const raw = String(value || '').trim().toLowerCase();
+        return allowed.includes(raw) ? raw : '';
+    }
+
+    addViewingNote(data = {}) {
+        if (!this.db) throw new Error('数据库未连接');
+        const episodeKey = String(data.episode_key || '').slice(0, 300);
+        if (!episodeKey) throw new Error('缺少剧集身份');
+        const createdAt = Date.now();
+        const info = this.db.prepare(`
+            INSERT INTO viewing_notes (
+                episode_key, work_key, bgm_id, anime_name, episode_number,
+                episode_title, position, duration, note, category, source_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            episodeKey,
+            String(data.work_key || '').slice(0, 220),
+            toPositiveInteger(data.bgm_id),
+            String(data.anime_name || '').slice(0, 300),
+            toPositiveInteger(data.episode_number),
+            String(data.episode_title || '').slice(0, 200),
+            Math.max(0, Number(data.position) || 0),
+            Math.max(0, Number(data.duration) || 0),
+            String(data.note || '').trim().slice(0, 1000),
+            this._normalizeNoteCategory(data.category),
+            String(data.source_id || '').slice(0, 160),
+            createdAt
+        );
+        return this.db.prepare('SELECT * FROM viewing_notes WHERE id = ?').get(info.lastInsertRowid);
+    }
+
+    getViewingNotes(episodeKey = '', limit = 100) {
+        if (!this.db) throw new Error('数据库未连接');
+        const safeLimit = Math.max(1, Math.min(300, Math.floor(Number(limit) || 100)));
+        if (episodeKey) {
+            return this.db.prepare(`
+                SELECT * FROM viewing_notes
+                WHERE episode_key = ?
+                ORDER BY position ASC, created_at ASC
+                LIMIT ?
+            `).all(String(episodeKey), safeLimit);
+        }
+        return this.db.prepare(`
+            SELECT * FROM viewing_notes
+            ORDER BY created_at DESC
+            LIMIT ?
+        `).all(safeLimit);
+    }
+
+    removeViewingNote(id) {
+        if (!this.db) throw new Error('数据库未连接');
+        const noteId = Math.max(0, Math.floor(Number(id) || 0));
+        return { changes: noteId ? this.db.prepare('DELETE FROM viewing_notes WHERE id = ?').run(noteId).changes : 0 };
+    }
+
+    /**
+     * 导出全部手帐（时光签）记录，按创建时间正序
+     */
+    getAllViewingNotes() {
+        if (!this.db) throw new Error('数据库未连接');
+        return this.db.prepare('SELECT * FROM viewing_notes ORDER BY created_at ASC').all();
+    }
+
+    /**
+     * 按作品查询手帐记录（优先 bgm_id，其次 work_key 归一化标题）
+     */
+    getViewingNotesForWork(bgmId, workKey = '') {
+        if (!this.db) throw new Error('数据库未连接');
+        const id = toPositiveInteger(bgmId);
+        if (id) {
+            return this.db.prepare(`
+                SELECT * FROM viewing_notes WHERE bgm_id = ?
+                ORDER BY episode_number ASC, position ASC
+            `).all(id);
+        }
+        const key = String(workKey || '').trim();
+        if (!key) return [];
+        return this.db.prepare(`
+            SELECT * FROM viewing_notes
+            WHERE work_key = ? OR anime_name = ?
+            ORDER BY episode_number ASC, position ASC
+        `).all(key, key);
+    }
+
+    /**
+     * 无剧透手帐回顾：只返回观看进度之前的记录。
+     * 判定基准：该作品所有播放历史中最远的 (episode_index, play_position)。
+     */
+    getSpoilerSafeViewingNotes(bgmId, workKey = '') {
+        const notes = this.getViewingNotesForWork(bgmId, workKey);
+        if (notes.length === 0) return [];
+
+        let furthestIndex = -1;
+        let furthestPosition = 0;
+        let furthestTitle = '';
+        const id = toPositiveInteger(bgmId);
+        if (id) {
+            const rows = this.db.prepare(
+                'SELECT episode_index, play_position, episode_title FROM play_history WHERE bgm_id = ?'
+            ).all(id);
+            for (const row of rows) {
+                const idx = Math.floor(Number(row.episode_index) || 0);
+                const pos = Math.max(0, Number(row.play_position) || 0);
+                if (idx > furthestIndex || (idx === furthestIndex && pos > furthestPosition)) {
+                    furthestIndex = idx;
+                    furthestPosition = pos;
+                    furthestTitle = String(row.episode_title || '');
+                }
+            }
+        }
+
+        // 无任何观看历史：全部视为未看，不返回任何记录
+        if (furthestIndex < 0) return [];
+
+        const TOLERANCE = 5; // 秒，进度心跳间隔内的轻微越界视为已看
+        return notes.filter(note => {
+            const ep = Number(note.episode_number);
+            if (Number.isFinite(ep) && ep > 0) {
+                if (ep - 1 < furthestIndex) return true;               // 更早的集数视为已看
+                if (ep - 1 > furthestIndex) return false;              // 更未来的集数隐藏
+                return note.position <= furthestPosition + TOLERANCE;  // 同集按进度判断
+            }
+            // 无集数时按集标题与当前进度集匹配
+            const title = String(note.episode_title || '');
+            return !!furthestTitle && title === furthestTitle
+                && note.position <= furthestPosition + TOLERANCE;
+        });
+    }
+
+    /**
+     * 导入手帐记录：按 Episode Identity 去重。
+     * 同一 episode_key 下，已存在时间点 ±2 秒内的记录视为重复，跳过。
+     * 返回 { imported, skipped, notes: [新增记录] }
+     */
+    importViewingNotes(rows = []) {
+        if (!this.db) throw new Error('数据库未连接');
+        if (!Array.isArray(rows) || rows.length === 0) return { imported: 0, skipped: 0, notes: [] };
+
+        const imported = [];
+        let skipped = 0;
+        const byKey = new Map();
+        for (const row of this.db.prepare('SELECT * FROM viewing_notes').all()) {
+            const list = byKey.get(row.episode_key) || [];
+            list.push(row);
+            byKey.set(row.episode_key, list);
+        }
+
+        const insert = this.db.prepare(`
+            INSERT INTO viewing_notes (
+                episode_key, work_key, bgm_id, anime_name, episode_number,
+                episode_title, position, duration, note, category, source_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        const transaction = this.db.transaction((items) => {
+            for (const item of items) {
+                const episodeKey = String(item.episode_key || '').slice(0, 300);
+                const note = String(item.note || '').trim().slice(0, 1000);
+                if (!episodeKey || !note) { skipped++; continue; }
+                const position = Math.max(0, Number(item.position) || 0);
+                const existing = byKey.get(episodeKey) || [];
+                const duplicate = existing.some(row =>
+                    Math.abs((Number(row.position) || 0) - position) <= 2
+                );
+                if (duplicate) { skipped++; continue; }
+                const createdAt = Number(item.created_at) > 0
+                    ? Math.floor(Number(item.created_at))
+                    : Date.now();
+                const info = insert.run(
+                    episodeKey,
+                    String(item.work_key || '').slice(0, 220),
+                    toPositiveInteger(item.bgm_id),
+                    String(item.anime_name || '').slice(0, 300),
+                    toPositiveInteger(item.episode_number),
+                    String(item.episode_title || '').slice(0, 200),
+                    position,
+                    Math.max(0, Number(item.duration) || 0),
+                    note,
+                    this._normalizeNoteCategory(item.category),
+                    String(item.source_id || '').slice(0, 160),
+                    createdAt
+                );
+                const row = this.db.prepare('SELECT * FROM viewing_notes WHERE id = ?').get(info.lastInsertRowid);
+                imported.push(row);
+                existing.push(row);
+                byKey.set(episodeKey, existing);
+            }
+        });
+        transaction(rows);
+        return { imported: imported.length, skipped, notes: imported };
     }
 
     /**

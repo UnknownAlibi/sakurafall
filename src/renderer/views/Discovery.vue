@@ -36,6 +36,17 @@
         />
       </template>
     </template>
+
+    <!-- 详情弹窗：原地打开，不跳转番剧库 -->
+    <AnimeDetail
+      v-if="detailAnime"
+      :anime="detailAnime"
+      :isFavorited="isAnimeFavorited(detailAnime)"
+      :opening-episode-key="openingEpisodeKey"
+      @close="closeDetail"
+      @toggle-fav="onToggleFavorite"
+      @play-episode="onPlayEpisode"
+    />
   </div>
 </template>
 
@@ -43,13 +54,16 @@
 import { mapGetters, mapActions } from 'vuex';
 import HotAnimeList from '../components/AnimeZone/HotAnimeList.vue';
 import BangumiSchedule from '../components/AnimeZone/BangumiSchedule.vue';
+import AnimeDetail from '../components/AnimeZone/AnimeDetail.vue';
 import BrandMark from '../components/Common/BrandMark.vue';
 import PageHeader from '../components/Common/PageHeader.vue';
 import EmptyState from '../components/Common/EmptyState.vue';
+import animeDetailModal from '../mixins/animeDetailModal.js';
 
 export default {
   name: 'Discovery',
-  components: { HotAnimeList, BangumiSchedule, BrandMark, PageHeader, EmptyState },
+  mixins: [animeDetailModal],
+  components: { HotAnimeList, BangumiSchedule, AnimeDetail, BrandMark, PageHeader, EmptyState },
   data() {
     return {
       trendingList: [],
@@ -112,15 +126,8 @@ export default {
       this.loadFailed = results.length > 0 && results.every(ok => !ok);
     },
     /**
-     * 点卡片：跳到动漫专区并打开详情弹窗（复用 AnimeZone 的 openAnimeDetail 机制）。
+     * 点卡片：原地打开详情弹窗（由 animeDetailModal mixin 提供 viewAnimeDetail）。
      */
-    viewAnimeDetail(anime) {
-      if (!anime) return;
-      this.$router.push({
-        name: 'anime-zone',
-        query: { returnTo: 'discovery', openAnimeDetail: JSON.stringify(anime) }
-      });
-    }
   }
 };
 </script>

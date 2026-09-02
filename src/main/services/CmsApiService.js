@@ -47,6 +47,13 @@ class CmsApiService {
     this.QUALITY_PROBE_TIMEOUT = 5000;
     this.SEARCH_CONCURRENCY = 3;
     this.QUALITY_PROBE_CONCURRENCY = 3;
+    // 换源候选每源最多保留的线路数（线路互为备份，全保留会让候选面板爆炸）
+    this.MAX_LINES_PER_SOURCE = 3;
+    // 线路预热：缓存清单+首个媒体分片探测结果，播放前并行预热前两条候选线路
+    this.PREHEAT_TTL = 90 * 1000;
+    this.PREHEAT_CACHE_MAX = 40;
+    this.PREHEAT_FRAGMENT_BYTES = 64 * 1024; // 仅读取极小媒体分片
+    this._preheatCache = new Map();
     // 抽离的子模块实例（门面委托）
     this._healthTracker = new SourceHealthTracker();
     this._taskScope = new TaskScope();
@@ -1007,6 +1014,12 @@ class CmsApiService {
       return { width: 0, height: guessedHeight, bitrate: 0, variants: 0, source: guessedHeight ? 'url' : 'unknown' };
     }
 
+    // 命中预热缓存：播放前的并行预热已探测过清单与媒体分片
+    const preheated = this._readPreheatCache(playUrl);
+    if (preheated) {
+      return preheated;
+    }
+
     try {
       const text = await this.fetch(playUrl, referer || playUrl, {
         timeout: this.QUALITY_PROBE_TIMEOUT,
@@ -1029,6 +1042,144 @@ class CmsApiService {
       if (this._isAbortError(error)) throw error;
       return { width: 0, height: guessedHeight, bitrate: 0, variants: 0, source: 'probe-failed', error: error.message };
     }
+  }
+
+  // ===== 线路预热 =====
+
+  _readPreheatCache(url) {
+    const entry = this._preheatCache.get(String(url || ''));
+    if (!entry) return null;
+    if (Date.now() - entry.at > this.PREHEAT_TTL) {
+      this._preheatCache.delete(String(url));
+      return null;
+    }
+    return entry.quality;
+  }
+
+  _writePreheatCache(url, quality) {
+    const key = String(url || '');
+    if (!key) return;
+    if (this._preheatCache.size >= this.PREHEAT_CACHE_MAX) {
+      const oldest = this._preheatCache.keys().next().value;
+      if (oldest) this._preheatCache.delete(oldest);
+    }
+    this._preheatCache.set(key, { at: Date.now(), quality });
+  }
+
+  /**
+   * 从 m3u8 文本中提取首个媒体分片绝对地址（主清单先取第一个 variant）
+   */
+  _firstMediaSegmentUrl(manifestUrl, text) {
+    try {
+      const base = new URL(manifestUrl);
+      const lines = String(text || '').split('\n').map(line => line.trim()).filter(Boolean);
+      const resolve = (value) => new URL(value, base).toString();
+      // 主清单：取第一个 variant 清单
+      if (lines.some(line => line.startsWith('#EXT-X-STREAM-INF'))) {
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith('#EXT-X-STREAM-INF') && lines[i + 1] && !lines[i + 1].startsWith('#')) {
+            return { variantManifest: resolve(lines[i + 1]) };
+          }
+        }
+      }
+      // 媒体清单：取第一个分片
+      for (const line of lines) {
+        if (!line.startsWith('#')) return { segment: resolve(line) };
+      }
+      // EXT-X-MAP 初始化段兜底
+      const map = lines.find(line => line.startsWith('#EXT-X-MAP:'));
+      if (map) {
+        const uri = /URI="([^"]+)"/.exec(map);
+        if (uri) return { segment: resolve(uri[1]) };
+      }
+    } catch (_) { /* 忽略解析失败 */ }
+    return null;
+  }
+
+  /**
+   * 并行预热候选线路：仅读取清单和极小媒体分片（Range 请求 64KB），
+   * 建立源站 DNS/TLS/CDN 连接并缓存画质结果，随后的 probeStreamQuality 直接命中。
+   * @param {Array<{sourceId: string, url: string}>} candidates
+   * @returns {Promise<{preheated: number, results: Array}>}
+   */
+  async preheatCandidateLines(candidates = []) {
+    const items = (Array.isArray(candidates) ? candidates : [])
+      .map(item => ({
+        sourceId: String(item?.sourceId || ''),
+        url: (() => {
+          try { return new URL(String(item?.url || '').trim()).toString(); } catch (_) { return ''; }
+        })()
+      }))
+      .filter(item => item.url && /^https?:\/\//i.test(item.url) && !/\/share\//i.test(item.url))
+      .slice(0, 2); // 只预热前两条候选
+
+    const results = await Promise.all(items.map(async (item) => {
+      // 已有新鲜预热结果则跳过
+      if (this._readPreheatCache(item.url)) {
+        return { sourceId: item.sourceId, hit: 'cached' };
+      }
+      try {
+        const sourceConfig = this.getSourceConfig(item.sourceId);
+        let referer = '';
+        try {
+          referer = sourceConfig?.api ? `${new URL(sourceConfig.api).origin}/` : '';
+        } catch (_) { /* keep empty */ }
+        const playbackHeaders = sourceConfig?.playbackHeaders || {};
+        const probeReferer = playbackHeaders.Referer || playbackHeaders.referer || referer || item.url;
+
+        const text = await this.fetch(item.url, probeReferer, {
+          timeout: this.QUALITY_PROBE_TIMEOUT,
+          headers: {
+            ...playbackHeaders,
+            Accept: 'application/vnd.apple.mpegurl, application/x-mpegURL, */*'
+          },
+          maxResponseBytes: 512 * 1024
+        });
+        if (!String(text || '').trimStart().startsWith('#EXTM3U')) {
+          return { sourceId: item.sourceId, hit: 'not-m3u8' };
+        }
+        const quality = this.parseM3u8Quality(text, item.url) || {};
+
+        // 拉取极小媒体分片，建立 CDN 连接（失败不影响预热结果）
+        try {
+          const target = this._firstMediaSegmentUrl(item.url, text);
+          const fragmentUrl = target?.variantManifest || target?.segment || '';
+          if (target?.variantManifest) {
+            const variantText = await this.fetch(target.variantManifest, probeReferer, {
+              timeout: this.QUALITY_PROBE_TIMEOUT,
+              headers: { ...playbackHeaders, Accept: 'application/vnd.apple.mpegurl, */*' },
+              maxResponseBytes: 512 * 1024
+            });
+            const variantTarget = this._firstMediaSegmentUrl(target.variantManifest, variantText);
+            if (variantTarget?.segment) {
+              await this._fetchPreheatFragment(variantTarget.segment, probeReferer, playbackHeaders);
+            }
+          } else if (fragmentUrl) {
+            await this._fetchPreheatFragment(fragmentUrl, probeReferer, playbackHeaders);
+          }
+        } catch (_) { /* 分片预热失败可容忍 */ }
+
+        quality.source = quality.source || 'preheat';
+        this._writePreheatCache(item.url, quality);
+        return { sourceId: item.sourceId, hit: 'preheated', quality };
+      } catch (error) {
+        return { sourceId: item.sourceId, hit: 'failed', error: error?.message || String(error) };
+      }
+    }));
+
+    return { preheated: results.filter(r => r.hit === 'preheated' || r.hit === 'cached').length, results };
+  }
+
+  async _fetchPreheatFragment(url, referer, playbackHeaders = {}) {
+    await this.fetch(url, referer || url, {
+      timeout: this.QUALITY_PROBE_TIMEOUT,
+      headers: {
+        ...playbackHeaders,
+        Range: `bytes=0-${this.PREHEAT_FRAGMENT_BYTES - 1}`,
+        Accept: '*/*'
+      },
+      maxResponseBytes: this.PREHEAT_FRAGMENT_BYTES + 8 * 1024
+    });
   }
 
   qualityScore(quality = {}) {
@@ -1192,26 +1343,37 @@ class CmsApiService {
       // Keep one playable work per provider so fallback is genuinely cross-source.
       for (const { anime, titleMatch } of rankedAnime) {
         if (!anime || !anime.episodes || Object.keys(anime.episodes).length === 0) continue;
-        const matched = this.findMatchingEpisode(anime.episodes, target.episodeTitle, target.episodeIndex);
-        const selected = matched || (mayUseFirstEpisode ? this.firstPlayableEpisode(anime.episodes) : null);
-        if (!selected) continue;
+        // 每条线路各出一个候选：同源线路互为备份，只取线路1会漏掉可用线路
+        let lineMatches = this._parser.findMatchingEpisodeLines(
+          anime.episodes,
+          target.episodeTitle,
+          target.episodeIndex
+        );
+        if (lineMatches.length === 0 && mayUseFirstEpisode) {
+          const first = this.firstPlayableEpisode(anime.episodes);
+          lineMatches = first ? [first] : [];
+        }
+        let produced = 0;
+        for (const selected of lineMatches) {
+          if (produced >= this.MAX_LINES_PER_SOURCE) break;
+          const url = selected.episode.url || selected.episode.play_url;
+          if (!url || !/^https?:\/\//i.test(url)) continue;
 
-        const url = selected.episode.url || selected.episode.play_url;
-        if (!url || !/^https?:\/\//i.test(url)) continue;
-
-        candidates.push({
-          sourceId: sourceResult.sourceId,
-          sourceName: sourceResult.sourceName,
-          anime,
-          episode: selected.episode,
-          lineId: selected.lineId,
-          matchType: selected.matchType,
-          matchScore: selected.matchScore,
-          titleMatchScore: titleMatch.score,
-          titleMatchExact: titleMatch.exact,
-          url
-        });
-        break;
+          candidates.push({
+            sourceId: sourceResult.sourceId,
+            sourceName: sourceResult.sourceName,
+            anime,
+            episode: selected.episode,
+            lineId: selected.lineId,
+            matchType: selected.matchType,
+            matchScore: selected.matchScore,
+            titleMatchScore: titleMatch.score,
+            titleMatchExact: titleMatch.exact,
+            url
+          });
+          produced += 1;
+        }
+        if (produced > 0) break;
       }
     }
     return candidates;
@@ -1233,6 +1395,8 @@ class CmsApiService {
       healthScore: candidate.healthScore ?? this.calculateSourceHealthScore(candidate.sourceId),
       health: candidate.health || this._getSourceHealth(candidate.sourceId),
       preference: candidate.preference || 0,
+      routePreference: candidate.routePreference || 'stability',
+      routeScore: candidate.routeScore ?? null,
       titleMatchScore: candidate.titleMatchScore,
       titleMatchExact: candidate.titleMatchExact,
       quality: candidate.quality,
@@ -1240,13 +1404,53 @@ class CmsApiService {
     };
   }
 
+  /**
+   * 路线偏好权重：stability(默认) / quality / latency
+   * 三类归一化子分（0-100）加权求和后再放入总评分
+   */
+  routePreferenceWeights(preference) {
+    switch (String(preference || '').toLowerCase()) {
+      case 'quality':
+      case 'clarity':
+        return { health: 0.30, quality: 0.60, latency: 0.10 };
+      case 'latency':
+      case 'low-latency':
+        return { health: 0.30, quality: 0.10, latency: 0.60 };
+      case 'stability':
+      default:
+        return { health: 0.60, quality: 0.30, latency: 0.10 };
+    }
+  }
+
+  // 清晰度归一化子分（0-100）
+  _qualityNormScore(quality = {}) {
+    const height = Number(quality?.height) || 0;
+    const bitrate = Number(quality?.bitrate) || 0;
+    const heightScore = height <= 0 ? 30 : Math.min(100, (height / 2160) * 100);
+    const bitrateScore = bitrate > 0 ? Math.min(100, (bitrate / 8000000) * 100) : 30;
+    return heightScore * 0.8 + bitrateScore * 0.2;
+  }
+
+  // 低延迟归一化子分（0-100）：优先用首帧耗时，其次用接口延迟
+  _latencyNormScore(health = {}) {
+    const startupMs = Number(health?.averageStartupMs) || 0;
+    const latencyMs = Number(health?.averageLatency) || 0;
+    const ms = startupMs > 0 ? startupMs : latencyMs;
+    if (ms <= 0) return 50; // 无数据时给中位，不奖不罚
+    return Math.max(0, Math.min(100, 100 - ms / 30)); // 3000ms 及以上归零
+  }
+
   async selectBestEpisodeSource(keyword, target = {}) {
     const task = this._startScopedTask(target.taskScope || 'selectBestEpisodeSource');
     const signal = task.signal;
+    // `sourceId|lineId` 形式的排除 key 在搜索层天然不匹配纯 sourceId（不整源排除），
+    // 收集候选后按线路精确过滤
+    const excludeKeys = new Set((target.excludeSourceIds || []).map(key => String(key)));
 
     try {
+      const routeWeights = this.routePreferenceWeights(target.routePreference);
       const searchData = await this.searchAllSources(keyword, {
-        excludeSourceIds: target.excludeSourceIds || [],
+        excludeSourceIds: [...excludeKeys],
         includeSkipped: true,
         concurrency: target.searchConcurrency || this.SEARCH_CONCURRENCY,
         signal
@@ -1258,7 +1462,10 @@ class CmsApiService {
         episodeTitle: target.episodeTitle || '',
         episodeIndex: target.episodeIndex ?? -1,
         allowFirstFallback: target.allowFirstFallback !== false
-      });
+      })
+      // excludeSourceIds 支持两种 key：纯 sourceId（整源排除，搜索层已处理）
+      // 和 `sourceId|lineId`（仅排除该线路，源的其他线路保留为候选）
+      .filter(candidate => !excludeKeys.has(`${candidate.sourceId}|${candidate.lineId}`));
 
       if (candidates.length === 0) {
         return { best: null, candidates: [], skipped: searchData.skipped };
@@ -1297,11 +1504,16 @@ class CmsApiService {
           candidate.health = this._getSourceHealth(candidate.sourceId);
           candidate.healthScore = candidate.health.score;
           candidate.preference = Number(sourceConfig?.preference) || 0;
+          // 按用户路线偏好（稳定/清晰/低延迟）加权，偏好子分归一化后合成 0-100 路线分
+          const routeScore = candidate.healthScore * routeWeights.health
+            + this._qualityNormScore(candidate.quality) * routeWeights.quality
+            + this._latencyNormScore(candidate.health) * routeWeights.latency;
+          candidate.routePreference = String(target.routePreference || 'stability');
+          candidate.routeScore = Math.round(routeScore);
           candidate.score = candidate.titleMatchScore * 1000000000000
             + candidate.matchScore * 1000000000
-            + candidate.healthScore * 1000000
-            + candidate.preference * 1000000
-            + this.qualityScore(candidate.quality);
+            + candidate.routeScore * 1000000
+            + candidate.preference * 1000000;
         },
         signal
       );

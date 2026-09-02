@@ -103,13 +103,39 @@ async function main() {
   let page;
   let player;
   const initialTargets = await targets();
-  const pageTarget = initialTargets.find(item => item.type === 'page' && item.url.includes('/anime-zone'));
+  const pageTarget = initialTargets.find(item => item.type === 'page'
+    && !item.url.includes('player-window')
+    && (item.url.includes('/anime-zone') || item.url.includes('localhost:5173')));
   if (!pageTarget) throw new Error('SakuraFall anime-zone target was not found');
 
   try {
     page = new CdpClient(pageTarget.webSocketDebuggerUrl);
     await page.connect();
     await page.send('Runtime.enable');
+
+    const hasSearchInput = await page.evaluate(`!!document.querySelector('.search-input')`);
+    if (!hasSearchInput) {
+      const openedAnimeZone = await page.evaluate(`(() => {
+        const items = Array.from(document.querySelectorAll('a, button, [role="button"]'));
+        const entry = items.find(item => /番剧库|番剧索引/.test(item.textContent || ''));
+        if (!entry) return false;
+        entry.click();
+        return true;
+      })()`, true);
+      if (!openedAnimeZone) {
+        const pageSummary = await page.evaluate(`({
+          title: document.title,
+          text: (document.body?.innerText || '').slice(0, 1200),
+          controls: Array.from(document.querySelectorAll('a, button, [role="button"]')).slice(0, 30).map(item => item.textContent.trim())
+        })`);
+        throw new Error(`Anime-zone navigation was not found: ${JSON.stringify(pageSummary)}`);
+      }
+      await waitFor(
+        () => page.evaluate(`!!document.querySelector('.search-input')`),
+        'anime-zone search input',
+        15000
+      );
+    }
 
     console.log(`[smoke] Searching for ${TITLE}`);
     if (!await page.evaluate(expressionForSearch(TITLE), true)) {
@@ -262,6 +288,35 @@ async function main() {
       100
     );
 
+    console.log('[smoke] Verifying the source candidate panel');
+    const sourcePanelOpened = await player.evaluate(`(() => {
+      const button = document.querySelector('.source-switch-btn');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`, true);
+    if (!sourcePanelOpened) throw new Error('Source switch button was not found');
+    const sourcePanelState = await waitFor(
+      () => player.evaluate(`(() => {
+        const boundary = document.querySelector('.error-boundary');
+        if (boundary) return { pageError: boundary.textContent.trim() };
+        const panel = document.querySelector('.source-panel');
+        if (!panel || panel.querySelector('.source-panel-state .loading-spinner')) return null;
+        return {
+          candidateCount: panel.querySelectorAll('.source-candidate').length,
+          lineBadgeCount: panel.querySelectorAll('.line-badge').length,
+          error: panel.querySelector('.source-panel-state.error')?.textContent.trim() || ''
+        };
+      })()`),
+      'source candidate panel',
+      60000,
+      500
+    );
+    if (sourcePanelState.pageError) {
+      throw new Error(`Source panel crashed the page: ${sourcePanelState.pageError}`);
+    }
+    await player.evaluate(`document.querySelector('.source-panel-close')?.click()`, true);
+
     console.log('[smoke] Verifying progress-bar click and drag seeking');
     await player.send('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
@@ -312,6 +367,111 @@ async function main() {
       250
     );
 
+    console.log('[smoke] Verifying line and episode transitions');
+    const lineSwitch = await player.evaluate(`(() => {
+      const tabs = Array.from(document.querySelectorAll('.line-selector .line-tab'));
+      if (tabs.length < 2) return { skipped: true, reason: 'single-line source' };
+      const active = tabs.find(tab => tab.classList.contains('active')) || tabs[0];
+      const target = tabs.find(tab => tab !== active);
+      const result = {
+        skipped: false,
+        original: active.textContent.trim(),
+        target: target.textContent.trim()
+      };
+      target.click();
+      return result;
+    })()`, true);
+
+    let lineSwitchState = lineSwitch;
+    let episodeSwitchState = null;
+    let returnLineState = null;
+    if (!lineSwitch.skipped) {
+      lineSwitchState = await waitFor(
+        () => player.evaluate(`(() => {
+          const video = document.querySelector('video');
+          const root = document.querySelector('.video-player-container');
+          const component = root?.__vueParentComponent?.proxy;
+          const activeLine = document.querySelector('.line-selector .line-tab.active')?.textContent.trim() || '';
+          if (activeLine !== ${JSON.stringify(lineSwitch.target)} || !video || video.error
+            || video.readyState < 2 || video.paused || video.currentTime <= 0.5
+            || component?.error || component?.autoRecovering) return null;
+          return {
+            activeLine,
+            lineId: component?.currentVideo?.lineId || '',
+            episode: component?.currentVideo?.episode?.title || '',
+            currentTime: video.currentTime,
+            readyState: video.readyState,
+            playbackState: component?.playbackState || ''
+          };
+        })()`),
+        `line ${lineSwitch.target} playback`,
+        60000,
+        500
+      );
+
+      const clickedSecondEpisode = await player.evaluate(`(() => {
+        const buttons = Array.from(document.querySelectorAll('.episodes-list .episode-btn'));
+        if (buttons.length < 2) return false;
+        buttons[1].click();
+        return true;
+      })()`, true);
+      if (!clickedSecondEpisode) throw new Error('Second episode button was not found');
+
+      episodeSwitchState = await waitFor(
+        () => player.evaluate(`(() => {
+          const video = document.querySelector('video');
+          const root = document.querySelector('.video-player-container');
+          const component = root?.__vueParentComponent?.proxy;
+          const episode = component?.currentVideo?.episode;
+          const episodeNumber = Number(episode?.index);
+          if (!video || video.error || video.readyState < 2 || video.paused || video.currentTime <= 0.5
+            || episodeNumber !== 1 || component?.error || component?.autoRecovering) return null;
+          return {
+            lineId: component?.currentVideo?.lineId || '',
+            episode: episode?.title || '',
+            episodeIndex: episodeNumber,
+            currentTime: video.currentTime,
+            playbackState: component?.playbackState || ''
+          };
+        })()`),
+        'second episode on target line',
+        60000,
+        500
+      );
+
+      await player.evaluate(`(() => {
+        const tabs = Array.from(document.querySelectorAll('.line-selector .line-tab'));
+        const original = tabs.find(tab => tab.textContent.trim() === ${JSON.stringify(lineSwitch.original)});
+        if (!original) return false;
+        original.click();
+        return true;
+      })()`, true);
+
+      returnLineState = await waitFor(
+        () => player.evaluate(`(() => {
+          const video = document.querySelector('video');
+          const root = document.querySelector('.video-player-container');
+          const component = root?.__vueParentComponent?.proxy;
+          const activeLine = document.querySelector('.line-selector .line-tab.active')?.textContent.trim() || '';
+          const episodeIndex = Number(component?.currentVideo?.episode?.index);
+          if (activeLine !== ${JSON.stringify(lineSwitch.original)} || episodeIndex !== 1
+            || !video || video.error || video.readyState < 2 || video.paused || video.currentTime <= 0.5
+            || component?.error || component?.autoRecovering) return null;
+          return {
+            activeLine,
+            lineId: component?.currentVideo?.lineId || '',
+            episode: component?.currentVideo?.episode?.title || '',
+            episodeIndex,
+            currentTime: video.currentTime,
+            playbackState: component?.playbackState || ''
+          };
+        })()`),
+        `return to line ${lineSwitch.original}`,
+        60000,
+        500
+      );
+    }
+
     const screenshot = await player.send('Page.captureScreenshot', { format: 'png' });
     fs.mkdirSync(path.dirname(OUTPUT), { recursive: true });
     fs.writeFileSync(OUTPUT, Buffer.from(screenshot.data, 'base64'));
@@ -326,8 +486,12 @@ async function main() {
       playbackStats,
       controlsHidden,
       controlsRestored,
+      sourcePanelState,
       clickedSeekState,
       draggedSeekState,
+      lineSwitchState,
+      episodeSwitchState,
+      returnLineState,
       screenshot: OUTPUT
     }, null, 2));
   } finally {
@@ -345,8 +509,28 @@ async function inspectExistingPlayer() {
     await player.connect();
     await player.send('Runtime.enable');
     await player.send('Page.enable');
-    const state = await player.evaluate(`(() => {
+    const state = await player.evaluate(`(async () => {
       const video = document.querySelector('video');
+      const root = document.querySelector('.video-player-container');
+      const component = root?.__vueParentComponent?.proxy;
+      const currentUrl = component?.currentVideo?.url || '';
+      const inspectUrl = ${JSON.stringify(process.env.SAKURAFALL_INSPECT_URL || '')} || currentUrl;
+      let proxyFetch = null;
+      if (inspectUrl) {
+        try {
+          const response = await fetch(inspectUrl);
+          const body = await response.text();
+          proxyFetch = {
+            url: inspectUrl,
+            ok: response.ok,
+            status: response.status,
+            contentType: response.headers.get('content-type') || '',
+            body: body.slice(0, 2000)
+          };
+        } catch (error) {
+          proxyFetch = { url: inspectUrl, error: error?.message || String(error) };
+        }
+      }
       return {
         video: video ? {
           src: video.currentSrc || video.src,
@@ -360,6 +544,24 @@ async function inspectExistingPlayer() {
           width: video.videoWidth,
           height: video.videoHeight
         } : null,
+        player: component ? {
+          currentUrl,
+          isHls: component.isHLSStream?.(currentUrl),
+          hasHls: !!component.hls,
+          hlsErrorCount: component.hlsErrorCount,
+          hlsRecoveryAttemptPending: component.hlsRecoveryAttemptPending,
+          playbackState: component.playbackState,
+          playbackIntent: component.playbackIntent,
+          startupBuffering: component.startupBuffering,
+          smoothRebuffering: component.smoothRebuffering,
+          activeMediaGeneration: component.activeMediaGeneration,
+          mediaLoadGeneration: component.mediaLoadGeneration,
+          activeMediaMode: component.activeMediaMode,
+          triedSources: component.triedFallbackSourceIds,
+          fallbackRunning: !!component.fallbackCyclePromise,
+          lastFailure: component.lastPlaybackFailure
+        } : null,
+        proxyFetch,
         text: document.body.innerText.slice(0, 3000)
       };
     })()`);

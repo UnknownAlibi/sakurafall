@@ -160,6 +160,7 @@ src/renderer/dist/
 tmp/
 .codex-logs/
 .codex-tmp/
+.codex-verify.log
 artifacts/
 scripts/playback-audit-report.json
 
@@ -167,6 +168,29 @@ scripts/playback-audit-report.json
 tests/tmp-*.mjs
 splash-sample.mp4
 scripts/__pycache__/
+
+# Server runtime state and private deployment material
+server/.data/
+server/deploy/server.env
+server/deploy/server.env.*
+!server/deploy/server.env.example
+server/**/*.key
+server/**/*.pem
+server/**/*.p12
+server/**/*.pfx
+server/**/*.crt
+server/**/*.cer
+server/**/credentials*
+server/**/secrets*
+server/OPERATIONS.local.md
+
+# Local one-off browser/debug probes
+/probe-history.cjs
+/probe-modal.cjs
+/probe-player.cjs
+/test-play-e2e.cjs
+/test-proxy-redirect.cjs
+/test-redirect-server.cjs
 
 # 参考项目源码副本（第三方开源客户端完整源码，仅用于本地参考，不应入库）
 .codex-kazumi-source/

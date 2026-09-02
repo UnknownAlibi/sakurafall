@@ -21,6 +21,7 @@ const { URL } = require('url');
 
 const PROXY_HOST = 'proxy';
 const MAX_PROXY_URL_BYTES = 8 * 1024; // base64 后的上限，实际 URL 远小于此
+const MAX_HLS_MANIFEST_BYTES = 2 * 1024 * 1024;
 
 // 转发到上游的请求白名单（大小写不敏感）
 const FORWARD_REQUEST_HEADERS = new Set([
@@ -44,6 +45,12 @@ const FORWARD_RESPONSE_HEADERS = [
 
 let registered = false;
 
+function isHlsTarget(targetUrl, contentType = '') {
+  const target = String(targetUrl || '');
+  return /\.m3u8(?:[?#]|$)|[?&](?:format|type|ext)=m3u8(?:&|$)/i.test(target)
+    || /(?:application|audio)\/(?:vnd\.apple\.mpegurl|x-mpegurl)/i.test(String(contentType || ''));
+}
+
 /**
  * 生成代理 URL
  * @param {string} targetUrl - 远端 http(s) 视频地址
@@ -55,7 +62,11 @@ function buildProxyUrl(targetUrl, options = {}) {
   if (!/^https?:\/\//i.test(target)) return target; // 非远端地址不代理
   const encoded = Buffer.from(target, 'utf8').toString('base64url');
   const referer = String(options.referer || '').trim();
-  const query = referer ? `?referer=${encodeURIComponent(referer)}` : '';
+  const params = new URLSearchParams();
+  if (referer) params.set('referer', referer);
+  if (options.mediaType === 'hls' || isHlsTarget(target)) params.set('media', 'hls');
+  const queryString = params.toString();
+  const query = queryString ? `?${queryString}` : '';
   return `sakurafall-media://${PROXY_HOST}/${encoded}${query}`;
 }
 
@@ -75,7 +86,8 @@ function parseProxyUrl(rawUrl) {
     const parsed = new URL(target);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
     const referer = url.searchParams.get('referer') || '';
-    return { target, referer };
+    const mediaType = url.searchParams.get('media') || '';
+    return { target, referer, mediaType };
   } catch (_error) {
     return null;
   }
@@ -150,7 +162,61 @@ function guessContentType(filePath) {
 
 // ---- proxy 分支：远端流转发 ----
 
-function proxyRemoteStream(request, { target, referer }) {
+// 大量 CMS 片源的 m3u8/mp4 直链是 302 跳转到带签名的 CDN 地址。
+// 渲染层 hls.js/video 无法跟随代理响应里的重定向（自定义协议下 302 无 location
+// 会被当作加载失败，触发自动换源），必须由代理在主进程侧跟随。
+const MAX_STREAM_REDIRECTS = 5;
+
+function rewriteHlsManifest(manifest, playlistUrl, referer = '') {
+  const rewriteUri = (rawUri) => {
+    const value = String(rawUri || '').trim();
+    if (!value || /^(?:data:|blob:|sakurafall-media:)/i.test(value)) return value;
+    try {
+      return buildProxyUrl(new URL(value, playlistUrl).toString(), { referer });
+    } catch (_) {
+      return value;
+    }
+  };
+
+  return String(manifest || '')
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      if (trimmed.startsWith('#')) {
+        return line.replace(/\bURI=(['"])(.*?)\1/gi, (_match, quote, uri) => (
+          `URI=${quote}${rewriteUri(uri)}${quote}`
+        ));
+      }
+      const leading = line.match(/^\s*/)?.[0] || '';
+      const trailing = line.match(/\s*$/)?.[0] || '';
+      return `${leading}${rewriteUri(trimmed)}${trailing}`;
+    })
+    .join('\n');
+}
+
+function readLimitedBody(stream, limit = MAX_HLS_MANIFEST_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    stream.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > limit) {
+        stream.destroy(new Error('HLS manifest is too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.once('end', () => resolve(Buffer.concat(chunks)));
+    stream.once('error', reject);
+  });
+}
+
+function proxyRemoteStream(request, { target, referer, mediaType = '' }, redirectCount = 0) {
+  if (redirectCount > MAX_STREAM_REDIRECTS) {
+    return Promise.resolve(new Response('Too many redirects', { status: 502 }));
+  }
+
   const method = request.method === 'HEAD' ? 'HEAD' : 'GET';
 
   // 从渲染层请求中筛选可转发的头，附加 referer（部分源校验）
@@ -172,6 +238,28 @@ function proxyRemoteStream(request, { target, referer }) {
 
   return new Promise((resolve) => {
     const upstream = client.request(upstreamUrl, { method, headers }, (res) => {
+      const status = res.statusCode || 502;
+
+      // 跟随上游重定向（与 HttpClient 解析侧行为保持一致），Range 等头原样带到新地址
+      const location = res.headers.location;
+      if (status >= 300 && status < 400 && location) {
+        res.resume();
+        const nextTarget = /^https?:\/\//i.test(location)
+          ? location
+          : new URL(location, target).toString();
+        resolve(proxyRemoteStream(request, { target: nextTarget, referer, mediaType }, redirectCount + 1));
+        return;
+      }
+
+      // 部分 OSS/CDN 的 Referer 反盗链白名单不含源站页面域（如 agedm → 阿里云 OSS），
+      // 带 Referer 反而 403。命中 403 且本次带了 Referer 时去 Referer 重试一次；
+      // referer 为空的递归不会再次进入此分支，无死循环。
+      if (status === 403 && referer) {
+        res.resume();
+        resolve(proxyRemoteStream(request, { target, referer: '', mediaType }, redirectCount));
+        return;
+      }
+
       const responseHeaders = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'range, content-type',
@@ -182,7 +270,6 @@ function proxyRemoteStream(request, { target, referer }) {
         if (value !== undefined) responseHeaders[name] = Array.isArray(value) ? value.join(', ') : value;
       }
 
-      const status = res.statusCode || 502;
       // 上游 4xx/5xx 直接透传状态与少量 body，不做重试（播放器自身有换源/重试逻辑）
       if (method === 'HEAD' || status === 204 || status === 304) {
         res.resume();
@@ -190,13 +277,40 @@ function proxyRemoteStream(request, { target, referer }) {
         return;
       }
 
+      const contentType = String(res.headers['content-type'] || '');
+      if (status >= 200 && status < 300 && (mediaType === 'hls' || isHlsTarget(target, contentType))) {
+        readLimitedBody(res)
+          .then((body) => {
+            const rewritten = Buffer.from(rewriteHlsManifest(body.toString('utf8'), target, referer), 'utf8');
+            responseHeaders['content-type'] = contentType || 'application/vnd.apple.mpegurl';
+            responseHeaders['content-length'] = String(rewritten.length);
+            delete responseHeaders['content-range'];
+            delete responseHeaders['accept-ranges'];
+            resolve(new Response(rewritten, { status, headers: responseHeaders }));
+          })
+          .catch((error) => {
+            resolve(new Response(`HLS proxy error: ${error.message || 'unknown'}`, { status: 502 }));
+          });
+        return;
+      }
+
       const body = require('stream').Readable.toWeb(res);
+      // 诊断日志：定位"视频格式或地址不受支持"(video code 4)的真实原因——
+      // 403/404=地址失效或被拒，text/html=上游返回网页而非视频，502=连接失败
+      if (status >= 400 || /^text\/html/i.test(String(res.headers['content-type'] || ''))) {
+        try {
+          console.warn(`[VideoStreamProxy] 上游异常: status=${status} type=${res.headers['content-type'] || 'none'} target=${target.slice(0, 120)}${referer ? ` referer=${referer.slice(0, 60)}` : ''}`);
+        } catch (_e) { /* EPIPE ignored */ }
+      }
       // Response 构造后若渲染层中断（seek 产生新 Range），Chromium 会 cancel
       // 该 fetch，这里通过 body 流的 cancel 级联销毁上游连接
       resolve(new Response(body, { status, headers: responseHeaders }));
     });
 
     upstream.on('error', (error) => {
+      try {
+        console.warn(`[VideoStreamProxy] 上游连接失败: ${error.message || 'unknown'} target=${target.slice(0, 120)}`);
+      } catch (_e) { /* EPIPE ignored */ }
       resolve(new Response(`Upstream error: ${error.message || 'unknown'}`, { status: 502 }));
     });
     upstream.setTimeout(30_000, () => {
@@ -211,5 +325,7 @@ module.exports = {
   registerVideoStreamProxy,
   setAssetResolver,
   parseProxyUrl,
+  isHlsTarget,
+  rewriteHlsManifest,
   PROXY_HOST
 };

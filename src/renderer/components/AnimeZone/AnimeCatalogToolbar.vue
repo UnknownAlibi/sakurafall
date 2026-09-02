@@ -212,8 +212,8 @@ export default {
   background-color: var(--bg-elevated);
   color: var(--text-primary);
 }
-:global([data-theme="dark"]) .season-select,
-:global([data-theme="dark"]) .browse-filter-select {
+:global([data-theme="dark"] .season-select),
+:global([data-theme="dark"] .browse-filter-select) {
   color-scheme: dark;
 }
 .season-select:hover,

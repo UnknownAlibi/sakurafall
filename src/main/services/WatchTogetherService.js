@@ -23,8 +23,11 @@
 //   - error          本地事件，发生错误
 
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
+const os = require('os');
 const { URL } = require('url');
+const { SERVICE_BASE_URL } = require('../config/serviceEndpoints');
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const DEFAULT_PORT = 9876;
@@ -93,22 +96,23 @@ function buildFrame(opcode, payload, mask = false) {
         : Buffer.from(String(payload), 'utf8');
     const len = payloadBuf.length;
     const frames = [];
+    const maskBit = mask ? 0x80 : 0;
 
     if (len < 126) {
         const header = Buffer.alloc(2);
         header[0] = 0x80 | opcode; // FIN=1
-        header[1] = len;
+        header[1] = maskBit | len;
         frames.push(header);
     } else if (len < 65536) {
         const header = Buffer.alloc(4);
         header[0] = 0x80 | opcode;
-        header[1] = 126;
+        header[1] = maskBit | 126;
         header.writeUInt16BE(len, 2);
         frames.push(header);
     } else {
         const header = Buffer.alloc(10);
         header[0] = 0x80 | opcode;
-        header[1] = 127;
+        header[1] = maskBit | 127;
         header.writeUInt32BE(0, 2);
         header.writeUInt32BE(len, 6);
         frames.push(header);
@@ -227,7 +231,7 @@ class WebSocketConnection {
 // ============================================================
 
 class WatchTogetherService {
-    constructor() {
+    constructor(options = {}) {
         // 主机模式：HTTP/WS 服务器与已连接成员
         this.httpServer = null;
         this.hostConnections = new Set();
@@ -242,8 +246,17 @@ class WatchTogetherService {
         this.videoInfo = null;
         this.hostAddress = 'localhost';
         this.port = DEFAULT_PORT;
+        this.localPort = Math.max(0, Number(options.localPort) || DEFAULT_PORT);
+        this.networkInterfacesProvider = options.networkInterfacesProvider || os.networkInterfaces;
         this.memberId = String(Date.now().toString(36)) + Math.floor(Math.random() * 1e6).toString(36);
         this.memberCount = 1;
+        this.relayBaseUrl = options.relayBaseUrl === undefined
+            ? SERVICE_BASE_URL
+            : String(options.relayBaseUrl || '').replace(/\/+$/, '');
+        this.relayMode = false;
+        this.hostToken = '';
+        this.intentionalLeave = false;
+        this.hostConnected = false;
 
         // 消息回调
         this.messageCallbacks = new Set();
@@ -252,6 +265,10 @@ class WatchTogetherService {
         this.reconnectTimer = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
+    }
+
+    setRelayBaseUrl(baseUrl = '') {
+        this.relayBaseUrl = String(baseUrl || '').trim().replace(/\/+$/, '');
     }
 
     // ── 内部工具 ──────────────────────────────────────
@@ -267,6 +284,62 @@ class WatchTogetherService {
         return String(Math.floor(100000 + Math.random() * 900000));
     }
 
+    _getLanAddress() {
+        const interfaces = this.networkInterfacesProvider() || {};
+        const candidates = [];
+        for (const [name, entries] of Object.entries(interfaces)) {
+            for (const entry of entries || []) {
+                if (!entry || entry.family !== 'IPv4' || entry.internal) continue;
+                const label = String(name || '').toLowerCase();
+                const isVirtual = /(tun|tap|vpn|vmware|virtual|vethernet|docker|wsl|hyper-v|loopback|tailscale|zerotier)/i.test(label);
+                const isPhysical = /(wlan|wi-?fi|wireless|ethernet|以太网|无线)/i.test(label);
+                const isPrivate = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(entry.address);
+                const hasHardwareMac = entry.mac && entry.mac !== '00:00:00:00:00:00';
+                candidates.push({
+                    address: entry.address,
+                    score: (isVirtual ? -1000 : 0) + (isPhysical ? 100 : 0) + (isPrivate ? 20 : 0) + (hasHardwareMac ? 10 : 0)
+                });
+            }
+        }
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0]?.address || '127.0.0.1';
+    }
+
+    _requestJson(pathname, method = 'GET', payload = null) {
+        if (!this.relayBaseUrl) return Promise.reject(new Error('未配置一起看中继服务'));
+        const endpoint = new URL(pathname, `${this.relayBaseUrl}/`);
+        const body = payload == null ? null : Buffer.from(JSON.stringify(payload), 'utf8');
+        const transport = endpoint.protocol === 'https:' ? https : http;
+        return new Promise((resolve, reject) => {
+            const req = transport.request({
+                protocol: endpoint.protocol,
+                hostname: endpoint.hostname,
+                port: endpoint.port || undefined,
+                path: `${endpoint.pathname}${endpoint.search}`,
+                method,
+                headers: body ? {
+                    'Content-Type': 'application/json',
+                    'Content-Length': body.length
+                } : {},
+                timeout: 8000
+            }, (res) => {
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('end', () => {
+                    const text = Buffer.concat(chunks).toString('utf8');
+                    let data = null;
+                    try { data = text ? JSON.parse(text) : {}; } catch (_) { /* handled below */ }
+                    if (res.statusCode >= 200 && res.statusCode < 300 && data) resolve(data);
+                    else reject(new Error(data?.message || data?.error || `中继服务响应异常 (${res.statusCode})`));
+                });
+            });
+            req.on('timeout', () => req.destroy(new Error('连接中继服务超时')));
+            req.on('error', reject);
+            if (body) req.write(body);
+            req.end();
+        });
+    }
+
     // ── 公共 API ──────────────────────────────────────
 
     /**
@@ -278,13 +351,52 @@ class WatchTogetherService {
         // 已在房间中则先离开
         if (this.roomCode) this.leaveRoom();
 
-        this.roomCode = this._generateRoomCode();
         this.roomName = roomName || '一起看';
         this.isHost = true;
         this.videoInfo = videoInfo || null;
         this.memberCount = 1;
+        this.intentionalLeave = false;
+        let degraded = false;
+        let warning = '';
 
-        await this._startWsServer();
+        if (this.relayBaseUrl) {
+            try {
+                const room = await this._requestJson('/v1/rooms', 'POST', {
+                    roomName: this.roomName,
+                    videoInfo: this.videoInfo
+                });
+                this.roomCode = room.roomCode;
+                this.roomName = room.roomName || this.roomName;
+                this.hostToken = room.hostToken;
+                this.relayMode = true;
+                this.hostConnected = true;
+                this.hostAddress = new URL(this.relayBaseUrl).host;
+                this.port = Number(new URL(this.relayBaseUrl).port) || 443;
+                await this._connectClient();
+            } catch (error) {
+                console.warn('[WatchTogether] 中继服务不可用，切换局域网房间:', error.message);
+                this._disconnectClient();
+                this.roomCode = this._generateRoomCode();
+                this.hostToken = '';
+                this.relayMode = false;
+                this.hostConnected = false;
+                this.hostAddress = this._getLanAddress();
+                this.port = this.localPort;
+                degraded = true;
+                warning = '中继服务暂不可用，已切换为局域网房间';
+                try {
+                    await this._startWsServer();
+                } catch (localError) {
+                    this.leaveRoom();
+                    throw new Error(`中继与局域网房间均不可用：${localError.message}`);
+                }
+            }
+        } else {
+            this.roomCode = this._generateRoomCode();
+            this.relayMode = false;
+            this.hostAddress = this._getLanAddress();
+            await this._startWsServer();
+        }
 
         return {
             success: true,
@@ -294,7 +406,11 @@ class WatchTogetherService {
             isHost: true,
             memberId: this.memberId,
             memberCount: this.memberCount,
-            videoInfo: this.videoInfo
+            videoInfo: this.videoInfo,
+            relay: this.relayMode,
+            degraded,
+            warning,
+            hostAddress: this.hostAddress
         };
     }
 
@@ -303,7 +419,7 @@ class WatchTogetherService {
      * @param {string} roomCode 房间号
      * @param {string} [hostAddress] 主机地址（默认 localhost）
      */
-    async joinRoom(roomCode, hostAddress = 'localhost') {
+    async joinRoom(roomCode, hostAddress = 'localhost', options = {}) {
         if (this.roomCode) this.leaveRoom();
 
         this.roomCode = String(roomCode || '').trim();
@@ -311,14 +427,31 @@ class WatchTogetherService {
         this.hostAddress = String(hostAddress || 'localhost').trim();
         this.memberCount = 1;
         this.videoInfo = null;
+        this.intentionalLeave = false;
+        this.hostToken = '';
+        this.relayMode = !!this.relayBaseUrl && !options.forceLocal;
+        this.hostConnected = false;
+        if (this.relayMode) {
+            const endpoint = new URL(this.relayBaseUrl);
+            this.hostAddress = endpoint.host;
+            this.port = Number(endpoint.port) || 443;
+        } else if (options.forceLocal || options.port) {
+            this.port = Math.max(1, Number(options.port) || this.localPort);
+        }
 
-        await this._connectClient();
+        try {
+            await this._connectClient();
+        } catch (error) {
+            this.leaveRoom();
+            throw new Error(`加入中继房间失败：${error.message}`);
+        }
         return {
             success: true,
             roomCode: this.roomCode,
             isHost: false,
             memberId: this.memberId,
-            hostAddress: this.hostAddress
+            hostAddress: this.hostAddress,
+            relay: this.relayMode
         };
     }
 
@@ -332,7 +465,10 @@ class WatchTogetherService {
         }
         this.reconnectAttempts = 0;
 
-        if (this.isHost) {
+        this.intentionalLeave = true;
+        if (this.relayMode) {
+            this._disconnectClient();
+        } else if (this.isHost) {
             this._stopWsServer();
         } else {
             this._disconnectClient();
@@ -344,6 +480,9 @@ class WatchTogetherService {
         this.isHost = false;
         this.videoInfo = null;
         this.memberCount = 1;
+        this.relayMode = false;
+        this.hostToken = '';
+        this.hostConnected = false;
 
         if (wasInRoom) this._emit({ type: 'left' });
         return { success: true, wasInRoom };
@@ -361,6 +500,12 @@ class WatchTogetherService {
             type: 'sync',
             state: Object.assign({}, state, { timestamp: Date.now() })
         });
+        if (this.relayMode) {
+            const sent = this.clientSocket?.send(msg) ? 1 : 0;
+            return sent
+                ? { success: true, sent }
+                : { success: false, sent: 0, error: '未连接到中继服务' };
+        }
         let sent = 0;
         for (const ws of this.hostConnections) {
             if (ws.send(msg)) sent++;
@@ -393,7 +538,10 @@ class WatchTogetherService {
             timestamp: Date.now()
         });
 
-        if (this.isHost) {
+        if (this.relayMode && this.clientSocket && this.clientSocket.alive) {
+            this.clientSocket.send(remoteMsg);
+            this._emit(localMsg);
+        } else if (this.isHost) {
             // 主机：广播给所有成员，本地直接回显
             for (const ws of this.hostConnections) {
                 ws.send(remoteMsg);
@@ -409,6 +557,25 @@ class WatchTogetherService {
     }
 
     /**
+     * 成员：向主机发送 RTT 探测（时间戳由渲染进程单调时钟生成并原样回显）
+     * @param {number} ts 渲染进程 performance.now() 时间戳
+     */
+    sendPing(ts) {
+        if (!this.roomCode || this.isHost) {
+            return { success: false, error: '当前不是房间成员' };
+        }
+        if (!this.clientSocket || !this.clientSocket.alive) {
+            return { success: false, error: '未连接到主机' };
+        }
+        const sent = this.clientSocket.send(JSON.stringify({
+            type: 'ping',
+            ts: Number(ts) || 0,
+            sentAt: Date.now()
+        }));
+        return { success: sent };
+    }
+
+    /**
      * 查询当前房间信息
      */
     getRoomInfo() {
@@ -421,9 +588,11 @@ class WatchTogetherService {
             port: this.port,
             memberId: this.memberId,
             memberCount: this.memberCount,
+            relay: this.relayMode,
             connected: this.isHost
-                ? !!this.httpServer
+                ? (this.relayMode ? !!(this.clientSocket && this.clientSocket.alive) : !!this.httpServer)
                 : !!(this.clientSocket && this.clientSocket.alive)
+                    && (!this.relayMode || this.hostConnected)
         };
     }
 
@@ -473,7 +642,7 @@ class WatchTogetherService {
         });
     }
 
-    _handleUpgrade(req, socket, _head) {
+    _handleUpgrade(req, socket, head) {
         const key = req.headers['sec-websocket-key'];
         if (!key) {
             socket.destroy();
@@ -518,6 +687,12 @@ class WatchTogetherService {
             this.memberCount = this.hostConnections.size + 1;
         };
 
+        // upgrade 事件触发时 socket 处于暂停状态，必须显式恢复读取，
+        // 否则主机永远收不到成员发来的 chat/ping/state 帧
+        socket.resume();
+        // 握手后立即到达的成员数据落在 head 缓冲区，需要回放
+        if (head && head.length > 0) ws._onData(head);
+
         this.hostConnections.add(ws);
         this.memberCount = this.hostConnections.size + 1;
 
@@ -549,6 +724,9 @@ class WatchTogetherService {
             }
             // 主机本地接收
             this._emit(msg);
+        } else if (msg.type === 'ping') {
+            // 成员 RTT 探测：原样回显给发送方（时间戳由成员自己的单调时钟生成）
+            ws.send(JSON.stringify({ type: 'pong', ts: msg.ts ?? null, sentAt: Date.now() }));
         } else if (msg.type === 'state') {
             // 成员上报状态（简化版中通常忽略，主机是唯一时钟源）
             this._emit(msg);
@@ -586,17 +764,33 @@ class WatchTogetherService {
     }
 
     _connectClientImpl(resolve, reject) {
-        if (!this.roomCode || this.isHost) {
-            reject(new Error('未配置房间或当前为主机'));
+        if (!this.roomCode || (this.isHost && !this.relayMode)) {
+            reject(new Error('未配置房间或当前为本地主机'));
             return;
         }
 
         const key = crypto.randomBytes(16).toString('base64');
-        const path = `/?roomCode=${encodeURIComponent(this.roomCode)}&memberId=${encodeURIComponent(this.memberId)}`;
+        let transport = http;
+        let hostname = this.hostAddress;
+        let port = this.port;
+        let path = `/?roomCode=${encodeURIComponent(this.roomCode)}&memberId=${encodeURIComponent(this.memberId)}`;
+        if (this.relayMode) {
+            const endpoint = new URL(this.relayBaseUrl);
+            transport = endpoint.protocol === 'https:' ? https : http;
+            hostname = endpoint.hostname;
+            port = endpoint.port || (endpoint.protocol === 'https:' ? 443 : 80);
+            const params = new URLSearchParams({
+                roomCode: this.roomCode,
+                memberId: this.memberId,
+                role: this.isHost ? 'host' : 'member'
+            });
+            if (this.isHost && this.hostToken) params.set('token', this.hostToken);
+            path = `${endpoint.pathname.replace(/\/$/, '')}/ws?${params.toString()}`;
+        }
 
-        const req = http.request({
-            hostname: this.hostAddress,
-            port: this.port,
+        const req = transport.request({
+            hostname,
+            port,
             path,
             method: 'GET',
             headers: {
@@ -610,7 +804,7 @@ class WatchTogetherService {
 
         let settled = false;
 
-        req.on('upgrade', (res, socket, _head) => {
+        req.on('upgrade', (res, socket, head) => {
             if (settled) return;
             const ws = new WebSocketConnection(socket, true);
             ws.onMessage = (text) => {
@@ -620,6 +814,13 @@ class WatchTogetherService {
                     this.memberCount = msg.memberCount || 1;
                     if (msg.videoInfo) this.videoInfo = msg.videoInfo;
                     if (msg.roomName) this.roomName = msg.roomName;
+                    this.hostConnected = this.isHost || !!msg.hostConnected;
+                } else if (msg.type === 'member-count') {
+                    this.memberCount = Math.max(1, Number(msg.memberCount) || 1);
+                } else if (msg.type === 'host-connected') {
+                    this.hostConnected = true;
+                } else if (msg.type === 'host-disconnected') {
+                    this.hostConnected = false;
                 }
                 this._emit(msg);
             };
@@ -627,7 +828,7 @@ class WatchTogetherService {
                 this.clientSocket = null;
                 this._emit({ type: 'disconnected' });
                 // 房间未主动离开时尝试重连
-                if (this.roomCode && !this.isHost) {
+                if (this.roomCode && !this.intentionalLeave && (this.relayMode || !this.isHost)) {
                     this._scheduleReconnect();
                 }
             };
@@ -637,6 +838,9 @@ class WatchTogetherService {
 
             this.clientSocket = ws;
             this.reconnectAttempts = 0;
+            // 握手响应之后立即到达的数据会落在 head 缓冲区里，
+            // 不回放的话主机紧接着发的 joined/pong 帧会被静默丢弃
+            if (head && head.length > 0) ws._onData(head);
             settled = true;
             resolve();
         });
@@ -644,12 +848,15 @@ class WatchTogetherService {
         req.on('error', (err) => {
             if (settled) return;
             console.error('[WatchTogether] 连接主机失败:', err.message);
-            if (!this.roomCode || this.isHost) return;
-
-            // 不阻塞调用方，在后台尝试重连
             settled = true;
-            this._scheduleReconnect();
-            resolve();
+            reject(err);
+        });
+
+        req.on('response', (res) => {
+            if (settled) return;
+            settled = true;
+            res.resume();
+            reject(new Error(res.statusCode === 404 ? '房间不存在或已过期' : `WebSocket 握手失败 (${res.statusCode})`));
         });
 
         req.on('timeout', () => {
@@ -674,8 +881,13 @@ class WatchTogetherService {
         });
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
-            if (!this.roomCode || this.isHost) return;
-            this._connectClientImpl(() => {}, () => {});
+            if (!this.roomCode || this.intentionalLeave || (this.isHost && !this.relayMode)) return;
+            this._connectClientImpl(
+                () => {},
+                () => {
+                    if (this.roomCode && !this.intentionalLeave) this._scheduleReconnect();
+                }
+            );
         }, delay);
     }
 

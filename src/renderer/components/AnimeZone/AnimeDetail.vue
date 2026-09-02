@@ -203,7 +203,7 @@
                           @click="currentLine = index"
                         >
                           <span class="line-dot"></span>
-                          线路 {{ index + 1 }}
+                          {{ displayEpisodeLineName(lineId, index) }}
                         </button>
                       </div>
                       <div class="episodes-grid">
@@ -280,7 +280,7 @@
                               :title="line.lineId"
                               @click.stop="selectSourceLine(playSourceIndex(source), line.lineId)"
                             >
-                              线路 {{ lineIndex + 1 }}
+                              {{ displayEpisodeLineName(line.lineId, lineIndex) }}
                             </button>
                           </div>
                           <div class="episodes-grid">
@@ -311,6 +311,29 @@
                         <span class="ep-num">第{{ ep.episode_number || i + 1 }}集</span>
                         <span class="ep-title" :title="ep.title">{{ ep.title }}</span>
                         <span v-if="ep.air_date" class="ep-date">{{ ep.air_date }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 手帐回顾 Tab：无剧透，仅显示已看进度之前的时光签 -->
+                <div v-else-if="activeTab === 'notes'" class="bgm-notes">
+                  <div v-if="loadingTab" class="tab-loading">
+                    <span class="loading-spinner"></span>
+                    <span>翻阅手帐中...</span>
+                  </div>
+                  <div v-else-if="workNotes.length === 0" class="tab-empty notes-empty">
+                    <strong>还没有可回顾的时光签</strong>
+                    <span>播放时在控制栏打开「樱月手帐」，<br/>记录台词、伏笔与名场面。</span>
+                  </div>
+                  <div v-else class="notes-review">
+                    <p class="notes-review-hint">🔒 无剧透回顾 · 仅显示已看进度之前的记录</p>
+                    <div v-for="group in groupedWorkNotes" :key="group.key" class="notes-review-group">
+                      <div class="notes-review-ep">{{ group.label }}</div>
+                      <div v-for="note in group.notes" :key="note.id" class="notes-review-item">
+                        <span class="notes-review-time">{{ formatNoteTime(note.position) }}</span>
+                        <span v-if="note.category" class="notes-review-badge" :class="`is-${note.category}`">{{ noteCategoryLabel(note.category) }}</span>
+                        <span class="notes-review-text">{{ note.note || '收藏了这一刻' }}</span>
                       </div>
                     </div>
                   </div>
@@ -460,7 +483,7 @@
                     @click="currentLine = index"
                   >
                     <span class="line-dot"></span>
-                    线路 {{ index + 1 }}
+                    {{ displayEpisodeLineName(lineId, index) }}
                   </button>
                 </div>
 
@@ -503,7 +526,7 @@ import CachedImage from '../Common/CachedImage.vue';
 import LoadingMascot from '../Common/LoadingMascot.vue';
 import { rankSourcesByMatch } from '../../utils/sourceMatch';
 import { buildSourceSearchQueries, mergeSourceSearchStatuses } from '../../utils/sourceSearchQueries.js';
-import { rankEpisodeLines } from '../../utils/episodeList.js';
+import { formatLineName, rankEpisodeLines } from '../../utils/episodeList.js';
 import {
   plannedEpisodeCount,
   availableEpisodeCount,
@@ -527,7 +550,7 @@ function readPlaySourceCache(anime) {
   return cached;
 }
 
-function writePlaySourceCache(anime, sources, queries) {
+function writePlaySourceCache(anime, sources, queries, complete = false) {
   const key = playSourceCacheKey(anime);
   const hasPlayableSource = Array.isArray(sources) && sources.some(source => (
     source.status === 'success' && source.matchReliable && Number(source.playableEpisodeCount) > 0
@@ -536,6 +559,9 @@ function writePlaySourceCache(anime, sources, queries) {
   playSourceCache.set(key, {
     sources: JSON.parse(JSON.stringify(sources)),
     queries: queries.slice(),
+    // complete=false：首轮快速搜索（returnOnFirstSuccess 提前返回）写入的部分结果，
+    // 再次命中缓存时需后台继续补全，否则残缺列表会占满整个 TTL
+    complete: complete === true,
     expiresAt: Date.now() + PLAY_SOURCE_CACHE_TTL
   });
   while (playSourceCache.size > 48) {
@@ -579,14 +605,17 @@ export default {
       bgmTabs: [
         { key: 'overview', label: '概览' },
         { key: 'play', label: '选集' },
+        { key: 'notes', label: '手帐' },
         { key: 'characters', label: '角色' },
         { key: 'staff', label: '制作' },
         { key: 'comments', label: '吐槽' }
       ],
       // Tab 懒加载状态：记录哪些 Tab 已加载过，避免重复请求
-      tabLoaded: { overview: true, play: false, characters: false, staff: false, comments: false },
+      tabLoaded: { overview: true, play: false, notes: false, characters: false, staff: false, comments: false },
       loadingTab: false,
       // Tab 数据
+      // 手帐回顾（无剧透）：仅当前观看进度之前的时光签
+      workNotes: [],
       characters: [],
       staff: [],
       comments: [],
@@ -668,6 +697,29 @@ export default {
       if (this.episodeLines.length === 0) return [];
       const lineId = this.episodeLines[this.currentLine];
       return this.anime.episodes[lineId] || [];
+    },
+    // 手帐回顾按集分组
+    groupedWorkNotes() {
+      const groups = [];
+      const map = new Map();
+      for (const note of this.workNotes) {
+        const ep = Number(note.episode_number);
+        const key = Number.isFinite(ep) && ep > 0 ? `ep:${ep}` : `title:${note.episode_title || '未分集'}`;
+        let group = map.get(key);
+        if (!group) {
+          group = {
+            key,
+            label: Number.isFinite(ep) && ep > 0
+              ? `第${ep}集${note.episode_title ? ' · ' + note.episode_title : ''}`
+              : (note.episode_title || '未分集'),
+            notes: []
+          };
+          map.set(key, group);
+          groups.push(group);
+        }
+        group.notes.push(note);
+      }
+      return groups;
     },
     visibleCurrentEpisodes() {
       return this.currentEpisodes.slice(0, this.visibleEpisodeLimit);
@@ -840,6 +892,9 @@ export default {
     this.stopModalDrag();
   },
   methods: {
+    displayEpisodeLineName(lineId, fallbackIndex = 0) {
+      return formatLineName(lineId) || `线路 ${Number(fallbackIndex) + 1}`;
+    },
     /**
      * ===== 弹窗内部拖拽 =====
      * 把手 = 整个弹窗主体，排除按钮/链接/输入控件与可点选的交互区，
@@ -1020,6 +1075,17 @@ export default {
           this.playSources = this.decoratePlaySourceLines(cached.sources);
           this.sourceSearchQueriesTried = cached.queries;
           this.expandFirstPlayableSource();
+          // 命中的是首轮快速搜索写入的部分结果：用缓存内容作种子继续后台补全，
+          // 已有源不会被丢弃（merge 只增不减），补全后覆盖缓存
+          if (!cached.complete && Array.isArray(cached.queries) && cached.queries.length > 0) {
+            const cacheToken = ++this._sourceSearchToken;
+            this.continuePlaySourceSearch(
+              cached.queries,
+              cached.sources || [],
+              cacheToken,
+              options
+            );
+          }
           return;
         }
       }
@@ -1135,7 +1201,7 @@ export default {
         }
         if (!isActiveSearch()) return;
         this.expandFirstPlayableSource();
-        writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried);
+        writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried, true);
       };
       run().catch(error => {
         if (isActiveSearch()) console.warn('[AnimeDetail] 后台片源补充失败:', error?.message || error);
@@ -1379,7 +1445,8 @@ export default {
    */
   resetTabState() {
     this.activeTab = 'overview';
-    this.tabLoaded = { overview: true, play: false, characters: false, staff: false, comments: false };
+    this.tabLoaded = { overview: true, play: false, notes: false, characters: false, staff: false, comments: false };
+    this.workNotes = [];
     this.loadingTab = false;
     this.characters = [];
     this.staff = [];
@@ -1454,6 +1521,10 @@ export default {
       this.loadingTab = true;
       await this.loadCharacters();
       this.loadingTab = false;
+    } else if (tabKey === 'notes') {
+      this.loadingTab = true;
+      await this.loadWorkNotes();
+      this.loadingTab = false;
     } else if (tabKey === 'staff') {
       this.loadingTab = true;
       await this.loadStaff();
@@ -1463,6 +1534,39 @@ export default {
       await this.loadComments(1);
       this.loadingTab = false;
     }
+  },
+
+  /**
+   * 加载作品的无剧透手帐回顾（仅已看进度之前的时光签）
+   */
+  async loadWorkNotes() {
+    try {
+      const result = await window.electronAPI?.viewingNoteListSpoilerSafe?.(
+        this.anime.bgm_id,
+        this.anime.name || ''
+      );
+      this.workNotes = Array.isArray(result) ? result : [];
+      this.tabLoaded.notes = true;
+    } catch (e) {
+      console.error('[AnimeDetail] 加载手帐回顾失败:', e);
+      this.workNotes = [];
+      this.tabLoaded.notes = false;
+    }
+  },
+
+  formatNoteTime(value) {
+    const total = Math.max(0, Math.floor(Number(value) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    const mm = String(minutes).padStart(2, '0');
+    const ss = String(seconds).padStart(2, '0');
+    return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+  },
+
+  noteCategoryLabel(value) {
+    const labels = { line: '台词', foreshadow: '伏笔', art: '作画', music: '音乐' };
+    return labels[value] || '';
   },
 
   /**
@@ -2640,6 +2744,77 @@ export default {
   text-align: center;
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+/* ===== 手帐回顾 Tab ===== */
+.notes-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notes-empty strong { color: var(--text-secondary, rgba(255, 255, 255, 0.75)); }
+
+.notes-review {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.notes-review-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+.notes-review-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: var(--bg-card-glass, rgba(255, 255, 255, 0.03));
+}
+
+.notes-review-ep {
+  color: var(--accent-pink, #f26d9f);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.notes-review-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.notes-review-time {
+  flex: 0 0 auto;
+  color: var(--accent-cyan, #8edfff);
+  font: 700 12px/1.4 monospace;
+}
+
+.notes-review-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.notes-review-badge.is-line { background: rgba(142, 223, 255, 0.16); color: #8edfff; }
+.notes-review-badge.is-foreshadow { background: rgba(199, 155, 255, 0.16); color: #c79bff; }
+.notes-review-badge.is-art { background: rgba(255, 180, 106, 0.16); color: #ffb46a; }
+.notes-review-badge.is-music { background: rgba(125, 232, 164, 0.16); color: #7de8a4; }
+
+.notes-review-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.82));
 }
 
 /* ===== 概览 Tab ===== */

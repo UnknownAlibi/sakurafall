@@ -38,6 +38,8 @@ class ImageCacheService {
     this.publicUrlResolver = options.publicUrlResolver || null;
     this._proxyAgent = null;
     this.pending = new Map();
+    this.proxyFallbackCooldownUntil = new Map();
+    this.proxyFallbackCooldownMs = 60 * 1000;
     this.index = {};
     this.saveDelay = Math.max(50, parseInt(options.saveDelay, 10) || 500);
     this.saveTimer = null;
@@ -90,6 +92,50 @@ class ImageCacheService {
     } catch (_error) {
       return '';
     }
+  }
+
+  _directImageFallbackUrl(url) {
+    try {
+      const parsed = new URL(url);
+      if (!/\/cover\/?$/i.test(parsed.pathname)) return '';
+      const target = new URL(parsed.searchParams.get('url') || '');
+      return target.protocol === 'http:' || target.protocol === 'https:' ? target.toString() : '';
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  _proxyFallbackKey(url) {
+    try { return new URL(url).origin; } catch (_error) { return ''; }
+  }
+
+  _isProxyFallbackCooling(url) {
+    const key = this._proxyFallbackKey(url);
+    return key && (this.proxyFallbackCooldownUntil.get(key) || 0) > Date.now();
+  }
+
+  _markProxyFallbackFailure(url) {
+    const key = this._proxyFallbackKey(url);
+    if (key) this.proxyFallbackCooldownUntil.set(key, Date.now() + this.proxyFallbackCooldownMs);
+  }
+
+  _imageFetchCandidates(url, variant) {
+    const direct = this._directImageFallbackUrl(url);
+    const bases = direct && this._isProxyFallbackCooling(url) ? [direct, url] : [url, direct];
+    const candidates = [];
+    for (const base of bases.filter(Boolean)) {
+      const variantUrl = this._variantSourceUrl(base, variant);
+      for (const candidate of [variantUrl, base]) {
+        if (!candidates.some(item => item.url === candidate)) {
+          candidates.push({
+            url: candidate,
+            resized: variant.type === 'thumbnail' && candidate !== base,
+            proxy: !!direct && base === url
+          });
+        }
+      }
+    }
+    return candidates;
   }
 
   async getCover(url, options = {}) {
@@ -268,7 +314,6 @@ class ImageCacheService {
 
   async _downloadAndStore(url, key, variant = { type: 'original' }) {
     try {
-      const variantSourceUrl = this._variantSourceUrl(url, variant);
       let response;
       let receivedUpstreamThumbnail = false;
       const originalEntry = variant.type === 'thumbnail'
@@ -280,13 +325,20 @@ class ImageCacheService {
           contentType: originalEntry.contentType || ''
         };
       } else {
-        try {
-          response = await this._fetchBuffer(variantSourceUrl);
-          receivedUpstreamThumbnail = variantSourceUrl !== url;
-        } catch (error) {
-          if (variantSourceUrl === url) throw error;
-          response = await this._fetchBuffer(url);
+        let lastError = null;
+        const attempts = this._imageFetchCandidates(url, variant);
+        for (const attempt of attempts) {
+          try {
+            const timeout = attempt.proxy ? Math.min(2000, this.timeout) : this.timeout;
+            response = await this._fetchBuffer(attempt.url, 0, timeout);
+            receivedUpstreamThumbnail = attempt.resized;
+            break;
+          } catch (error) {
+            lastError = error;
+            if (attempt.proxy) this._markProxyFallbackFailure(url);
+          }
         }
+        if (!response) throw lastError || new Error('image request failed');
       }
       let storedBuffer = response.buffer;
       let storedContentType = response.contentType || '';
@@ -347,6 +399,16 @@ class ImageCacheService {
     if (variant.type !== 'thumbnail') return url;
     try {
       const parsed = new URL(url);
+      if (/\/cover\/?$/i.test(parsed.pathname)) {
+        const embedded = parsed.searchParams.get('url');
+        if (embedded) {
+          const resizedEmbedded = this._variantSourceUrl(embedded, variant);
+          if (resizedEmbedded && resizedEmbedded !== embedded) {
+            parsed.searchParams.set('url', resizedEmbedded);
+            return parsed.toString();
+          }
+        }
+      }
       const host = parsed.hostname.toLowerCase();
       const supportsResize = host === 'lain.bgm.tv' ||
         host.endsWith('.lain.bgm.tv') ||
@@ -355,8 +417,10 @@ class ImageCacheService {
       if (!supportsResize || !parsed.pathname.includes('/pic/')) return url;
 
       const requestedWidth = parseInt(variant.width, 10) || 360;
-      const resizeWidth = requestedWidth <= 160 ? 200 : (requestedWidth <= 360 ? 400 : 800);
-      const originalPath = parsed.pathname.replace(/^\/r\/\d+\//, '/');
+      const resizeWidth = requestedWidth <= 160 ? 200 : (requestedWidth <= 360 ? 400 : (requestedWidth <= 600 ? 600 : 800));
+      const originalPath = parsed.pathname
+        .replace(/^\/r\/\d+\//, '/')
+        .replace(/\/pic\/cover\/[gscm]\//i, '/pic/cover/l/');
       parsed.protocol = 'https:';
       parsed.pathname = `/r/${resizeWidth}${originalPath}`;
       return parsed.toString();
@@ -400,7 +464,7 @@ class ImageCacheService {
     return this._proxyAgent;
   }
 
-  _fetchBuffer(url, redirectCount = 0) {
+  _fetchBuffer(url, redirectCount = 0, timeoutMs = this.timeout) {
     if (redirectCount > MAX_REDIRECTS) {
       return Promise.reject(new Error(`too many redirects: ${MAX_REDIRECTS}`));
     }
@@ -413,7 +477,7 @@ class ImageCacheService {
         'Accept-Encoding': 'gzip, deflate, br',
         'Referer': this._refererFor(url)
       };
-      const reqOptions = { headers, timeout: this.timeout };
+      const reqOptions = { headers, timeout: timeoutMs };
       if (this._shouldUseProxy(url)) {
         reqOptions.agent = this._getProxyAgent();
       }
@@ -422,7 +486,7 @@ class ImageCacheService {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
           const nextUrl = new URL(res.headers.location, url).toString();
-          this._fetchBuffer(nextUrl, redirectCount + 1).then(resolve).catch(reject);
+          this._fetchBuffer(nextUrl, redirectCount + 1, timeoutMs).then(resolve).catch(reject);
           return;
         }
 

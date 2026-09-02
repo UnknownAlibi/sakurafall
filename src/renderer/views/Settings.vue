@@ -1,4 +1,3 @@
-<!-- filepath: c:\Users\44691\Desktop\webVideo\anime-downloader-electron\src\renderer\views\Settings.vue -->
 <template>
   <div class="settings">
     <div class="settings-header">
@@ -150,6 +149,20 @@
               <option value="high">高清 (1080p)</option>
               <option value="medium">标清 (720p)</option>
               <option value="low">流畅 (480p)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>智能选线偏好</label>
+            <p class="setting-desc">SakuraRoute 挑选候选线路时的倾向，默认稳定优先</p>
+          </div>
+          <div class="setting-control">
+            <select v-model="localSettings.routePreference" @change="updateRoutePreference" class="setting-select">
+              <option value="stability">稳定优先</option>
+              <option value="quality">清晰优先</option>
+              <option value="latency">低延迟优先</option>
             </select>
           </div>
         </div>
@@ -620,6 +633,30 @@
           <span class="section-icon">06</span>
           网络设置
         </h2>
+
+        <div class="setting-item effect-mode-item">
+          <div class="setting-label">
+            <label>数据连接方式</label>
+            <p class="setting-desc">可随时切换；本机直连不会访问 SakuraFall 云服务。</p>
+          </div>
+          <div class="setting-control service-mode-control">
+            <label
+              v-for="mode in serviceModes"
+              :key="mode.value"
+              class="effect-mode-card service-mode-card"
+              :class="{ active: localSettings.serviceMode === mode.value }"
+            >
+              <input
+                v-model="localSettings.serviceMode"
+                type="radio"
+                :value="mode.value"
+                @change="updateServiceMode"
+              />
+              <span class="effect-mode-name">{{ mode.label }}</span>
+              <span class="effect-mode-desc">{{ mode.desc }}</span>
+            </label>
+          </div>
+        </div>
         
         <div class="setting-item">
           <div class="setting-label">
@@ -946,6 +983,7 @@ export default {
         customCss: '',
         uiEffectsMode: 'balanced',
         videoQuality: 'high',
+        routePreference: 'stability',
         autoPlay: true,
         rememberPlaybackRate: true,
         seekStepSeconds: 10,
@@ -953,6 +991,7 @@ export default {
         maxConcurrentConnections: 5,
         cacheSize: 1000,
         autoCleanCache: true,
+        serviceMode: 'cloud',
         proxy: '',
         bangumiMirror: '',
         networkPolicies: null,
@@ -1008,6 +1047,10 @@ export default {
         { value: 'balanced', label: '标准演出', desc: '保留完整界面动效，使用系统鼠标与原生手势' },
         { value: 'performance', label: '纯净模式', desc: '关闭装饰动画与贴纸阴影，优先性能与简洁' }
       ],
+      serviceModes: [
+        { value: 'cloud', label: '使用服务器', desc: '使用云端索引与封面缓存；服务异常时自动回退本机请求' },
+        { value: 'local', label: '不使用服务器', desc: '沿用原有程序逻辑，直接访问官方接口与公开镜像' }
+      ],
       danmakuProviderOptions: [
         { id: 'bilibili', name: '哔哩哔哩', desc: '免配置，直接匹配番剧分集弹幕' },
         { id: 'acfun', name: 'AcFun', desc: '免配置，直接读取番剧弹幕' },
@@ -1030,6 +1073,7 @@ export default {
       'maxConcurrentConnections',
       'cacheSize',
       'autoCleanCache',
+      'serviceMode',
       'proxy',
       'bangumiMirror',
       'networkPolicies',
@@ -1219,6 +1263,15 @@ export default {
       }
     },
 
+    async updateRoutePreference() {
+      try {
+        await this.$store.dispatch('settings/updateRoutePreference', this.localSettings.routePreference);
+        this.showSaveSuccess();
+      } catch (error) {
+        console.error('更新智能选线偏好失败:', error);
+      }
+    },
+
     async updateAutoPlay() {
       try {
         await this.$store.dispatch('settings/updateAutoPlay', this.localSettings.autoPlay);
@@ -1260,6 +1313,13 @@ export default {
     async updateAutoCleanCache() {
       await this.$store.dispatch('settings/updateAutoCleanCache', this.localSettings.autoCleanCache);
       await this.applyNetworkConfig();
+      this.showSaveSuccess();
+    },
+
+    async updateServiceMode() {
+      await this.$store.dispatch('settings/updateServiceMode', this.localSettings.serviceMode);
+      await this.applyNetworkConfig();
+      sessionStorage.setItem('sakurafall:catalog-network-mode-refresh', '1');
       this.showSaveSuccess();
     },
 
@@ -1572,6 +1632,7 @@ export default {
         maxConcurrentConnections: Math.max(1, Math.round(Number(this.localSettings.maxConcurrentConnections) || 5)),
         cacheSize: Math.max(50, Math.round(Number(this.localSettings.cacheSize) || 1000)),
         autoCleanCache: !!this.localSettings.autoCleanCache,
+        serviceMode: this.localSettings.serviceMode === 'local' ? 'local' : 'cloud',
         proxy: String(this.localSettings.proxy || '').trim(),
         bangumiMirror: String(this.localSettings.bangumiMirror || '').trim(),
         networkPolicies
@@ -1987,6 +2048,17 @@ export default {
   grid-template-columns: repeat(3, minmax(112px, 1fr));
   gap: 8px;
   min-width: min(520px, 52vw);
+}
+
+.service-mode-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(170px, 1fr));
+  gap: 8px;
+  min-width: min(520px, 52vw);
+}
+
+.service-mode-card {
+  min-height: 72px;
 }
 
 .effect-mode-card {
@@ -2545,6 +2617,12 @@ input:checked + .slider:before {
   }
 
   .effect-mode-control {
+    grid-template-columns: 1fr;
+    min-width: auto;
+    width: 100%;
+  }
+
+  .service-mode-control {
     grid-template-columns: 1fr;
     min-width: auto;
     width: 100%;
