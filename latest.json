@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.1.0/SakuraFall-Setup-1.1.0.exe",
-  "releaseNotes": "1. 安全: 播放窗口恢复完整同源保护, 远端视频流经主进程代理转发, Anime4K 超分读帧不受跨域限制\n2. 性能: 关闭播放器后主动释放投屏/一起看资源并收缩封面缓存, 内存占用显著回落\n3. 依赖: 升级 undici/hls.js/vue 等核心依赖, 获得安全补丁与稳定性改进\n4. 功能: 弹幕支持多源聚合, 新增系统媒体会话与平台快捷键集成\n5. 审计: 修正 Anime4K 全屏掉帧统计口径, 优化目录筛选审计",
-  "releaseDate": "2026-08-30"
+  "version": "1.2.0",
+  "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.2.0/SakuraFall-Setup-1.2.0.exe",
+  "releaseNotes": "",
+  "releaseDate": "2026-09-02"
 }
