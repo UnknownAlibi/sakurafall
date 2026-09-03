@@ -5,7 +5,12 @@ const DEFAULT_CACHE_TTL = 5 * 60 * 1000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
 
 function normalizeUrl(value, baseUrl = '') {
-  const url = String(value || '').trim().replace(/\\\//g, '/');
+  const url = String(value || '')
+    .trim()
+    .replace(/\\u002f/gi, '/')
+    .replace(/\\x2f/gi, '/')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/gi, '&');
   if (!url) return '';
   if (url.startsWith('//')) return `https:${url}`;
   try {
@@ -30,11 +35,15 @@ function normalizeHeaders(headers = {}) {
 }
 
 function extractMediaUrl(html, pageUrl) {
-  const text = String(html || '');
+  const text = String(html || '')
+    .replace(/\\u002f/gi, '/')
+    .replace(/\\x2f/gi, '/')
+    .replace(/\\\//g, '/');
   const candidates = [
-    /https?:\\?\/\\?\/[^\s"'<>]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?/i,
+    /https?:\/\/[^\s"'<>]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?/i,
     /(?:const|let|var)\s+(?:url|playUrl|videoUrl)\s*=\s*["']([^"']+?\.(?:m3u8|mp4)(?:\?[^"']*)?)["']/i,
-    /["'](?:url|play_url|video_url)["']\s*:\s*["']([^"']+?\.(?:m3u8|mp4)(?:\?[^"']*)?)["']/i
+    /["'](?:url|play_url|video_url|src|file)["']\s*:\s*["']([^"']+?\.(?:m3u8|mp4)(?:\?[^"']*)?)["']/i,
+    /<(?:video|source)[^>]+src=["']([^"']+?\.(?:m3u8|mp4)(?:\?[^"']*)?)["']/i
   ];
 
   for (const pattern of candidates) {

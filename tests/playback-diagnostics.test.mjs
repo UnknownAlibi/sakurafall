@@ -14,12 +14,16 @@ const playerWindowSource = await readFile(
   new URL('../src/renderer/views/PlayerWindow.vue', import.meta.url),
   'utf8'
 );
+const animeDetailModalSource = await readFile(
+  new URL('../src/renderer/mixins/animeDetailModal.js', import.meta.url),
+  'utf8'
+);
 const playerSources = `${videoPlayerSource}\n${playbackLifecycleSource}`;
 const fallbackPolicySource = await readFile(
   new URL('../src/renderer/utils/playbackFallbackPolicy.js', import.meta.url),
   'utf8'
 );
-const { evaluatePlaybackEvidence, shouldAutoFallback } = await import(
+const { evaluatePlaybackEvidence, hasPlaybackStartupActivity, shouldAutoFallback } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(fallbackPolicySource)}`
 );
 
@@ -61,10 +65,12 @@ test('describeHlsError: identifies media decode style failures', () => {
 });
 
 test('describeNativeVideoError: maps browser media error codes', () => {
-  const failure = describeNativeVideoError({ code: 4 });
+  const failure = describeNativeVideoError({ code: 4, message: 'PIPELINE_ERROR_DECODE raw detail' });
 
   assert.equal(failure.source, 'native');
   assert.equal(failure.reason, 'native-src-not-supported');
+  assert.equal(failure.message, '视频格式或地址不受支持');
+  assert.match(failure.technicalMessage, /PIPELINE_ERROR_DECODE/);
   assert.match(failure.userMessage, /切换其他源/);
 });
 
@@ -124,6 +130,14 @@ test('automatic fallback requires confirmed loss of progress and buffered media'
   );
 });
 
+test('startup watchdog distinguishes slow media activity from a dead route', () => {
+  assert.equal(hasPlaybackStartupActivity({ readyState: 1, errorCode: 0 }), true);
+  assert.equal(hasPlaybackStartupActivity({ manifestLoaded: true, errorCode: 0 }), true);
+  assert.equal(hasPlaybackStartupActivity({ bufferProgress: 0.1, errorCode: 0 }), true);
+  assert.equal(hasPlaybackStartupActivity({ readyState: 0, bufferProgress: 0, errorCode: 0 }), false);
+  assert.equal(hasPlaybackStartupActivity({ readyState: 4, errorCode: 3 }), false);
+});
+
 test('fatal HLS events recover in place before the watchdog may switch routes', () => {
   const hlsHandler = playbackLifecycleSource.split('handleHLSError(')[1]?.split('\n    createHlsFailure(')[0] || '';
   const watchdog = playbackLifecycleSource.split('\n    scheduleHlsRecoveryWatchdog(data')[1] || '';
@@ -132,6 +146,7 @@ test('fatal HLS events recover in place before the watchdog may switch routes', 
   assert.doesNotMatch(hlsHandler, /\.destroy\(\)/);
   assert.match(watchdog, /shouldAutoFallback/);
   assert.match(videoPlayerSource, /scheduleNativeFallbackConfirmation\(failure\)/);
+  assert.match(hlsHandler, /swapAudioCodec/);
 });
 
 test('playback startup without progress is confirmed and then falls back', () => {
@@ -160,4 +175,21 @@ test('multi-line source candidates expose their formatter to the Options API tem
   assert.match(videoPlayerSource, /import \{ extractEpisodeNumber, formatLineName \} from/);
   assert.match(videoPlayerSource, /methods:\s*\{\s*formatLineName,/);
   assert.match(videoPlayerSource, /formatLineName\(candidate\.lineId\)/);
+});
+
+test('candidate line identity is preserved through resolution and playback', () => {
+  const candidatePlayer = videoPlayerSource.split('async playSourceCandidate(')[1]
+    ?.split('\n    togglePlay(')[0] || '';
+  assert.match(candidatePlayer, /lineId:\s*plainCandidate\.lineId \|\| plainCandidate\.episode\.lineId/);
+  assert.match(candidatePlayer, /playbackResolve\([\s\S]*episode/);
+  assert.match(candidatePlayer, /playVideo\([\s\S]*lineId:\s*plainCandidate\.lineId \|\| episode\.lineId/);
+});
+
+test('initial player preparation is bounded and reports each fallback stage', () => {
+  assert.match(animeDetailModalSource, /PLAYER_PREPARATION_BUDGET_MS\s*=\s*24000/);
+  assert.match(animeDetailModalSource, /INITIAL_ROUTE_RESOLVE_MS\s*=\s*6500/);
+  assert.match(animeDetailModalSource, /searchTimeout:\s*6000/);
+  assert.match(animeDetailModalSource, /\.slice\(0, 3\)/);
+  assert.match(animeDetailModalSource, /updatePreparationStage\(`正在验证/);
+  assert.match(playerWindowSource, /pendingVideoStage/);
 });

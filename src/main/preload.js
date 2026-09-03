@@ -158,6 +158,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sourceProviderList: (options) => ipcRenderer.invoke('source-provider-list', options),
     sourceProviderSearch: (providerId, keyword, options) => ipcRenderer.invoke('source-provider-search', providerId, keyword, options),
     sourceProviderSearchAll: (keyword, options) => ipcRenderer.invoke('source-provider-search-all', keyword, options),
+    sourceProviderSnapshotGet: (identity, options) => ipcRenderer.invoke('source-provider-snapshot-get', identity, options),
+    sourceProviderSnapshotSet: (identity, snapshot) => ipcRenderer.invoke('source-provider-snapshot-set', identity, snapshot),
     sourceProviderDetail: (providerId, reference, options) => ipcRenderer.invoke('source-provider-detail', providerId, reference, options),
     sourceProviderCategories: (providerId) => ipcRenderer.invoke('source-provider-categories', providerId),
     sourceProviderCatalog: (providerId, options) => ipcRenderer.invoke('source-provider-catalog', providerId, options),

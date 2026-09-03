@@ -576,7 +576,7 @@ export default {
       playbackStartupWatchdog: null,
       nativeFallbackConfirmationPending: false,
       maxHlsRecoveryAttempts: 3,
-      maxFallbackSourceAttempts: 3,
+      maxFallbackSourceAttempts: 5,
       triedFallbackSourceIds: [],
       fallbackRequestToken: 0,
       fallbackCyclePromise: null,
@@ -1352,6 +1352,7 @@ export default {
         success,
         reason,
         error: diagnostics?.message || reason,
+        lineId: this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || '',
         diagnostics: diagnostics ? {
           category: String(diagnostics.category || ''),
           reason: String(diagnostics.reason || reason || ''),
@@ -1379,6 +1380,7 @@ export default {
         url,
         sourceId: this.getCurrentSourceId(),
         providerId: this.currentVideo?.anime?.providerId || this.currentVideo?.providerId || '',
+        lineId: this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || '',
         loadStartedAt: now,
         firstFrameAt: 0,
         lastPlayStartedAt: 0,
@@ -1478,7 +1480,7 @@ export default {
     reportPlaybackSessionSample(session, reason) {
       if (!session?.firstFrameAt) return;
       const { metrics, quality } = this.buildPlaybackSessionMetrics(session);
-      const payload = { sample: 'session', success: true, reason, metrics, quality };
+      const payload = { sample: 'session', success: true, reason, metrics, quality, lineId: session.lineId || '' };
       const providerId = session.providerId || (session.sourceId ? `cms:${session.sourceId}` : '');
       if (providerId && window.electronAPI?.sourceProviderReportPlayback) {
         window.electronAPI.sourceProviderReportPlayback(providerId, payload).catch(() => {});
@@ -1689,15 +1691,22 @@ export default {
         const resumeAt = Number(this.$refs.videoElement?.currentTime) || Number(this.currentTime) || 0;
         this.sakuraRoute = beginRouteSwitch(this.ensureSakuraRouteSession(), plainCandidate, resumeAt);
         this.rememberFallbackAttempt(plainCandidate.sourceId, plainCandidate.providerId, plainCandidate.lineId);
+        const currentAnime = toIpcPlainObject(this.currentVideo?.anime, {});
         const anime = {
           ...plainCandidate.anime,
+          ...currentAnime,
+          name: currentAnime?.name || plainCandidate.anime.name,
+          sourceAnimeId: plainCandidate.anime.id || plainCandidate.anime.anime_id || '',
           source: plainCandidate.anime.source || plainCandidate.sourceId,
           sourceId: plainCandidate.sourceId || plainCandidate.anime.sourceId,
           providerId: plainCandidate.providerId || plainCandidate.anime.providerId || `cms:${plainCandidate.sourceId}`,
           sourceType: plainCandidate.anime.sourceType || 'cms',
           sourceName: plainCandidate.sourceName || plainCandidate.anime.sourceName
         };
-        const episode = plainCandidate.episode;
+        const episode = {
+          ...plainCandidate.episode,
+          lineId: plainCandidate.lineId || plainCandidate.episode.lineId || ''
+        };
         let resolvedVideo = null;
         let videoUrl = plainCandidate.url;
         if (window.electronAPI?.playbackResolve) {
@@ -2439,6 +2448,7 @@ export default {
         const payload = {
           issue: 'advertising',
           detection,
+          lineId: this.currentVideo?.lineId || this.currentVideo?.episode?.lineId || '',
           episodeTitle: this.currentVideo?.episode?.title || '',
           url: this.currentVideo?.url || ''
         };

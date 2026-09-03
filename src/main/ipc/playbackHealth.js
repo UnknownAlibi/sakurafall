@@ -8,6 +8,12 @@ function logPlaybackFailure(scope, id, result = {}) {
 }
 
 function registerPlaybackHealthIpc({ handle, cmsApiService, sourceProviderRegistry }) {
+  handle('source-provider-snapshot-get', (_event, identity, options) => (
+    sourceProviderRegistry.getSearchSnapshot(identity, options || {})
+  ));
+  handle('source-provider-snapshot-set', (_event, identity, snapshot) => (
+    sourceProviderRegistry.saveSearchSnapshot(identity, snapshot || {})
+  ));
   handle('source-provider-report-playback', (_event, providerId, result = {}) => {
     logPlaybackFailure('provider', providerId, result);
     return sourceProviderRegistry.reportPlayback(providerId, result);

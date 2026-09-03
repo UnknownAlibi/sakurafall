@@ -3,7 +3,7 @@ import {
   describeNativeVideoError,
   formatPlaybackFailureForDisplay
 } from '../utils/playbackDiagnostics.js';
-import { shouldAutoFallback } from '../utils/playbackFallbackPolicy.js';
+import { hasPlaybackStartupActivity, shouldAutoFallback } from '../utils/playbackFallbackPolicy.js';
 
 export default {
   methods: {
@@ -102,7 +102,14 @@ export default {
         this.recoveryMessage = exhausted
           ? '线路出现连续解码异常，正在确认播放是否已经中断...'
           : `视频解码异常，正在尝试恢复 (${this.hlsErrorCount}/${this.maxHlsRecoveryAttempts})`;
-        retry(() => hlsInstance.recoverMediaError());
+        retry(() => {
+          // hls.js 推荐在普通 media recovery 仍失败时交换 AAC codec，
+          // 可恢复 Chromium 对部分异常音频分片的 PIPELINE_ERROR_DECODE。
+          if (this.hlsErrorCount >= 2 && typeof hlsInstance.swapAudioCodec === 'function') {
+            hlsInstance.swapAudioCodec();
+          }
+          hlsInstance.recoverMediaError();
+        });
       } else {
         this.recoveryMessage = '线路出现异常，正在确认播放是否已经中断...';
         const video = this.$refs.videoElement;
@@ -138,7 +145,7 @@ export default {
     },
 
     finalPlaybackErrorMessage(failure) {
-      return `自动换源未成功：${failure?.message || '视频播放失败'}`;
+      return `已尝试可用线路：${failure?.message || '视频播放失败'}`;
     },
 
     getCurrentSourceId() {
@@ -252,9 +259,28 @@ export default {
           if (generation === this.mediaLoadGeneration && this.currentVideo?.url === url) {
             this.schedulePlaybackStartupWatchdog(generation, url, {
               forcedPlaybackAttempted: true,
+              slowStartExtensionUsed: true,
               delay: 6000
             });
           }
+          return;
+        }
+
+        const hasStartupActivity = hasPlaybackStartupActivity({
+          errorCode: Number(video?.error?.code) || 0,
+          readyState: Number(video?.readyState) || 0,
+          bufferAhead: this.getBufferedAhead(video),
+          duration: Number(video?.duration) || 0,
+          bufferProgress: Number(this.bufferProgress) || 0,
+          manifestLoaded: this.activeMediaMode === 'hls' && (this.hls?.levels?.length || 0) > 0
+        });
+        if (hasStartupActivity && options.slowStartExtensionUsed !== true) {
+          this.recoveryMessage = '线路响应较慢，已收到媒体数据，正在继续缓冲...';
+          this.schedulePlaybackStartupWatchdog(generation, url, {
+            forcedPlaybackAttempted,
+            slowStartExtensionUsed: true,
+            delay: 12000
+          });
           return;
         }
 

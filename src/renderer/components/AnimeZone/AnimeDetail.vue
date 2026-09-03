@@ -534,10 +534,13 @@ import {
 } from '../../utils/episodeMetadata.js';
 
 const playSourceCache = new Map();
-const PLAY_SOURCE_CACHE_TTL = 8 * 60 * 1000;
+const PLAY_SOURCE_CACHE_TTL = 30 * 60 * 1000;
 
 function playSourceCacheKey(anime = {}) {
-  return String(anime.bgm_id || anime.bgmId || anime.id || anime.name || '').trim();
+  const bgmId = anime.bgm_id || anime.bgmId;
+  if (bgmId) return `bangumi:${bgmId}`;
+  if (anime.id) return `${anime.source || anime.sourceId || 'unknown'}:${anime.id}`;
+  return `title:${String(anime.name || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase()}`;
 }
 
 function readPlaySourceCache(anime) {
@@ -559,8 +562,6 @@ function writePlaySourceCache(anime, sources, queries, complete = false) {
   playSourceCache.set(key, {
     sources: JSON.parse(JSON.stringify(sources)),
     queries: queries.slice(),
-    // complete=false：首轮快速搜索（returnOnFirstSuccess 提前返回）写入的部分结果，
-    // 再次命中缓存时需后台继续补全，否则残缺列表会占满整个 TTL
     complete: complete === true,
     expiresAt: Date.now() + PLAY_SOURCE_CACHE_TTL
   });
@@ -628,6 +629,7 @@ export default {
       _sourceEpisodeRenderTimer: null,
       _sourcePrefetchTimer: null,
       _sourceSearchToken: 0,
+      _playSourceLoadPromise: null,
       // Tab 数据预取：角色/制作数据用 promise 缓存，预取与切换共用同一请求
       _charactersPromise: null,
       _staffPromise: null,
@@ -1028,6 +1030,7 @@ export default {
       this.sourceSearchQueriesTried = [];
       this.sourceSearchError = '';
       this._playSourcePrefetching = false;
+      this._playSourceLoadPromise = null;
     },
 
     schedulePlaySourcePrefetch() {
@@ -1040,8 +1043,13 @@ export default {
         this.tabLoaded.play = true;
         this._playSourcePrefetching = true;
         // silent 预取：不显示 loading，静默在后台搜索
-        this.loadPlaySources({ silent: true }).finally(() => {
+        const pending = this.loadPlaySources({ silent: true });
+        this._playSourceLoadPromise = pending;
+        pending.finally(() => {
+          if (this._playSourceLoadPromise !== pending) return;
+          this._playSourceLoadPromise = null;
           this._playSourcePrefetching = false;
+          if (this.activeTab === 'play') this.loadingSources = false;
         });
       };
 
@@ -1069,55 +1077,66 @@ export default {
      */
     async loadPlaySources(options = {}) {
       if (!this.anime.name) return;
+      const sourceSearchToken = ++this._sourceSearchToken;
+      const isActiveSearch = () => sourceSearchToken === this._sourceSearchToken && !this._isUnmounted;
+      const snapshotIdentity = playSourceCacheKey(this.anime);
+      let staleSnapshot = null;
+
       if (!options.refresh) {
         const cached = readPlaySourceCache(this.anime);
         if (cached) {
           this.playSources = this.decoratePlaySourceLines(cached.sources);
           this.sourceSearchQueriesTried = cached.queries;
+          this.loadingSources = false;
           this.expandFirstPlayableSource();
-          // 命中的是首轮快速搜索写入的部分结果：用缓存内容作种子继续后台补全，
-          // 已有源不会被丢弃（merge 只增不减），补全后覆盖缓存
-          if (!cached.complete && Array.isArray(cached.queries) && cached.queries.length > 0) {
-            const cacheToken = ++this._sourceSearchToken;
-            this.continuePlaySourceSearch(
-              cached.queries,
-              cached.sources || [],
-              cacheToken,
-              options
-            );
-          }
           return;
         }
       }
-      const sourceSearchToken = ++this._sourceSearchToken;
-      const isActiveSearch = () => sourceSearchToken === this._sourceSearchToken;
+
       const perfMark = window.__perf?.start('source-search');
-      // 已有剧集数据时不阻塞显示，多源搜索后台进行
-      const hasExistingEpisodes = this.hasEpisodes;
-      // silent 模式（预取）不显示 loading，避免干扰概览 Tab
-      if (!hasExistingEpisodes && !options.silent) {
-        this.loadingSources = true;
-      }
+      // 用户进入选集时只看到一次统一加载态，完整源集合准备好后一次性呈现。
+      if (!options.silent) this.loadingSources = true;
       this.playSources = [];
       this.backgroundSourceSearch = false;
       this.expandedSource = -1;
       this.sourceSearchQueriesTried = [];
       this.sourceSearchError = '';
       try {
+        if (window.electronAPI?.sourceProviderSnapshotGet) {
+          const persisted = await window.electronAPI.sourceProviderSnapshotGet(snapshotIdentity, { allowStale: true });
+          if (!isActiveSearch()) return;
+          if (persisted && !persisted.stale && !options.refresh) {
+            this.playSources = this.decoratePlaySourceLines(persisted.sources || []);
+            this.sourceSearchQueriesTried = persisted.queries || [];
+            writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried, true);
+            this.expandFirstPlayableSource();
+            return;
+          }
+          staleSnapshot = persisted?.stale ? persisted : null;
+        }
+
         const queries = buildSourceSearchQueries(this.anime, { limit: 3 });
         if (queries.length === 0) queries.push(this.anime.name);
-        let mergedStatuses = [];
+        let freshStatuses = [];
 
         for (const query of queries) {
           let statusList;
           if (window.electronAPI?.sourceProviderSearchAll) {
+            const reliableProviderIds = this.decoratePlaySourceLines(rankSourcesByMatch(this.anime, freshStatuses))
+              .filter(source => source.status === 'success' && source.matchReliable && source.playableEpisodeCount > 0)
+              .map(source => source.providerId || source.sourceId)
+              .filter(Boolean);
+            const unavailableProviderIds = freshStatuses
+              .filter(source => source.status === 'error' || source.status === 'disabled')
+              .map(source => source.providerId || source.sourceId)
+              .filter(Boolean);
+            const completedProviderIds = [...new Set([...reliableProviderIds, ...unavailableProviderIds])];
             statusList = await window.electronAPI.sourceProviderSearchAll(query, {
-              concurrency: 2,
+              concurrency: 4,
               hydrateLimit: 1,
               includeFallback: true,
-              providerLimit: 4,
-              providerTimeoutMs: 2400,
-              returnOnFirstSuccess: true,
+              providerTimeoutMs: 4500,
+              excludeProviderIds: completedProviderIds,
               refresh: options.refresh === true
             });
           } else if (window.electronAPI?.cmsMultiSearchAllSourcesWithStatus) {
@@ -1139,15 +1158,38 @@ export default {
 
           if (!isActiveSearch()) return;
 
-          mergedStatuses = mergeSourceSearchStatuses(mergedStatuses, statusList || []);
+          freshStatuses = mergeSourceSearchStatuses(freshStatuses, statusList || []);
           this.sourceSearchQueriesTried.push(query);
-          if (this.applyPlaySourceStatuses(mergedStatuses)) break;
         }
 
+        // 新搜索结果在前；旧快照仅为临时超时或源站波动提供兜底。
+        const completeStatuses = mergeSourceSearchStatuses(freshStatuses, staleSnapshot?.sources || []);
+        const hasPlayableSources = this.applyPlaySourceStatuses(completeStatuses);
         this.expandFirstPlayableSource();
-        writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried);
-        this.continuePlaySourceSearch(queries, mergedStatuses, sourceSearchToken, options);
+        writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried, true);
+        if (hasPlayableSources && window.electronAPI?.sourceProviderSnapshotSet) {
+          const sources = this.playSources.map(source => {
+            const snapshotSource = { ...source };
+            delete snapshotSource.rankedLines;
+            return snapshotSource;
+          });
+          window.electronAPI.sourceProviderSnapshotSet(snapshotIdentity, {
+            sources,
+            queries: this.sourceSearchQueriesTried
+          }).then(result => {
+            if (result?.success === false) {
+              console.warn('[AnimeDetail] 片源快照写入失败:', result.error || 'unknown');
+            }
+          }).catch(error => {
+            console.warn('[AnimeDetail] 片源快照写入异常:', error?.message || error);
+          });
+        }
       } catch (e) {
+        if (isActiveSearch() && staleSnapshot?.sources?.length) {
+          this.applyPlaySourceStatuses(staleSnapshot.sources);
+          this.sourceSearchQueriesTried = staleSnapshot.queries || [];
+          this.expandFirstPlayableSource();
+        }
         if (isActiveSearch()) this.sourceSearchError = e?.message || String(e);
         console.error('[AnimeDetail] 加载多源播放候选失败:', e);
       } finally {
@@ -1174,40 +1216,6 @@ export default {
         source.status === 'success' && source.playableEpisodeCount > 0 && source.matchReliable
       ));
       if (firstSuccess >= 0 && this.expandedSource < 0) this.expandedSource = firstSuccess;
-    },
-
-    continuePlaySourceSearch(queries, initialStatuses, sourceSearchToken, options = {}) {
-      if (!window.electronAPI?.sourceProviderSearchAll) return;
-      this.backgroundSourceSearch = true;
-      const isActiveSearch = () => sourceSearchToken === this._sourceSearchToken && !this._isUnmounted;
-      const run = async () => {
-        let mergedStatuses = initialStatuses;
-        // Keep the first playable result responsive. The exhaustive pass only
-        // starts after the user has had time to choose an episode.
-        await new Promise(resolve => setTimeout(resolve, 2600));
-        for (const query of queries) {
-          if (!isActiveSearch()) return;
-          const statuses = await window.electronAPI.sourceProviderSearchAll(query, {
-            concurrency: 2,
-            hydrateLimit: 1,
-            includeFallback: true,
-            providerTimeoutMs: 5000,
-            refresh: options.refresh === true
-          });
-          if (!isActiveSearch()) return;
-          mergedStatuses = mergeSourceSearchStatuses(mergedStatuses, statuses || []);
-          if (!this.sourceSearchQueriesTried.includes(query)) this.sourceSearchQueriesTried.push(query);
-          if (this.applyPlaySourceStatuses(mergedStatuses)) break;
-        }
-        if (!isActiveSearch()) return;
-        this.expandFirstPlayableSource();
-        writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried, true);
-      };
-      run().catch(error => {
-        if (isActiveSearch()) console.warn('[AnimeDetail] 后台片源补充失败:', error?.message || error);
-      }).finally(() => {
-        if (isActiveSearch()) this.backgroundSourceSearch = false;
-      });
     },
 
     stopBackgroundSourceSearch() {
@@ -1496,16 +1504,24 @@ export default {
   /**
    * 切换 Tab，懒加载对应数据
    */
-  async switchTab(tabKey) {
+    async switchTab(tabKey) {
     if (this.activeTab === tabKey) return;
     this.activeTab = tabKey;
 
     // play Tab 特殊处理：预取可能已设 tabLoaded.play=true
-    if (tabKey === 'play') {
-      if (this._playSourcePrefetching) {
-        // 预取进行中：显示 loading，预取的 finally 会自动清除
-        this.loadingSources = true;
-      } else if (!this.tabLoaded.play) {
+      if (tabKey === 'play') {
+        if (this._playSourcePrefetching) {
+          // 与后台预取共用同一个请求。已有结果时继续展示结果，不用整块 loading 覆盖。
+          this.loadingSources = this.displayPlaySources.length === 0;
+          const pending = this._playSourceLoadPromise;
+          if (pending) {
+            try {
+              await pending;
+            } finally {
+              if (this.activeTab === 'play') this.loadingSources = false;
+            }
+          }
+        } else if (!this.tabLoaded.play) {
         // 未预取过（如非 Bangumi 番剧或预取被跳过），正常加载
         this.tabLoaded.play = true;
         this.loadPlaySources();

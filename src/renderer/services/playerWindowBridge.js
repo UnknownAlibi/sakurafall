@@ -1,10 +1,11 @@
 import { toIpcPlainObject } from '../utils/ipcPayload.js';
 
-export async function openPlayerPreparation(api, { title, episode, lineId }) {
+export async function openPlayerPreparation(api, { title, episode, lineId, stage = '' }) {
   if (!api?.openPlayerWindow) return null;
   const opened = await api.openPlayerWindow({
     pending: true,
     title,
+    stage,
     episodeId: episode?.id || episode?.url || '',
     lineId: lineId || ''
   });

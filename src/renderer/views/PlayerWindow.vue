@@ -49,7 +49,7 @@
         <div v-if="initialResolvePending" class="player-prepare-state" role="status" aria-live="polite">
           <span class="prepare-spinner"></span>
           <strong>{{ pendingVideoTitle || '正在准备播放' }}</strong>
-          <span>正在验证线路并选择可播放地址...</span>
+          <span>{{ pendingVideoStage || '正在验证线路并选择可播放地址...' }}</span>
         </div>
         <div v-else-if="initialResolveError" class="player-prepare-state player-prepare-error" role="alert">
           <strong>这一集暂时无法播放</strong>
@@ -163,6 +163,7 @@ export default {
       initialResolvePending: true,
       initialResolveError: '',
       pendingVideoTitle: '',
+      pendingVideoStage: '',
       enhancedPlayerBusy: false,
       enhancedPlayerNotice: null,
       enhancedNoticeTimer: null
@@ -264,23 +265,27 @@ export default {
         this.initialResolvePending = true;
         this.initialResolveError = '';
         this.pendingVideoTitle = videoData.title || '';
+        this.pendingVideoStage = videoData.stage || this.pendingVideoStage || '正在验证当前线路...';
         return;
       }
       if (videoData?.error) {
         this.initialResolvePending = false;
         this.initialResolveError = videoData.error;
         this.pendingVideoTitle = videoData.title || this.pendingVideoTitle;
+        this.pendingVideoStage = '';
         return;
       }
       if (!videoData?.url) {
         this.initialResolvePending = false;
         this.initialResolveError = '没有获取到可播放地址，请切换其他分集。';
+        this.pendingVideoStage = '';
         return;
       }
 
       this.initialResolvePending = false;
       this.initialResolveError = '';
       this.pendingVideoTitle = videoData.title || '';
+      this.pendingVideoStage = '';
       const sameVideo = this.currentVideo?.url === videoData.url
         && this.currentVideo?.episodeId === videoData.episodeId
         && String(this.currentVideo?.lineId || '') === String(videoData.lineId || '');

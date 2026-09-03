@@ -714,7 +714,16 @@ class CmsApiService {
   }
 
   recordPlaybackResult(sourceId, result = {}) {
-    return this._healthTracker.recordPlaybackResult(sourceId, result);
+    const sourceResult = this._healthTracker.recordPlaybackResult(sourceId, result);
+    const lineId = String(result?.lineId || '').trim().slice(0, 120);
+    if (!lineId || String(sourceId).includes('|')) return sourceResult;
+    const routeKey = `${sourceId}|${lineId}`;
+    const routeResult = this._healthTracker.recordPlaybackResult(routeKey, result);
+    return {
+      ...sourceResult,
+      routeKey,
+      routeHealth: routeResult?.health || this._healthTracker.getHealth(routeKey)
+    };
   }
 
   _sourceCooldownReason(message) {
@@ -940,7 +949,10 @@ class CmsApiService {
       safeLog('[CmsApi] 在源中搜索:', source.name, keyword);
 
       const startedAt = Date.now();
-      const text = await this.fetch(url, source.api, { signal: options.signal });
+      const text = await this.fetch(url, source.api, {
+        signal: options.signal,
+        timeout: options.timeout
+      });
       const data = this._parseJson(text, '[CmsApi]');
 
       const list = (data.list || []).map(vod => this._mapVodDetail(vod, sourceId));
@@ -979,6 +991,10 @@ class CmsApiService {
 
   findMatchingEpisode(episodesByLine, targetTitle, targetIndex = -1) {
     return this._parser.findMatchingEpisode(episodesByLine, targetTitle, targetIndex);
+  }
+
+  findMatchingEpisodeLines(episodesByLine, targetTitle, targetIndex = -1) {
+    return this._parser.findMatchingEpisodeLines(episodesByLine, targetTitle, targetIndex);
   }
 
   firstPlayableEpisode(episodesByLine) {
@@ -1206,7 +1222,10 @@ class CmsApiService {
       options.concurrency || this.SEARCH_CONCURRENCY,
       async (source) => {
         try {
-          const result = await this.searchInSource(source.id, keyword, 1, { signal: options.signal });
+          const result = await this.searchInSource(source.id, keyword, 1, {
+            signal: options.signal,
+            timeout: options.requestTimeout
+          });
           if (result.data && result.data.length > 0) {
             results.push({
               sourceId: source.id,
@@ -1400,6 +1419,7 @@ class CmsApiService {
       titleMatchScore: candidate.titleMatchScore,
       titleMatchExact: candidate.titleMatchExact,
       quality: candidate.quality,
+      probeWarning: candidate.probeWarning || '',
       score: candidate.score
     };
   }
@@ -1453,6 +1473,7 @@ class CmsApiService {
         excludeSourceIds: [...excludeKeys],
         includeSkipped: true,
         concurrency: target.searchConcurrency || this.SEARCH_CONCURRENCY,
+        requestTimeout: target.searchTimeout,
         signal
       });
       this._throwIfAborted(signal);
@@ -1501,7 +1522,21 @@ class CmsApiService {
               headers: playbackHeaders,
               signal
             });
-          candidate.health = this._getSourceHealth(candidate.sourceId);
+          const sourceHealth = this._getSourceHealth(candidate.sourceId);
+          const routeKey = candidate.lineId ? `${candidate.sourceId}|${candidate.lineId}` : candidate.sourceId;
+          const routeHealth = this._getSourceHealth(routeKey);
+          const routeHasEvidence = (routeHealth.playbackSuccessCount || 0)
+            + (routeHealth.playbackFailureCount || 0)
+            + (routeHealth.playbackSessionCount || 0) > 0;
+          candidate.health = routeHasEvidence
+            ? {
+                ...routeHealth,
+                score: Math.round(sourceHealth.score * 0.35 + routeHealth.score * 0.65),
+                sourceScore: sourceHealth.score,
+                routeScore: routeHealth.score,
+                routeKey
+              }
+            : sourceHealth;
           candidate.healthScore = candidate.health.score;
           candidate.preference = Number(sourceConfig?.preference) || 0;
           // 按用户路线偏好（稳定/清晰/低延迟）加权，偏好子分归一化后合成 0-100 路线分
@@ -1521,12 +1556,22 @@ class CmsApiService {
       const viableCandidates = [];
       for (const candidate of prioritized) {
         if (candidate.quality?.error || candidate.quality?.source === 'probe-failed') {
-          this.recordPlaybackResult(candidate.sourceId, {
-            success: false,
-            reason: 'preflight-failed',
-            error: candidate.quality?.error || '视频流预检失败'
-          });
-          continue;
+          const probeError = String(candidate.quality?.error || '视频流预检失败');
+          const definitelyInvalid = /invalid_m3u8_manifest|html response|不是有效\s*m3u8|返回的不是\s*m3u8|\b(?:401|403|404|410)\b/i.test(probeError);
+          if (definitelyInvalid) {
+            this.recordPlaybackResult(candidate.sourceId, {
+              success: false,
+              reason: 'preflight-invalid-stream',
+              error: probeError,
+              lineId: candidate.lineId
+            });
+            continue;
+          }
+          // 超时、限流和临时网络错误只能说明“预检不确定”，不能证明播放器无法播放。
+          // 保留候选但降低优先级，交给带完整请求头的实际播放器做最终判断。
+          candidate.probeWarning = probeError;
+          candidate.routeScore = Math.max(0, (Number(candidate.routeScore) || 0) - 15);
+          candidate.score -= 15000000;
         }
         viableCandidates.push(candidate);
       }

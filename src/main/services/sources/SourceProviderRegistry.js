@@ -1,4 +1,8 @@
+const crypto = require('crypto');
+
 const DEFAULT_CONCURRENCY = 4;
+const SOURCE_SNAPSHOT_TTL = 2 * 60 * 60 * 1000;
+const SOURCE_SNAPSHOT_STALE_TTL = 48 * 60 * 60 * 1000;
 
 function clampConcurrency(value) {
   return Math.max(1, Math.min(Number.parseInt(value, 10) || DEFAULT_CONCURRENCY, 8));
@@ -19,6 +23,18 @@ function groupEpisodes(items = [], sourceId = '') {
     });
   }
   return lines;
+}
+
+function hasPlayableEpisodes(anime = {}) {
+  const episodes = anime?.episodes;
+  if (!episodes || typeof episodes !== 'object') return false;
+  const lines = Array.isArray(episodes) ? [episodes] : Object.values(episodes);
+  return lines.some(line => (
+    Array.isArray(line) && line.some(episode => (
+      typeof (episode?.url || episode?.play_url) === 'string'
+      && String(episode.url || episode.play_url).trim().length > 0
+    ))
+  ));
 }
 
 class SourceProviderRegistry {
@@ -110,6 +126,50 @@ class SourceProviderRegistry {
     return this.listProviders().find(provider => provider.sourceId === value) || null;
   }
 
+  _sourceSnapshotCacheKey(identity) {
+    const normalized = String(identity || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+    if (!normalized) return '';
+    const digest = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 32);
+    return `playback:sources:v2:${digest}`;
+  }
+
+  getSearchSnapshot(identity, options = {}) {
+    const db = this.cmsApiService?.db;
+    const key = this._sourceSnapshotCacheKey(identity);
+    if (!db || !key) return null;
+    try {
+      const fresh = db.getCache(key);
+      if (fresh) return { ...fresh, stale: false };
+      if (options.allowStale !== true) return null;
+      const stale = db.getCacheAny(key)?.content;
+      if (!stale) return null;
+      const updatedAt = Number(stale.updatedAt) || 0;
+      if (!updatedAt || Date.now() - updatedAt > SOURCE_SNAPSHOT_STALE_TTL) return null;
+      return { ...stale, stale: true };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  saveSearchSnapshot(identity, snapshot = {}) {
+    const db = this.cmsApiService?.db;
+    const key = this._sourceSnapshotCacheKey(identity);
+    const sources = Array.isArray(snapshot.sources) ? snapshot.sources.slice(0, 64) : [];
+    const queries = Array.isArray(snapshot.queries)
+      ? snapshot.queries.map(value => String(value || '').slice(0, 120)).filter(Boolean).slice(0, 12)
+      : [];
+    if (!db || !key || sources.length === 0) return { success: false };
+    const content = { version: 2, updatedAt: Date.now(), sources, queries, complete: true };
+    const serialized = JSON.stringify(content);
+    if (serialized.length > 4 * 1024 * 1024) return { success: false, error: '片源快照过大' };
+    try {
+      db.setCache(key, 'playback-sources', 'source-snapshot', content, SOURCE_SNAPSHOT_TTL);
+      return { success: true, count: sources.length };
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) };
+    }
+  }
+
   async search(identifier, keyword, options = {}) {
     const provider = this.getProvider(identifier);
     if (!provider) throw new Error(`片源不存在: ${identifier}`);
@@ -171,7 +231,7 @@ class SourceProviderRegistry {
         .slice(0, providerLimit);
     }
 
-    const statuses = providers.map(provider => ({
+    const statuses = providers.map((provider, providerOrder) => ({
       providerId: provider.providerId,
       sourceId: provider.sourceId,
       sourceName: provider.name,
@@ -184,6 +244,7 @@ class SourceProviderRegistry {
       confidence: 0,
       health: provider.health || null,
       healthScore: Number(provider.health?.score ?? 70),
+      providerOrder,
       elapsedMs: 0,
       error: provider.enabled ? '' : '源已禁用'
     }));
@@ -191,7 +252,19 @@ class SourceProviderRegistry {
     let resolveEarly;
     let earlyResolved = false;
     const returnOnFirstSuccess = options.returnOnFirstSuccess === true;
+    const returnOnFirstPlayable = options.returnOnFirstPlayable === true;
+    const minimumEarlyConfidence = Math.max(0, Math.min(
+      Number(options.minimumEarlyConfidence) || 0.58,
+      1
+    ));
     const providerTimeoutMs = Math.max(0, Number.parseInt(options.providerTimeoutMs, 10) || 0);
+    const qualifiesForEarlyReturn = entry => (
+      entry?.status === 'success'
+      && (!returnOnFirstPlayable || entry.results.some(result => (
+        hasPlayableEpisodes(result)
+        && this._confidence(keyword, result) >= minimumEarlyConfidence
+      )))
+    );
     const snapshot = () => {
       const order = { success: 0, noResult: 1, error: 2, disabled: 3, pending: 4 };
       return statuses
@@ -240,7 +313,7 @@ class SourceProviderRegistry {
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
       }
-      if (returnOnFirstSuccess && !earlyResolved && entry.status === 'success') {
+      if (returnOnFirstSuccess && !earlyResolved && qualifiesForEarlyReturn(entry)) {
         earlyResolved = true;
         resolveEarly(snapshot());
       }
@@ -277,48 +350,79 @@ class SourceProviderRegistry {
             if (!anime.episodes || Object.keys(anime.episodes).length === 0) {
               anime = await this.getDetail(provider.providerId, summary);
             }
-            const matched = this.cmsApiService?.findMatchingEpisode?.(
+            let matchedLines = this.cmsApiService?.findMatchingEpisodeLines?.(
               anime.episodes,
               target.episodeTitle || '',
               target.episodeIndex ?? -1
-            );
+            ) || [];
+            if (matchedLines.length === 0) {
+              const matched = this.cmsApiService?.findMatchingEpisode?.(
+                anime.episodes,
+                target.episodeTitle || '',
+                target.episodeIndex ?? -1
+              );
+              if (matched) matchedLines = [matched];
+            }
             const mayUseFirst = target.allowFirstFallback !== false
               && (!Number.isFinite(Number(target.episodeIndex)) || Number(target.episodeIndex) <= 0);
-            const selected = matched || (mayUseFirst
-              ? this.cmsApiService?.firstPlayableEpisode?.(anime.episodes)
-              : null);
-            const url = selected?.episode?.url || selected?.episode?.play_url || '';
-            if (!selected || !url) continue;
+            if (matchedLines.length === 0 && mayUseFirst) {
+              const first = this.cmsApiService?.firstPlayableEpisode?.(anime.episodes);
+              if (first) matchedLines = [first];
+            }
             const confidence = this._confidence(keyword, anime);
-            const health = provider.health || { score: 70 };
-            const quality = selected.episode.quality || {};
-            const matchScore = Number(selected.matchScore) || 1;
             const preference = (Number(provider.preference) || 0) + (provider.type === 'media' ? 15 : 0);
-            candidates.push({
-              providerId: provider.providerId,
-              sourceId: provider.sourceId,
-              sourceName: provider.name,
-              sourceType: provider.type,
-              mediaType: provider.mediaType,
-              anime,
-              episode: selected.episode,
-              episodeTitle: selected.episode.title || '',
-              lineId: selected.lineId,
-              matchType: selected.matchType || 'index',
-              matchScore,
-              titleMatchScore: confidence,
-              titleMatchExact: confidence >= 0.97,
-              url,
-              quality,
-              health,
-              healthScore: Number(health.score ?? 70),
-              preference,
-              score: confidence * 1000000000000
-                + matchScore * 1000000000
-                + (Number(health.score ?? 70) + preference) * 1000000
-                + ((quality.height || 0) * 100000 + (quality.bitrate || 0))
-            });
-            break;
+            const sourceHealth = provider.health || { score: 70 };
+            for (const selected of matchedLines.slice(0, 3)) {
+              const url = selected?.episode?.url || selected?.episode?.play_url || '';
+              if (!selected || !url) continue;
+              const lineKey = `${provider.sourceId}|${selected.lineId || ''}`;
+              if (selected.lineId && excluded.has(lineKey)) continue;
+              const healthRouteKey = `${provider.providerId}|${selected.lineId || ''}`;
+              const routeHealth = selected.lineId
+                ? this.cmsApiService?._getSourceHealth?.(healthRouteKey)
+                : null;
+              const routeHasEvidence = routeHealth && (
+                (routeHealth.playbackSuccessCount || 0)
+                + (routeHealth.playbackFailureCount || 0)
+                + (routeHealth.playbackSessionCount || 0) > 0
+              );
+              const health = routeHasEvidence
+                ? {
+                    ...routeHealth,
+                    score: Math.round(Number(sourceHealth.score ?? 70) * 0.35 + Number(routeHealth.score ?? 60) * 0.65),
+                    sourceScore: Number(sourceHealth.score ?? 70),
+                    routeScore: Number(routeHealth.score ?? 60),
+                    routeKey: healthRouteKey
+                  }
+                : sourceHealth;
+              const quality = selected.episode.quality || {};
+              const matchScore = Number(selected.matchScore) || 1;
+              candidates.push({
+                providerId: provider.providerId,
+                sourceId: provider.sourceId,
+                sourceName: provider.name,
+                sourceType: provider.type,
+                mediaType: provider.mediaType,
+                anime,
+                episode: selected.episode,
+                episodeTitle: selected.episode.title || '',
+                lineId: selected.lineId,
+                matchType: selected.matchType || 'index',
+                matchScore,
+                titleMatchScore: confidence,
+                titleMatchExact: confidence >= 0.97,
+                url,
+                quality,
+                health,
+                healthScore: Number(health.score ?? 70),
+                preference,
+                score: confidence * 1000000000000
+                  + matchScore * 1000000000
+                  + (Number(health.score ?? 70) + preference) * 1000000
+                  + ((quality.height || 0) * 100000 + (quality.bitrate || 0))
+              });
+            }
+            if (candidates.length > 0) break;
           }
           return candidates;
         } catch (error) {
@@ -617,5 +721,6 @@ class SourceProviderRegistry {
 module.exports = {
   SourceProviderRegistry,
   normalizeProviderId,
-  groupEpisodes
+  groupEpisodes,
+  hasPlayableEpisodes
 };

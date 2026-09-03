@@ -121,11 +121,13 @@ const { btStreamService } = registerBtIpc({ ipcMain, btSearchService, customizat
 // 三层防御：
 // 1. 禁用原生窗口遮挡计算（Chromium 在 Windows 上的已知 GPU 误杀 bug）
 // 2. 运行时监控：短时间反复崩溃 → 写标记并自动重启，下次启动禁用硬件加速
-// 3. 标记 7 天自动过期，驱动更新后可自愈恢复硬件加速
+// 3. 降级标记短期自动过期，避免一次启动抖动让应用长期停留在软件渲染
 const GPU_FLAG_FILE = path.join(app.getPath('userData'), 'gpu-disable-flag.json');
-const GPU_FLAG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const GPU_FLAG_TTL_MS = 30 * 60 * 1000;
 const GPU_CRASH_WINDOW_MS = 30 * 1000;
 const GPU_CRASH_THRESHOLD = 3;
+const GPU_CRASH_MIN_LOOP_MS = 4 * 1000;
+const GPU_FATAL_REASONS = new Set(['abnormal-exit', 'crashed', 'killed', 'oom', 'launch-failed', 'integrity-failure']);
 
 function readGpuDisableFlag() {
     try {
@@ -154,14 +156,18 @@ if (gpuDisableFlag) {
 const gpuCrashTimestamps = [];
 let gpuGuardRelaunching = false;
 function recordGpuCrash(details) {
-    if (details?.type !== 'GPU') return;
+    if (details?.type !== 'GPU' || !GPU_FATAL_REASONS.has(details.reason)) return;
     const now = Date.now();
     gpuCrashTimestamps.push(now);
     while (gpuCrashTimestamps.length > 0 && gpuCrashTimestamps[0] < now - GPU_CRASH_WINDOW_MS) {
         gpuCrashTimestamps.shift();
     }
-    console.warn(`[GpuGuard] GPU 进程异常退出 (reason=${details.reason}), 近 ${GPU_CRASH_WINDOW_MS / 1000}s 内第 ${gpuCrashTimestamps.length} 次`);
-    if (gpuCrashTimestamps.length < GPU_CRASH_THRESHOLD || gpuGuardRelaunching) return;
+    const crashSpanMs = now - gpuCrashTimestamps[0];
+    console.warn(`[GpuGuard] GPU 进程异常退出 (reason=${details.reason}), 近 ${GPU_CRASH_WINDOW_MS / 1000}s 内第 ${gpuCrashTimestamps.length} 次，跨度 ${crashSpanMs}ms`);
+    // 启动抖动不算循环崩溃；异常持续数秒才降级到 WARP。
+    if (gpuCrashTimestamps.length < GPU_CRASH_THRESHOLD
+        || crashSpanMs < GPU_CRASH_MIN_LOOP_MS
+        || gpuGuardRelaunching) return;
 
     gpuGuardRelaunching = true;
     try {

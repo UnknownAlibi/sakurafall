@@ -56,6 +56,12 @@ test('detail episode picker renders only reliable sources with playable episodes
   assert.match(detail, /displayEpisodeLineName\(lineId, index\)/);
   assert.doesNotMatch(detail, />\s*线路 \{\{ lineIndex \+ 1 \}\}/);
   assert.doesNotMatch(detail, />\s*线路 \{\{ index \+ 1 \}\}/);
+  assert.doesNotMatch(detail, /returnOnFirstSuccess:\s*true/);
+  assert.doesNotMatch(detail, /continuePlaySourceSearch\(/);
+  assert.match(detail, /sourceProviderSnapshotGet/);
+  assert.match(detail, /sourceProviderSnapshotSet/);
+  assert.match(detail, /const completeStatuses = mergeSourceSearchStatuses\(freshStatuses, staleSnapshot\?\.sources \|\| \[\]\)/);
+  assert.match(detail, /this\.loadingSources\s*=\s*false;[\s\S]*?this\.expandFirstPlayableSource\(\)/);
 });
 
 test('discovery collapse controls and continue-watching delete use isolated native buttons', () => {

@@ -36,7 +36,8 @@ export function describeNativeVideoError(mediaError) {
     source: 'native',
     code,
     reason: mapped.reason,
-    message: extraMessage || mapped.message,
+    message: mapped.message,
+    technicalMessage: extraMessage,
     userMessage: `${mapped.message}，正在尝试切换其他源`,
     hint: code === 2
       ? '可能是源站网络波动、代理/TUN 拦截或视频地址失效。'
@@ -58,7 +59,14 @@ export function describeHlsError(data = {}) {
     hint = '可能是媒体编码异常、分片内容损坏或播放器解码失败。';
   }
 
-  const message = detailMessage || compactText(data.reason) || 'HLS 播放失败';
+  const technicalMessage = compactText(data.reason);
+  const message = detailMessage || (
+    type.toLowerCase().includes('media')
+      ? '视频或音频分片解码失败'
+      : type.toLowerCase().includes('network')
+        ? '视频线路网络加载失败'
+        : 'HLS 播放失败'
+  );
   const statusSuffix = responseCode ? ` (${responseCode})` : '';
 
   return {
@@ -69,6 +77,7 @@ export function describeHlsError(data = {}) {
     fatal: data.fatal === true,
     reason: reasonParts.join('-'),
     message: `${message}${statusSuffix}`,
+    technicalMessage,
     userMessage: `${message}${statusSuffix}，正在尝试切换其他源`,
     hint
   };

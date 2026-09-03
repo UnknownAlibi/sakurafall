@@ -20,6 +20,24 @@ import {
   updatePlayerPreparation
 } from '../services/playerWindowBridge.js';
 
+const PLAYER_PREPARATION_BUDGET_MS = 24000;
+const INITIAL_ROUTE_RESOLVE_MS = 6500;
+const FALLBACK_ROUTE_RESOLVE_MS = 5000;
+
+function settleWithin(promise, timeoutMs, fallbackValue) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(fallbackValue), Math.max(250, timeoutMs));
+    Promise.resolve(promise).then(finish, () => finish(fallbackValue));
+  });
+}
+
 export default {
   data() {
     return {
@@ -120,7 +138,15 @@ export default {
                 episodeTitle: episode?.title || '',
                 episodeIndex,
                 allowFirstFallback: true,
-                excludeSourceIds: [anime.sourceId || anime.source].filter(Boolean),
+                excludeSourceIds: [...new Set([
+                  anime.providerId,
+                  anime.sourceId,
+                  anime.source
+                ].filter(Boolean))],
+                searchConcurrency: 5,
+                searchTimeout: 6000,
+                probeLimit: 6,
+                probeConcurrency: 4,
                 taskScope: 'episodePlaybackFallback'
               }
             }));
@@ -243,13 +269,18 @@ export default {
       const isLatestPlayRequest = () => playToken === this._playRequestToken;
       const openingKey = requestKey || `${lineId || 'line'}:${episode?.id || episode?.url || episode?.title || episodeIndex}`;
       const pendingTitle = `${anime.name} - ${episode.title}`;
+      const preparationDeadline = Date.now() + PLAYER_PREPARATION_BUDGET_MS;
+      const remainingPreparationMs = () => Math.max(0, preparationDeadline - Date.now());
       let playerWindowId = null;
 
       this.openingEpisodeKey = openingKey;
       if (window.electronAPI?.openPlayerWindow) {
         try {
           playerWindowId = await openPlayerPreparation(window.electronAPI, {
-            title: pendingTitle, episode, lineId
+            title: pendingTitle,
+            episode,
+            lineId,
+            stage: '正在验证当前线路...'
           });
           if (isLatestPlayRequest()) {
             this._pendingPlayerWindowId = playerWindowId;
@@ -265,6 +296,7 @@ export default {
       let videoUrl = null;
       let resolvedVideo = null;
       let lastResolveFailure = null;
+      let lastResolveSourceName = anime.sourceName || anime.source || '当前线路';
       const hasPlaybackResolver = !!window.electronAPI?.playbackResolve;
       const fallbackProbe = this.scheduleCmsEpisodeFallback(
         anime,
@@ -272,11 +304,31 @@ export default {
         episodeIndex,
         isLatestPlayRequest
       );
+      const updatePreparationStage = (stage) => updatePlayerPreparation(
+        window.electronAPI,
+        playerWindowId,
+        { pending: true, title: pendingTitle, stage }
+      ).catch(() => false);
+      const resolveWithBudget = (payload, limitMs) => {
+        const remaining = remainingPreparationMs();
+        if (remaining <= 0) {
+          return Promise.resolve({
+            success: false,
+            error: '播放准备超时',
+            category: 'resolver-timeout',
+            reason: 'resolver-timeout'
+          });
+        }
+        return window.electronAPI.playbackResolve(payload, {
+          timeout: Math.max(1000, Math.min(limitMs, remaining))
+        });
+      };
 
       if (hasPlaybackResolver) {
         try {
-          const resolved = await window.electronAPI.playbackResolve(
-            this.createPlaybackResolvePayload(anime, episode)
+          const resolved = await resolveWithBudget(
+            this.createPlaybackResolvePayload(anime, episode),
+            INITIAL_ROUTE_RESOLVE_MS
           );
           if (!isLatestPlayRequest()) return;
           if (resolved?.success && resolved.url) {
@@ -286,9 +338,11 @@ export default {
             fallbackProbe.cancelPending();
           } else {
             lastResolveFailure = resolved;
+            await updatePreparationStage('当前线路不可用，正在搜索同集备用线路...');
           }
         } catch (error) {
           lastResolveFailure = { error: error?.message || String(error) };
+          await updatePreparationStage('当前线路响应异常，正在搜索同集备用线路...');
         }
       }
 
@@ -315,16 +369,27 @@ export default {
 
       if (!videoUrl || videoUrl.includes('/share/')) {
         try {
-          const bestResult = await fallbackProbe.promise;
+          const fallbackWaitMs = Math.min(9000, remainingPreparationMs());
+          const bestResult = await settleWithin(fallbackProbe.promise, fallbackWaitMs, {
+            best: null,
+            candidates: [],
+            error: '搜索备用线路超时'
+          });
           if (!isLatestPlayRequest() || bestResult?.cancelled) return;
+          if (bestResult?.error) lastResolveFailure = { error: bestResult.error };
           const candidates = [bestResult?.best, ...(bestResult?.candidates || [])]
             .filter(candidate => candidate?.url && candidate?.anime && candidate?.episode)
             .filter((candidate, index, items) => items.findIndex(item => (
               item.sourceId === candidate.sourceId && item.url === candidate.url
             )) === index)
-            .slice(0, 4);
+            .slice(0, 3);
           for (const candidate of candidates) {
             if (!isLatestPlayRequest()) return;
+            if (remainingPreparationMs() <= 0) {
+              lastResolveFailure = { error: '播放准备超时，请重试或手动换源' };
+              break;
+            }
+            await updatePreparationStage(`正在验证 ${candidate.sourceName || '备用线路'}...`);
             const candidateAnime = {
               ...candidate.anime,
               source: candidate.anime?.source || candidate.sourceId,
@@ -336,16 +401,19 @@ export default {
             const candidateEpisode = {
               ...candidate.episode,
               title: candidate.episode?.title || episode.title,
-              url: candidate.episode?.url || candidate.url
+              url: candidate.episode?.url || candidate.url,
+              lineId: candidate.lineId || candidate.episode?.lineId || ''
             };
             const resolved = hasPlaybackResolver
-              ? await window.electronAPI.playbackResolve(
-                  this.createPlaybackResolvePayload(candidateAnime, candidateEpisode)
+              ? await resolveWithBudget(
+                  this.createPlaybackResolvePayload(candidateAnime, candidateEpisode),
+                  FALLBACK_ROUTE_RESOLVE_MS
                 )
               : { success: true, url: candidate.url };
             if (!isLatestPlayRequest()) return;
             if (!resolved?.success || !resolved.url) {
               lastResolveFailure = resolved;
+              lastResolveSourceName = candidate.sourceName || candidate.sourceId || '备用线路';
               continue;
             }
             resolvedVideo = hasPlaybackResolver ? resolved : null;
@@ -363,7 +431,8 @@ export default {
 
       if (!videoUrl || videoUrl.includes('/share/')) {
         if (!isLatestPlayRequest()) return;
-        const failureMessage = lastResolveFailure?.error || '已配置片源中没有可用的同集视频';
+        const failureReason = lastResolveFailure?.error || '已配置片源中没有可用的同集视频';
+        const failureMessage = `${lastResolveSourceName}：${failureReason}`;
         await updatePlayerPreparation(window.electronAPI, playerWindowId, {
           title: pendingTitle, error: failureMessage
         }).catch(() => false);

@@ -215,6 +215,13 @@ class PlaybackResolverService {
    */
   async resolve(payload, options = {}) {
     const startedAt = Date.now();
+    const requestedTimeout = Math.max(1000, Number.parseInt(options.timeout, 10) || this.timeout);
+    const deadlineAt = startedAt + requestedTimeout;
+    const remainingTimeout = (cap = requestedTimeout) => {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) throw new Error('RESOLVER_TIMEOUT');
+      return Math.max(250, Math.min(Number(cap) || requestedTimeout, remaining));
+    };
     const token = options.token != null ? options.token : this.nextToken();
     const isLatest = () => this.isLatestToken(token);
 
@@ -229,12 +236,12 @@ class PlaybackResolverService {
     }
 
     // 1. 尝试直接可播放 URL（realUrl > real_video_url > url > play_url）
-    const directCandidates = [
+    const directCandidates = [...new Set([
       episode.realUrl,
       episode.real_video_url,
       episode.url,
       episode.play_url
-    ].filter(Boolean);
+    ].filter(Boolean))];
     let validationError = null;
     safeLog(`[PlaybackResolver] resolve 开始 source=${sourceName}(${sourceId}) episode=${episode.id || ''} 候选URL=${directCandidates.length}`);
 
@@ -245,7 +252,9 @@ class PlaybackResolverService {
       if (isPlayableVideoUrl(normalized) && !requiresResolver) {
         safeLog(`[PlaybackResolver] 候选直链探测: ${normalized.slice(0, 100)}`);
         try {
-          const quality = await this._validateVideoUrl(normalized, providerId || sourceId, sourceType, isLatest);
+          const quality = await this._validateVideoUrl(normalized, providerId || sourceId, sourceType, isLatest, {
+            timeout: remainingTimeout(5000)
+          });
           if (!isLatest()) {
             return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
           }
@@ -270,21 +279,25 @@ class PlaybackResolverService {
           this._reportPlayback(providerId, sourceId, {
             success: false,
             reason: 'preflight-failed',
-            error: error?.message || String(error)
+            error: error?.message || String(error),
+            lineId: episode.lineId || ''
           });
           continue;
         }
       }
     }
 
-    // 2. 分享页只能由片源包声明的通用解析规则处理。
+    // 2. 分享页优先使用片源包声明的规则；域名迁移导致规则暂时未命中时，
+    // 仍允许执行不运行远端脚本的静态 HTML 提取，避免把原网页地址误判成解析结果。
     const shareUrl = directCandidates.find(candidate => {
       const normalized = normalizeUrl(candidate);
       return isSharePageUrl(normalized)
         || this.sourceProviderRegistry?.canResolveUrl?.(providerId, normalized);
     });
     if (shareUrl) {
-      safeLog(`[PlaybackResolver] 进入分享页解析: ${normalizeUrl(shareUrl).slice(0, 100)}`);
+      const normalizedShareUrl = normalizeUrl(shareUrl);
+      const hasDeclaredResolver = this.sourceProviderRegistry?.canResolveUrl?.(providerId, normalizedShareUrl) === true;
+      safeLog(`[PlaybackResolver] 进入分享页解析: ${normalizedShareUrl.slice(0, 100)} declared=${hasDeclaredResolver}`);
       const cacheKey = this._cacheKey(payload);
       const cached = this._readResolveCache(cacheKey);
       if (cached) {
@@ -292,69 +305,97 @@ class PlaybackResolverService {
         return { ...cached, fromCache: true, elapsedMs: Date.now() - startedAt };
       }
 
-      try {
-        if (!this.sourceProviderRegistry) throw new Error('播放源注册表未初始化');
-        const result = await this._withTimeout(
-          this.sourceProviderRegistry.resolveEpisode(providerId, episode),
-          options.timeout || this.timeout,
-          () => isLatest()
-        );
+      let lastError = null;
+      let resolvedBy = '';
+      let mediaUrl = '';
 
-        if (!isLatest()) {
-          return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
-        }
-
-        if (!result || !result.url) {
-          return this._failure(
-            '分享页解析失败，未取到视频地址',
-            'invalid-source',
-            '该源可能已失效或页面结构变化，建议换源',
-            startedAt
+      if (hasDeclaredResolver) {
+        try {
+          if (!this.sourceProviderRegistry) throw new Error('播放源注册表未初始化');
+          const result = await this._withTimeout(
+            this.sourceProviderRegistry.resolveEpisode(providerId, episode),
+            remainingTimeout(),
+            () => isLatest()
           );
+          if (!isLatest()) {
+            return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
+          }
+          const candidateUrl = normalizeUrl(result?.url);
+          if (candidateUrl && candidateUrl !== normalizedShareUrl && isDirectMediaUrl(candidateUrl)) {
+            mediaUrl = candidateUrl;
+            resolvedBy = 'declared-resolver';
+          } else {
+            lastError = new Error('UNSUPPORTED_DIRECT_MEDIA_URL');
+          }
+        } catch (error) {
+          lastError = error;
         }
-
-        const normalized = normalizeUrl(result.url);
-        if (!isPlayableVideoUrl(normalized)) {
-          return this._failure(
-            '解析得到的地址不可播放',
-            'format-unsupported',
-            '解析得到的视频地址格式异常，建议换源',
-            startedAt
-          );
-        }
-
-        const quality = await this._validateVideoUrl(normalized, providerId || sourceId, sourceType, isLatest);
-        if (!isLatest()) {
-          return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
-        }
-        const resolved = this._success({
-          url: normalized,
-          sourceId,
-          providerId,
-          sourceName,
-          sourceType,
-          episodeId: episode.id || '',
-          qualityHint: quality?.height ? `${quality.height}P` : guessQualityFromUrl(normalized),
-          quality,
-          requiresProxy: false,
-          resolvedAt: Date.now(),
-          elapsedMs: 0,
-          fromCache: false
-        });
-        // 写入短期缓存
-        this._writeResolveCache(cacheKey, { ...resolved, elapsedMs: 0 });
-        return { ...resolved, elapsedMs: Date.now() - startedAt };
-      } catch (error) {
-        this._reportPlayback(providerId, sourceId, {
-          success: false,
-          reason: 'preflight-or-resolver-failed',
-          error: error?.message || String(error)
-        });
-        if (!isLatest()) {
-          return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
-        }
-        return this._classifyError(error, startedAt);
       }
+
+      if (!mediaUrl && isLatest()) {
+        try {
+          mediaUrl = await this._scrapeMediaFromPage(
+            normalizedShareUrl,
+            providerId || sourceId,
+            isLatest,
+            remainingTimeout(8000)
+          );
+          if (mediaUrl) resolvedBy = 'share-static';
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      if (mediaUrl) {
+        try {
+          const quality = await this._validateVideoUrl(mediaUrl, providerId || sourceId, sourceType, isLatest, {
+            timeout: remainingTimeout(5000)
+          });
+          if (!isLatest()) {
+            return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
+          }
+          const resolved = this._success({
+            url: mediaUrl,
+            sourceId,
+            providerId,
+            sourceName,
+            sourceType,
+            episodeId: episode.id || '',
+            qualityHint: quality?.height ? `${quality.height}P` : guessQualityFromUrl(mediaUrl),
+            quality,
+            requiresProxy: false,
+            resolvedAt: Date.now(),
+            elapsedMs: 0,
+            fromCache: false,
+            resolvedBy
+          });
+          this._writeResolveCache(cacheKey, { ...resolved, elapsedMs: 0 });
+          return { ...resolved, elapsedMs: Date.now() - startedAt };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      const finalError = lastError || new Error('UNSUPPORTED_DIRECT_MEDIA_URL');
+      this._reportPlayback(providerId, sourceId, {
+        success: false,
+        reason: 'preflight-or-resolver-failed',
+        error: finalError?.message || String(finalError),
+        lineId: episode.lineId || ''
+      });
+      if (!isLatest()) {
+        return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
+      }
+      if (Number(finalError?.statusCode) === 403) {
+        return this._failure(
+          '分享页被源站拒绝（403）',
+          'network-blocked',
+          '若已开启 TUN，请将该片源域名设为直连；否则请换源或稍后重试',
+          startedAt,
+          { originalError: finalError?.message || String(finalError) }
+        );
+      }
+      return this._classifyError(finalError, startedAt);
     }
 
     // 1.5 通用网页抓取：当 URL 是 http/https 网页（非直链、非分享页）时，
@@ -364,6 +405,7 @@ class PlaybackResolverService {
     if (validationError && validationError.message.includes('UNSUPPORTED_DIRECT_MEDIA_URL')) {
       safeLog(`[PlaybackResolver] 进入通用网页抓取: ${directCandidates.length} 个候选`);
       for (const candidate of directCandidates) {
+        if (Date.now() >= deadlineAt) return this._classifyError(new Error('RESOLVER_TIMEOUT'), startedAt);
         const normalized = normalizeUrl(candidate);
         if (!/^https?:\/\//i.test(normalized)) continue;
         // 跳过分享页（已在上一步处理）
@@ -372,13 +414,20 @@ class PlaybackResolverService {
         if (this.sourceProviderRegistry?.canResolveUrl?.(providerId, normalized)) continue;
 
         try {
-          const scrapedUrl = await this._scrapeMediaFromPage(normalized, sourceId, isLatest);
+          const scrapedUrl = await this._scrapeMediaFromPage(
+            normalized,
+            sourceId,
+            isLatest,
+            remainingTimeout(8000)
+          );
           if (!isLatest()) {
             return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
           }
           if (scrapedUrl) {
             safeLog(`[PlaybackResolver] 网页抓取成功: ${normalized.slice(0, 80)} -> ${scrapedUrl.slice(0, 80)}`);
-            const quality = await this._validateVideoUrl(scrapedUrl, providerId || sourceId, sourceType, isLatest);
+            const quality = await this._validateVideoUrl(scrapedUrl, providerId || sourceId, sourceType, isLatest, {
+              timeout: remainingTimeout(5000)
+            });
             if (!isLatest()) {
               return this._failure('请求已被取消', 'cancelled', '请重试', startedAt);
             }
@@ -413,12 +462,13 @@ class PlaybackResolverService {
       || episode.playbackMode === 'webview-sniff';
     if (canSniffPage) {
       for (const candidate of directCandidates) {
+        if (Date.now() >= deadlineAt) return this._classifyError(new Error('RESOLVER_TIMEOUT'), startedAt);
         const normalized = normalizeUrl(candidate);
         if (!/^https?:\/\//i.test(normalized) || isDirectMediaUrl(normalized)) continue;
         try {
           const sniffed = await this._mediaSniffer.resolve(normalized, {
             headers: this._pickHeaders(providerId || sourceId, sourceType, normalized),
-            timeout: options.timeout || this.timeout,
+            timeout: remainingTimeout(),
             isLatest
           });
           if (!isLatest()) {
@@ -430,7 +480,7 @@ class PlaybackResolverService {
             providerId || sourceId,
             sourceType,
             isLatest,
-            { confirmedMedia: true }
+            { confirmedMedia: true, timeout: remainingTimeout(5000) }
           );
           return this._success({
             url: mediaUrl,
@@ -486,12 +536,12 @@ class PlaybackResolverService {
         headers.Referer || headers.referer || normalized,
         { headers }
       ),
-      Math.min(this.timeout, 8000),
+      Math.min(Number(options.timeout) || this.timeout, 8000),
       isLatest
     );
     if (quality?.error || quality?.source === 'probe-failed') {
       const probeError = String(quality?.error || '');
-      if (/invalid_m3u8_manifest|html response|不是有效\s*m3u8|返回的不是\s*m3u8/i.test(probeError)) {
+      if (/invalid_m3u8_manifest|html response|不是有效\s*m3u8|返回的不是\s*m3u8|hostname\/ip does not match|err_tls_cert_altname_invalid|certificate.*(?:mismatch|invalid)|\b(?:401|403|404|410)\b/i.test(probeError)) {
         throw new Error(probeError || 'INVALID_M3U8_MANIFEST');
       }
       // 预检失败不阻断播放：probeStreamQuality 仅用于探测画质，
@@ -499,11 +549,6 @@ class PlaybackResolverService {
       // 源站临时限流或 5s 超时，并不代表视频本身不可播放。
       // 降级为画质未知，让播放器（hls.js）带正确 headers 自行尝试。
       safeLog(`[PlaybackResolver] 预检失败但不阻断播放，降级为画质未知: ${probeError || 'unknown'}`);
-      this._reportPlayback(providerIdentifier, providerIdentifier?.replace(/^cms:/, ''), {
-        success: false,
-        reason: 'probe-failed-non-blocking',
-        error: probeError || 'unknown'
-      });
       return null;
     }
     return quality || null;
@@ -514,17 +559,17 @@ class PlaybackResolverService {
    * 用于资源站返回播放页 URL 而非视频直链的场景。
    * 复用 SharePageResolverService 的 extractMediaUrl 提取逻辑。
    */
-  async _scrapeMediaFromPage(pageUrl, sourceId, isLatest) {
+  async _scrapeMediaFromPage(pageUrl, sourceId, isLatest, timeout = 8000) {
     if (!pageUrl) return '';
     const headers = this._pickHeaders(sourceId, '', pageUrl);
     const html = await this._withTimeout(
       this._scrapeHttp.fetch(pageUrl, {
         headers: { ...headers, Accept: 'text/html,application/xhtml+xml,*/*' },
         referer: headers.Referer || headers.referer || '',
-        timeout: 8000,
+        timeout,
         maxResponseBytes: 2 * 1024 * 1024
       }),
-      8000,
+      timeout,
       isLatest
     );
     if (!html) return '';
@@ -653,6 +698,16 @@ class PlaybackResolverService {
         '源站返回错误状态码',
         'network-blocked',
         '源站可能暂时不可用或已限流，建议稍后重试或换源',
+        startedAt,
+        { elapsedMs, originalError: message }
+      );
+    }
+
+    if (message.includes('hostname/ip does not match') || message.includes('err_tls_cert_altname_invalid')) {
+      return this._failure(
+        '视频线路证书与地址不匹配',
+        'network-blocked',
+        '该线路配置已失效，正在尝试其他源',
         startedAt,
         { elapsedMs, originalError: message }
       );

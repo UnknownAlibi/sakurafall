@@ -56,6 +56,26 @@ test('registry exposes namespaced providers behind one contract', () => {
   assert.deepEqual(ids, ['cms:cms-one', 'xpath:rule-one']);
 });
 
+test('source snapshots stay stable across detail component lifetimes', () => {
+  const registry = createRegistry();
+  const cache = new Map();
+  registry.cmsApiService.db = {
+    getCache: key => cache.get(key) || null,
+    getCacheAny: key => cache.has(key) ? { content: cache.get(key), expired: false } : null,
+    setCache: (key, _sourceId, _kind, content) => cache.set(key, content)
+  };
+  const snapshot = {
+    sources: [{ providerId: 'cms:cms-one', status: 'success', results: [{ id: 'anime-1' }] }],
+    queries: ['稳定番剧']
+  };
+
+  assert.equal(registry.saveSearchSnapshot('bangumi:123', snapshot).success, true);
+  const restored = registry.getSearchSnapshot('bangumi:123', { allowStale: true });
+  assert.equal(restored.stale, false);
+  assert.deepEqual(restored.sources, snapshot.sources);
+  assert.deepEqual(restored.queries, snapshot.queries);
+});
+
 test('XPath playback results participate in persistent source health', () => {
   const registry = createRegistry();
   let recorded = null;
@@ -147,6 +167,50 @@ test('searchAll does not start queued providers after an early success', async (
   await new Promise(resolve => setTimeout(resolve, 0));
 
   assert.deepEqual(requested, ['first']);
+});
+
+test('searchAll playable early mode ignores search hits without playable episodes', async () => {
+  const registry = createRegistry();
+  const requested = [];
+  registry.sourcePluginManager.getAllForManagement = () => [];
+  registry.cmsApiService.getSourceList = () => [
+    { id: 'empty', name: 'Empty', categories: [], health: { score: 100 } },
+    { id: 'playable', name: 'Playable', categories: [], health: { score: 90 } }
+  ];
+  registry.cmsApiService.searchInSource = async (sourceId, keyword) => {
+    requested.push(sourceId);
+    return {
+      data: [{
+        id: `${sourceId}-result`,
+        name: keyword,
+        episodes: sourceId === 'playable'
+          ? { line_1: [{ title: '01', url: 'https://video.test/1.m3u8' }] }
+          : {}
+      }],
+      page: 1,
+      total: 1,
+      totalPages: 1
+    };
+  };
+  registry.cmsApiService.getDetail = async (id, options) => ({
+    id,
+    name: 'Playable Anime',
+    source: options.sourceId,
+    episodes: options.sourceId === 'playable'
+      ? { line_1: [{ title: '01', url: 'https://video.test/1.m3u8' }] }
+      : {}
+  });
+
+  const statuses = await registry.searchAll('Playable Anime', {
+    concurrency: 1,
+    providerLimit: 2,
+    hydrateLimit: 1,
+    returnOnFirstSuccess: true,
+    returnOnFirstPlayable: true
+  });
+
+  assert.deepEqual(requested, ['empty', 'playable']);
+  assert.equal(statuses.find(item => item.providerId === 'cms:playable').status, 'success');
 });
 
 test('share-page resolution is delegated through the registry', async () => {
@@ -253,4 +317,33 @@ test('XPath-style community providers participate in same-episode automatic sele
   assert.equal(result.best.providerId, 'xpath:rule-one');
   assert.equal(result.best.sourceType, 'xpath');
   assert.equal(result.best.episode.url, 'https://video.test/rule-1.m3u8');
+});
+
+test('XPath automatic selection keeps alternate lines and excludes only the failed line', async () => {
+  const registry = createRegistry();
+  registry.cmsApiService.selectBestEpisodeSource = async () => ({ best: null, candidates: [], skipped: [] });
+  registry.cmsApiService.findMatchingEpisodeLines = episodes => Object.entries(episodes).map(([lineId, line]) => ({
+    episode: line[0],
+    lineId,
+    matchType: 'index',
+    matchScore: 4
+  }));
+  registry.sourcePluginManager.parseDetail = async () => ({
+    success: true,
+    id: 'rule-detail',
+    name: 'Rule Detail',
+    episodes: [
+      { id: 'ep-1a', title: '第01集', url: 'https://video.test/line-1.m3u8', lineName: 'line1' },
+      { id: 'ep-1b', title: '第01集', url: 'https://video.test/line-2.m3u8', lineName: 'line2' }
+    ]
+  });
+
+  const result = await registry.selectBestEpisodeSource('Rule Detail', {
+    episodeIndex: 0,
+    excludeSourceIds: ['rule-one|line1']
+  });
+
+  const xpathCandidates = result.candidates.filter(candidate => candidate.providerId === 'xpath:rule-one');
+  assert.equal(xpathCandidates.length, 1);
+  assert.equal(xpathCandidates[0].lineId, 'line2');
 });

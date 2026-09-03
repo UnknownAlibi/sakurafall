@@ -294,6 +294,70 @@ test('selectBestEpisodeSource: keeps share pages for the playback resolver', asy
   assert.equal(result.candidates.length, 1);
 });
 
+test('selectBestEpisodeSource: keeps soft probe failures as lower-priority candidates', async () => {
+  const CmsApiService = cmsApiService.CmsApiService;
+  const service = new CmsApiService();
+  service.sources = [{ id: 'slow-source', name: 'slow source', api: 'https://source.test/api' }];
+  service.searchAllSources = async () => ({
+    results: [{
+      sourceId: 'slow-source',
+      sourceName: 'slow source',
+      data: [{
+        id: 'work-1',
+        name: 'Exact Work',
+        episodes: {
+          line1: [{ id: 'ep-1', title: 'Episode 1', url: 'https://cdn.test/episode.m3u8' }]
+        }
+      }]
+    }],
+    skipped: []
+  });
+  service.probeStreamQuality = async () => ({
+    source: 'probe-failed',
+    error: 'ETIMEDOUT while probing manifest'
+  });
+
+  const result = await service.selectBestEpisodeSource('Exact Work', {
+    episodeIndex: 0,
+    episodeTitle: 'Episode 1'
+  });
+
+  assert.equal(result.best?.sourceId, 'slow-source');
+  assert.match(result.candidates[0]?.probeWarning || '', /ETIMEDOUT/);
+});
+
+test('selectBestEpisodeSource: removes definitely invalid manifests', async () => {
+  const CmsApiService = cmsApiService.CmsApiService;
+  const service = new CmsApiService();
+  service.sources = [{ id: 'html-source', name: 'html source', api: 'https://source.test/api' }];
+  service.searchAllSources = async () => ({
+    results: [{
+      sourceId: 'html-source',
+      sourceName: 'html source',
+      data: [{
+        id: 'work-1',
+        name: 'Exact Work',
+        episodes: {
+          line1: [{ id: 'ep-1', title: 'Episode 1', url: 'https://cdn.test/episode.m3u8' }]
+        }
+      }]
+    }],
+    skipped: []
+  });
+  service.probeStreamQuality = async () => ({
+    source: 'probe-failed',
+    error: 'INVALID_M3U8_MANIFEST: HTML response'
+  });
+
+  const result = await service.selectBestEpisodeSource('Exact Work', {
+    episodeIndex: 0,
+    episodeTitle: 'Episode 1'
+  });
+
+  assert.equal(result.best, null);
+  assert.equal(result.candidates.length, 0);
+});
+
 test('_mapWithConcurrency: 限制并发任务数量', async () => {
   let active = 0;
   let maxActive = 0;
@@ -385,6 +449,32 @@ test('source health: repeated playback failures lower score and cool down source
   assert.ok(unhealthy.score < healthy.score);
 
   cmsApiService.sourceHealth.delete(sourceId);
+});
+
+test('source health: learns individual lines without treating sibling lines as identical', () => {
+  const sourceId = 'unit-route-health';
+  const failedLineKey = `${sourceId}|line-a`;
+  const healthyLineKey = `${sourceId}|line-b`;
+  cmsApiService.sourceHealth.delete(sourceId);
+  cmsApiService.sourceHealth.delete(failedLineKey);
+  cmsApiService.sourceHealth.delete(healthyLineKey);
+
+  try {
+    cmsApiService.recordPlaybackResult(sourceId, { success: false, reason: 'decode', lineId: 'line-a' });
+    cmsApiService.recordPlaybackResult(sourceId, { success: false, reason: 'decode', lineId: 'line-a' });
+    cmsApiService.recordPlaybackResult(sourceId, { success: true, lineId: 'line-b' });
+
+    const failedLine = cmsApiService._getSourceHealth(failedLineKey);
+    const healthyLine = cmsApiService._getSourceHealth(healthyLineKey);
+    assert.equal(failedLine.playbackFailureCount, 2);
+    assert.equal(failedLine.coolingDown, true);
+    assert.equal(healthyLine.playbackSuccessCount, 1);
+    assert.ok(healthyLine.score > failedLine.score);
+  } finally {
+    cmsApiService.sourceHealth.delete(sourceId);
+    cmsApiService.sourceHealth.delete(failedLineKey);
+    cmsApiService.sourceHealth.delete(healthyLineKey);
+  }
 });
 
 test('source health: reloadSources keeps existing health state', () => {

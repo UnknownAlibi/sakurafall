@@ -26,3 +26,17 @@ export function shouldAutoFallback(snapshot = {}) {
   if (snapshot.playbackIntent !== true || snapshot.ended === true) return false;
   return !evaluatePlaybackEvidence(snapshot).canContinue;
 }
+
+export function hasPlaybackStartupActivity(snapshot = {}) {
+  const errorCode = Math.max(0, finiteNumber(snapshot.errorCode));
+  if (errorCode > 0) return false;
+  const readyState = Math.max(0, finiteNumber(snapshot.readyState));
+  const bufferAhead = Math.max(0, finiteNumber(snapshot.bufferAhead));
+  const duration = Math.max(0, finiteNumber(snapshot.duration));
+  const bufferProgress = Math.max(0, finiteNumber(snapshot.bufferProgress));
+  return readyState >= 1
+    || bufferAhead > 0
+    || duration > 0
+    || bufferProgress > 0
+    || snapshot.manifestLoaded === true;
+}

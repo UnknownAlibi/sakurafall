@@ -216,7 +216,10 @@ export function rankSourcesByMatch(anime, sourceResults) {
         const healthDiff = Number(b.healthScore ?? b.health?.score ?? 70)
           - Number(a.healthScore ?? a.health?.score ?? 70);
         if (healthDiff !== 0) return healthDiff;
-        return matchDiff;
+        const orderDiff = Number(a.providerOrder ?? Number.MAX_SAFE_INTEGER)
+          - Number(b.providerOrder ?? Number.MAX_SAFE_INTEGER);
+        if (orderDiff !== 0) return orderDiff;
+        return String(a.providerId || a.sourceId || '').localeCompare(String(b.providerId || b.sourceId || ''));
       }
       // 非成功的源保持原顺序
       return 0;

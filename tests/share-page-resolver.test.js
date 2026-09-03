@@ -38,6 +38,10 @@ test('extractMediaUrl handles escaped and relative media urls', () => {
     extractMediaUrl("let playUrl='/media/a.mp4'", 'https://share.example.com/share/1'),
     'https://share.example.com/media/a.mp4'
   );
+  assert.equal(
+    extractMediaUrl('{"url":"https:\\u002f\\u002fcdn.example\\u002fa.m3u8"}', 'https://share.example.com/share/1'),
+    'https://cdn.example/a.m3u8'
+  );
 });
 
 test('resolver matches declared hosts and caches successful results', async () => {
