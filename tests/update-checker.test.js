@@ -100,3 +100,55 @@ test('checkForUpdates: 服务端离线时自动回退 GitHub 清单', async () =
   assert.strictEqual(result.fallbackUsed, true);
   assert.strictEqual(result.sourceUrl, 'https://github.example.com/latest.json');
 });
+
+test('startManagedUpdate: 下载中防重复启动，完成后自动安装', async () => {
+  const checker = new UpdateChecker();
+  const originalDownload = checker.downloadInstaller;
+  const originalRun = checker.runInstaller;
+  let downloads = 0;
+  let installs = 0;
+  checker.downloadInstaller = async (url, onProgress) => {
+    downloads += 1;
+    onProgress && onProgress({ received: 50, total: 100, percent: 50 });
+    return { success: true, path: 'C:\\updates\\setup.exe', received: 100, total: 100 };
+  };
+  checker.runInstaller = async () => {
+    installs += 1;
+    return { success: true };
+  };
+
+  try {
+    const first = checker.startManagedUpdate('https://github.example.com/setup.exe');
+    assert.strictEqual(first.status, 'downloading');
+    // 下载进行中再次启动：直接返回当前状态，不触发重复下载
+    const again = checker.startManagedUpdate('https://github.example.com/setup.exe');
+    assert.strictEqual(again.alreadyRunning, true);
+    assert.strictEqual(downloads, 1);
+
+    // 等待下载链与 2 秒自动安装延时
+    await new Promise(resolve => setTimeout(resolve, 2300));
+    const state = checker.getUpdateState();
+    assert.strictEqual(state.status, 'completed');
+    assert.strictEqual(state.percent, 100);
+    assert.strictEqual(installs, 1);
+  } finally {
+    checker.downloadInstaller = originalDownload;
+    checker.runInstaller = originalRun;
+  }
+});
+
+test('startManagedUpdate: 下载失败进入 error 状态', async () => {
+  const checker = new UpdateChecker();
+  const originalDownload = checker.downloadInstaller;
+  checker.downloadInstaller = async () => ({ success: false, error: '网络中断' });
+
+  try {
+    checker.startManagedUpdate('https://github.example.com/setup.exe');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const state = checker.getUpdateState();
+    assert.strictEqual(state.status, 'error');
+    assert.strictEqual(state.error, '网络中断');
+  } finally {
+    checker.downloadInstaller = originalDownload;
+  }
+});

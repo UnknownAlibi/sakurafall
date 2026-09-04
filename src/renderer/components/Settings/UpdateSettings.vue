@@ -62,33 +62,37 @@
         </div>
 
         <div v-if="updateResult.hasUpdate" class="update-result-action">
+          <div v-if="updateState.status === 'downloading'" class="update-progress" aria-label="更新下载进度">
+            <div class="update-progress-meta">
+              <span>正在下载…</span>
+              <span>{{ updateState.percent }}%</span>
+            </div>
+            <div class="update-progress-bar">
+              <div class="update-progress-fill" :style="{ width: updateState.percent + '%' }"></div>
+            </div>
+          </div>
+          <div v-else-if="updateState.status === 'completed'" class="update-installing">
+            下载完成，正在安装并重启…
+          </div>
           <button
-            v-if="updateResult.downloadUrl && !updateDownloadPath && !updateDownloading"
+            v-else-if="updateState.status === 'error'"
             type="button"
             class="update-button update-button-primary"
             @click="startUpdateDownload(updateResult.downloadUrl)"
           >
-            下载更新
+            重试更新
           </button>
           <button
-            v-else-if="updateDownloadPath"
+            v-else-if="updateResult.downloadUrl"
             type="button"
             class="update-button update-button-primary"
-            @click="installUpdate(updateDownloadPath)"
+            @click="startUpdateDownload(updateResult.downloadUrl)"
           >
-            安装并重启
+            立即更新
           </button>
-          <div v-else-if="updateDownloading" class="update-progress" aria-label="更新下载进度">
-            <div class="update-progress-meta">
-              <span>正在下载</span>
-              <span>{{ updateDownloadPercent }}%</span>
-            </div>
-            <div class="update-progress-bar">
-              <div class="update-progress-fill" :style="{ width: updateDownloadPercent + '%' }"></div>
-            </div>
-          </div>
           <span v-else class="update-unavailable">更新源未提供安全的下载地址</span>
         </div>
+        <p v-if="updateState.status === 'error'" class="update-error-text">{{ updateState.error }}</p>
       </section>
     </Transition>
 
@@ -106,6 +110,8 @@
 </template>
 
 <script>
+const IDLE_UPDATE_STATE = Object.freeze({ status: 'idle', percent: 0, received: 0, total: 0, filePath: '', error: '' });
+
 export default {
   name: 'UpdateSettings',
   data() {
@@ -113,10 +119,8 @@ export default {
       checkingUpdate: false,
       updateResult: null,
       updateUrlInput: '',
-      // 应用内更新：下载进度与安装包路径
-      updateDownloading: false,
-      updateDownloadPercent: 0,
-      updateDownloadPath: '',
+      // 一键更新状态由主进程托管：切页面不中断，回到本页经 updateGetState 恢复显示
+      updateState: { ...IDLE_UPDATE_STATE },
       removeUpdateListener: null,
       removeUpdateProgressListener: null
     };
@@ -128,10 +132,19 @@ export default {
       this.removeUpdateListener = window.electronAPI.onUpdateAvailable((info) => {
         this.updateResult = info;
         if (this.$notify && info.hasUpdate) {
-          this.$notify.success('发现新版本', `v${info.latestVersion} 已发布，可在设置页下载`);
+          this.$notify.success('发现新版本', `v${info.latestVersion} 已发布，可在设置页更新`);
         }
       });
     }
+    // 恢复主进程正在进行的更新（下载中/已完成/失败），并订阅实时状态广播
+    if (window.electronAPI?.updateGetState) {
+      window.electronAPI.updateGetState().then((state) => {
+        if (state && state.status && state.status !== 'idle') this.updateState = state;
+      }).catch(() => { /* 状态不可用时保持 idle */ });
+    }
+    this.removeUpdateProgressListener = window.electronAPI?.onUpdateDownloadProgress?.((state) => {
+      if (state && state.status) this.updateState = state;
+    }) || null;
   },
   beforeUnmount() {
     if (this.removeUpdateListener) {
@@ -176,43 +189,18 @@ export default {
       }
     },
 
-    // 应用内更新：下载安装包（带进度），完成后可一键安装重启
+    // 一键更新：点击一次即可，下载在主进程进行（切页不中断），
+    // 完成后主进程自动静默安装并重启应用，无需任何后续操作
     async startUpdateDownload(url) {
-      if (this.updateDownloading) return;
-      this.updateDownloading = true;
-      this.updateDownloadPercent = 0;
-      this.updateDownloadPath = '';
+      if (!url || this.updateState.status === 'downloading') return;
       try {
         if (!window.electronAPI?.updateDownload) throw new Error('当前版本不支持应用内更新');
-        this.removeUpdateProgressListener?.();
-        this.removeUpdateProgressListener = window.electronAPI.onUpdateDownloadProgress?.((p) => {
-          if (p && typeof p.percent === 'number') this.updateDownloadPercent = p.percent;
-        }) || null;
-        const result = await window.electronAPI.updateDownload(url);
-        if (result?.success && result.path) {
-          this.updateDownloadPath = result.path;
-          this.updateDownloadPercent = 100;
-          if (this.$notify) this.$notify.success('下载完成', '点击「安装并重启」完成更新');
-        } else {
-          throw new Error(result?.error || '下载失败');
-        }
+        const state = await window.electronAPI.updateDownload(url);
+        if (state && state.status) this.updateState = state;
       } catch (error) {
-        console.error('下载更新失败:', error);
-        if (this.$notify) this.$notify.error('错误', '下载更新失败: ' + error.message);
-      } finally {
-        this.updateDownloading = false;
-      }
-    },
-
-    // 启动安装程序并退出应用（覆盖安装，用户数据保留在 userData）
-    async installUpdate(filePath) {
-      try {
-        if (!window.electronAPI?.updateInstall) throw new Error('当前版本不支持应用内更新');
-        const result = await window.electronAPI.updateInstall(filePath);
-        if (!result?.success) throw new Error(result?.error || '启动安装程序失败');
-      } catch (error) {
-        console.error('启动安装失败:', error);
-        if (this.$notify) this.$notify.error('错误', '启动安装失败: ' + error.message);
+        console.error('启动更新失败:', error);
+        this.updateState = { ...IDLE_UPDATE_STATE, status: 'error', error: error.message };
+        if (this.$notify) this.$notify.error('错误', '启动更新失败: ' + error.message);
       }
     },
 
@@ -469,6 +457,24 @@ export default {
   font-size: 12px;
   line-height: 1.4;
   text-align: right;
+}
+
+.update-installing {
+  max-width: 190px;
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.update-error-text {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  color: var(--error-color);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .update-source-row {

@@ -321,11 +321,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateGetUrl: () => ipcRenderer.invoke('update-get-url'),
     updateSetUrl: (url) => ipcRenderer.invoke('update-set-url', url),
     updateOpenDownload: (url) => ipcRenderer.invoke('update-open-download', url),
-    // 应用内更新：下载安装包（进度经 onUpdateDownloadProgress 推送）→ 运行安装并重启
+    // 一键更新：主进程托管下载（切页不中断）→ 完成后自动静默安装并重启
     updateDownload: (url) => ipcRenderer.invoke('update-download', url),
-    updateInstall: (filePath) => ipcRenderer.invoke('update-install', filePath),
+    updateGetState: () => ipcRenderer.invoke('update-get-state'),
     onUpdateDownloadProgress: (callback) => {
-        const handler = (_, progress) => callback(progress);
+        const handler = (_, state) => callback(state);
         ipcRenderer.on('update-download-progress', handler);
         return () => ipcRenderer.removeListener('update-download-progress', handler);
     },

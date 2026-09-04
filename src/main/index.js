@@ -2420,13 +2420,15 @@ secureIpcHandle('update-open-download', async (event, url) => {
     }
 });
 
-// 应用内下载安装包，进度经 update-download-progress 推送到渲染进程
-secureIpcHandle('update-download', (event, url) => updateChecker.downloadInstaller(url, p => {
-    try { event.sender.send('update-download-progress', p); } catch (e) { /* sender destroyed */ }
+// 一键更新：下载由主进程托管（切换页面不中断），完成后自动静默安装并重启；
+// 进度状态广播到所有窗口，渲染进程随时可经 update-get-state 恢复显示
+secureIpcHandle('update-download', (event, url) => updateChecker.startManagedUpdate(url, state => {
+    BrowserWindow.getAllWindows().forEach(w => {
+        try { w.webContents.send('update-download-progress', state); } catch (e) { /* destroyed */ }
+    });
 }));
 
-// 启动安装程序并退出应用（覆盖安装，用户数据保留）
-secureIpcHandle('update-install', (event, filePath) => updateChecker.runInstaller(filePath));
+secureIpcHandle('update-get-state', () => updateChecker.getUpdateState());
 
 registerLibraryIpc({ handle: secureIpcHandle, animeDb, dialog, BrowserWindow });
 

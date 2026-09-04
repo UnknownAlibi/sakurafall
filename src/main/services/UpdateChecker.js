@@ -33,6 +33,10 @@ class UpdateChecker {
     this.defaultUpdateUrl = UPDATE_MANIFEST_URL || GITHUB_UPDATE_MANIFEST_URL;
     this.fallbackUpdateUrls = [GITHUB_UPDATE_MANIFEST_URL];
     this._config = null;
+    // 托管式一键更新的状态机：idle → downloading → completed / error
+    // 状态由主进程持有，渲染进程切换页面不影响下载，重新进入设置页可恢复显示
+    this._managed = { status: 'idle', percent: 0, received: 0, total: 0, filePath: '', error: '' };
+    this._lastEmit = 0;
   }
 
   setServiceBaseUrl(baseUrl = '') {
@@ -272,6 +276,58 @@ class UpdateChecker {
   }
 
   /**
+   * 托管式一键更新：主进程持有下载状态，用户点击一次即完成
+   * 「下载 →（自动）静默安装 → 自动重启」全流程。
+   * @param {string} url - latest.json 里的 downloadUrl
+   * @param {function} onEvent - 状态变化回调（节流推送，用于广播到所有窗口）
+   * @returns {{ status, percent, received, total, filePath, error, alreadyRunning? }}
+   */
+  startManagedUpdate(url, onEvent = null) {
+    if (this._managed.status === 'downloading') {
+      return { ...this._managed, alreadyRunning: true };
+    }
+    this._managed = { status: 'downloading', percent: 0, received: 0, total: 0, filePath: '', error: '' };
+    this._emitState(onEvent, true);
+    this.downloadInstaller(url, p => {
+      if (!p) return;
+      this._managed.percent = p.percent || 0;
+      this._managed.received = p.received || 0;
+      this._managed.total = p.total || 0;
+      this._emitState(onEvent);
+    }).then(result => {
+      if (result.success) {
+        this._managed.status = 'completed';
+        this._managed.percent = 100;
+        this._managed.filePath = result.path;
+        this._emitState(onEvent, true);
+        // 给 UI 留 2 秒展示“正在安装”，随后静默覆盖安装并自动重启
+        setTimeout(() => this.runInstaller(result.path), 2000);
+      } else {
+        this._managed.status = 'error';
+        this._managed.error = result.error || '下载失败';
+        this._emitState(onEvent, true);
+      }
+    }).catch(error => {
+      this._managed.status = 'error';
+      this._managed.error = error?.message || String(error);
+      this._emitState(onEvent, true);
+    });
+    return { ...this._managed };
+  }
+
+  // 当前托管更新状态快照（IPC 可安全传输的纯对象）
+  getUpdateState() {
+    return { ...this._managed };
+  }
+
+  _emitState(onEvent, force = false) {
+    const now = Date.now();
+    if (!force && now - this._lastEmit < 150) return;
+    this._lastEmit = now;
+    try { onEvent && onEvent({ ...this._managed }); } catch (e) { /* listener died */ }
+  }
+
+  /**
    * 运行安装包并退出应用（覆盖安装，用户数据保留在 userData）
    * @param {string} filePath - 下载得到的安装包路径
    * @returns {Promise<{ success, error? }>}
@@ -282,14 +338,16 @@ class UpdateChecker {
       if (!fs.existsSync(resolved) || !/\.exe$/i.test(resolved)) {
         return { success: false, error: '安装包不存在或格式无效' };
       }
-      // detached 启动安装向导（非静默，用户可确认安装目录），随后退出应用
-      const child = spawn(resolved, [], {
+      // 静默安装（/S 复用注册表中的原安装目录覆盖安装，无需向导操作），
+      // start /wait 等安装器退出后再自动启动新版应用，用户全程无需干预
+      const cmd = `start /wait "" "${resolved}" /S & start "" "${process.execPath()}"`;
+      const child = spawn('cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], {
         detached: true,
         stdio: 'ignore',
-        cwd: path.dirname(resolved)
+        windowsVerbatimArguments: true
       });
       child.unref();
-      safeLog('[UpdateChecker] 已启动安装程序，应用即将退出:', resolved);
+      safeLog('[UpdateChecker] 已启动静默安装并将于完成后自动重启:', resolved);
       setTimeout(() => {
         try { app.quit(); } catch (e) { /* ignore */ }
       }, 600);
