@@ -19,6 +19,26 @@ function createSubject(id, airDate = '2026-01-01') {
   };
 }
 
+test('ready catalog snapshots bypass remote scans and stale page totals, including empty filters', async t => {
+  const ready = subjectIndexService.hasCatalogSnapshot;
+  const query = subjectIndexService.querySubjects;
+  t.after(() => { subjectIndexService.hasCatalogSnapshot = ready; subjectIndexService.querySubjects = query; });
+  subjectIndexService.hasCatalogSnapshot = () => true;
+  const calls = [];
+  subjectIndexService.querySubjects = filters => {
+    calls.push(filters);
+    return { data: [], total: 0, page: 1, totalPages: 0 };
+  };
+  const service = new SubjectService();
+  service._readCache = () => assert.fail('snapshot must take priority over legacy page cache');
+  service._requestCatalogPage = () => assert.fail('ready snapshot must not scan remote pages');
+  for (const sort of ['date', 'score', 'rank']) {
+    assert.equal((await service.catalog({ sort, year: 1901 })).total, 0);
+    assert.equal((await service.browse({ sort, tag: '不存在的标签' })).total, 0);
+  }
+  assert.deepEqual(calls.map(call => call.sort), ['latest', 'latest', 'rating', 'rating', 'rank', 'rank']);
+});
+
 test('catalog policy keeps one released universe for every sort', () => {
   const todayKey = '2026-08-28';
   assert.equal(validDateKey('2026-02-29'), '');
@@ -120,7 +140,7 @@ test('SubjectService excludes future entries while retaining fetched released en
   assert.equal(second.data.every(item => item.air_date <= '2026-07-31'), true);
 });
 
-test('SubjectService does not expose a partial local total before a catalog network result', async () => {
+test('SubjectService serves the local catalog immediately and marks it for refresh', async () => {
   const service = new SubjectService();
   const originalQuery = subjectIndexService.querySubjects;
   let indexReads = 0;
@@ -149,10 +169,11 @@ test('SubjectService does not expose a partial local total before a catalog netw
       staleWhileRevalidate: true
     });
 
-    assert.equal(result.data[0].bgm_id, 320);
-    assert.equal(result.total, 900);
-    assert.equal(result._servedFromIndex, undefined);
-    assert.equal(indexReads, 0);
+    assert.equal(result.data[0].bgm_id, 101);
+    assert.equal(result.total, 557);
+    assert.equal(result._servedFromIndex, true);
+    assert.equal(result._staleWhileRevalidate, true);
+    assert.equal(indexReads, 1);
   } finally {
     subjectIndexService.querySubjects = originalQuery;
   }
@@ -255,9 +276,7 @@ test('SubjectService falls back to indexed tags when Bangumi returns an empty fi
   }
 });
 
-test('SubjectService waits for the network collection on a tag-filtered date browse', async () => {
-  // 回归：筛选（标签/年份）+ date 排序曾从增量索引直读，
-  // 首屏只显示几条；现在 staleWhileRevalidate 也必须走网络集合路径
+test('SubjectService serves indexed tag filters while the full collection warms', async () => {
   const service = new SubjectService();
   const originalQuery = subjectIndexService.querySubjects;
   subjectIndexService.querySubjects = filters => ({
@@ -299,10 +318,12 @@ test('SubjectService waits for the network collection on a tag-filtered date bro
       staleWhileRevalidate: true
     });
 
-    assert.equal(result._servedFromIndex, undefined);
-    assert.equal(networkRequests, 3);
-    assert.equal(result.total, 3);
-    assert.deepEqual(result.data.map(item => item.bgm_id), [503, 502, 501]);
+    assert.equal(result._servedFromIndex, true);
+    assert.equal(result._partialIndex, true);
+    assert.equal(result._staleWhileRevalidate, true);
+    assert.equal(networkRequests, 0);
+    assert.equal(result.total, 1);
+    assert.deepEqual(result.data.map(item => item.bgm_id), [202]);
   } finally {
     subjectIndexService.querySubjects = originalQuery;
     bangumiApi.request = originalRequest;

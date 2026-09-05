@@ -18,16 +18,18 @@ export function resolveWebgpuAnime4kProfile({
     (Number(displayWidth) || inputWidth || 1) / Math.max(1, Number(inputWidth) || 1),
     (Number(displayHeight) || inputHeight || 1) / Math.max(1, Number(inputHeight) || 1)
   );
-  // A 720p source needs a 2560px CNN intermediate for genuine x2 reconstruction.
-  // The presentation canvas remains capped separately; the worker benchmark
-  // rejects hardware that cannot sustain this pipeline in real time.
-  const shouldUpscale = requestedPreset !== 'light' && inputEdge * 2 <= 2560 && scale > 1.08;
+  // The presentation canvas is capped separately and the worker benchmark
+  // rejects hardware that cannot sustain the selected pipeline in real time.
+  // Balanced 720p x2 can starve Chromium's decoder on some AMD drivers.
+  // Restore 720p at source size; reserve true x2 for SD or quality mode.
+  const upscaleEdgeLimit = requestedPreset === 'quality' ? 1280 : 960;
+  const shouldUpscale = requestedPreset !== 'light' && inputEdge <= upscaleEdgeLimit && scale > 1.08;
 
   if (shouldUpscale) {
     return {
       requestedPreset,
       effectivePreset: requestedPreset,
-      pipeline: requestedPreset === 'quality' ? 'CNNx2VL' : 'CNNx2M',
+      pipeline: 'CNNx2M',
       upscale: 2
     };
   }

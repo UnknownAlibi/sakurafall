@@ -70,6 +70,7 @@ import PerformancePanel from './components/dev/PerformancePanel.vue';
 import AnimeCursor from './components/Common/AnimeCursor.vue';
 import { startPerfMarks } from './utils/perfMarks.js';
 import { applyThemeCustomization } from './utils/themeRuntime.js';
+import backgroundTaskScheduler from './services/backgroundTaskScheduler.js';
 
 export default {
   name: 'App',
@@ -277,8 +278,11 @@ export default {
 
     this._handleVisibilityChange = () => {
       this.pageVisible = !document.hidden;
+      if (document.hidden) backgroundTaskScheduler.pause('window-hidden');
+      else backgroundTaskScheduler.resume('window-hidden');
     };
     document.addEventListener('visibilitychange', this._handleVisibilityChange);
+    this._handleVisibilityChange();
 
     // 方向性过渡：基于 history.state.position 判断前进/后退
     // （Vue Router 4 为每条历史记录维护递增 position，popstate 返回时值变小）
@@ -402,6 +406,7 @@ export default {
   },
   beforeUnmount() {
     document.removeEventListener('visibilitychange', this._handleVisibilityChange);
+    backgroundTaskScheduler.resume('window-hidden');
     this._unregisterRouteDirection?.();
     if (this._bootPhraseTimer) {
       clearInterval(this._bootPhraseTimer);

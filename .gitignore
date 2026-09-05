@@ -203,6 +203,11 @@ extensions/bundled/sources/xpath-community.sourcepack.json
 docs/desktop-modernization-plan.md
 docs/implementation-log.md
 docs/next-stage-rebuild-plan.md
+docs/next-performance-execution-plan.md
+docs/performance-local-catalog-2026-09-05.md
+
+# 性能复验基线备份（本机运行数据，不入库）
+artifacts-baseline-*/
 
 # 未采用的品牌素材迭代稿
 build/icon-v2.*

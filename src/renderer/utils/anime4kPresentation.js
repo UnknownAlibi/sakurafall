@@ -3,7 +3,8 @@ export function formatAnime4kPreset(preset) {
     light: '轻量',
     balanced: '均衡',
     quality: '画质',
-    'fullscreen-safe': '全屏流畅'
+    'fullscreen-safe': '全屏流畅',
+    'display-safe': '流畅保护'
   }[preset] || '均衡';
 }
 
@@ -16,9 +17,9 @@ export function formatAnime4kBackend(status) {
 }
 
 export function formatAnime4kRuntimeTitle(status, preset) {
-  if (status?.mode === 'fullscreen-safe') {
+  if (status?.mode === 'fullscreen-safe' || status?.mode === 'display-safe') {
     const reason = status?.fallbackReason ? `；原因：${status.fallbackReason}` : '';
-    return `全屏流畅增强运行中；CNN 已自动降级，原视频播放不受影响${reason}`;
+    return `流畅保护模式运行中；实时 CNN 已暂停，原视频播放不受影响${reason}`;
   }
   const effectivePreset = status?.preset || preset;
   const input = status?.inputWidth && status?.inputHeight ? `${status.inputWidth}x${status.inputHeight}` : '未知';

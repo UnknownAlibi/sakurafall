@@ -215,6 +215,13 @@ class SubjectService {
     const todayKey = this._todayDateKey();
     const releaseScope = includeFuture ? 'all' : `released-${todayKey}`;
 
+    if (!includeFuture && subjectIndexService.hasCatalogSnapshot?.()) {
+      const indexed = this._readCatalogPageFromIndex({ page: safePage, limit: safeLimit,
+        sort: normalizedSort, year: safeYear, month: safeMonth, cat: safeCat });
+      if (indexed) return { ...indexed, includeFuture: false, releaseDate: todayKey,
+        futureFiltered: true, _servedFromIndex: true, _snapshotBacked: true };
+    }
+
     const cacheKey = `bangumi:catalog:v4:${releaseScope}:${normalizedSort}:${safeCat ?? 'all'}:${safeYear || 'all-years'}:${safeMonth || 'all-months'}:${safePage}:${safeLimit}`;
     const cached = refresh ? null : this._readCache(cacheKey);
     if (cached) return cached;
@@ -224,6 +231,25 @@ class SubjectService {
         return {
           ...stale.content,
           _fromExpiredCache: stale.expired,
+          _staleWhileRevalidate: true
+        };
+      }
+      const indexed = this._readCatalogPageFromIndex({
+        page: safePage,
+        limit: safeLimit,
+        sort: normalizedSort,
+        year: safeYear,
+        month: safeMonth,
+        cat: safeCat
+      });
+      if (indexed?.data?.length) {
+        return {
+          ...indexed,
+          includeFuture: false,
+          releaseDate: todayKey,
+          futureFiltered: true,
+          _servedFromIndex: true,
+          _partialIndex: true,
           _staleWhileRevalidate: true
         };
       }
@@ -369,7 +395,7 @@ class SubjectService {
   }
 
   _catalogPlatform(cat) {
-    return ({ 1: 'TV', 2: 'OVA', 3: '剧场版', 5: 'WEB' })[cat] || '';
+    return ({ 0: '其他', 1: 'TV', 2: 'OVA', 3: '剧场版', 5: 'WEB' })[cat] || '';
   }
 
   _readCatalogPageFromIndex({ page, limit, sort, year, month, cat }) {
@@ -388,7 +414,7 @@ class SubjectService {
         requireDated: false,
         requireRated: false
       });
-      if (!result?.data?.length) return null;
+      if (!result?.data?.length && !subjectIndexService.hasCatalogSnapshot?.()) return null;
       return {
         ...result,
         limit,
@@ -410,7 +436,7 @@ class SubjectService {
         ? 'latest'
         : sort === 'score'
           ? 'rating'
-          : 'popular';
+          : sort === 'rank' ? 'rank' : 'popular';
       const result = subjectIndexService.querySubjects({
         keyword,
         tags: userTags,
@@ -423,7 +449,7 @@ class SubjectService {
         requireDated: false,
         requireRated: false
       });
-      if (!result?.data?.length) return null;
+      if (!result?.data?.length && !subjectIndexService.hasCatalogSnapshot?.()) return null;
       return {
         ...result,
         limit,
@@ -1196,6 +1222,11 @@ class SubjectService {
     ));
 
     const cacheKey = `bangumi:browse:v11:${normalizedSort}:${userTags.join(',') || 'all'}:${officialMetaTags.join(',') || 'all-platforms'}:${safeYear || 'all-years'}:${keyword || ''}:${safePage}:${safeLimit}`;
+    if (!keyword && officialMetaTags.length <= 1 && subjectIndexService.hasCatalogSnapshot?.()) {
+      const indexed = this._readBrowsePageFromIndex({ keyword, userTags, officialMetaTags,
+        year: safeYear, sort: normalizedSort, page: safePage, limit: safeLimit });
+      if (indexed) return { ...indexed, tag: tag || '', _servedFromIndex: true, _snapshotBacked: true };
+    }
     const cached = refresh ? null : this._readCache(cacheKey);
     if (cached) return cached;
 
@@ -1215,24 +1246,23 @@ class SubjectService {
         };
       }
 
-      if (!needsSharedCollection) {
-        const indexed = this._readBrowsePageFromIndex({
-          keyword,
-          userTags,
-          officialMetaTags,
-          year: safeYear,
-          sort: normalizedSort,
-          page: safePage,
-          limit: safeLimit
-        });
-        if (indexed) {
-          return {
-            ...indexed,
-            tag: tag || '',
-            _servedFromIndex: true,
-            _staleWhileRevalidate: true
-          };
-        }
+      const indexed = this._readBrowsePageFromIndex({
+        keyword,
+        userTags,
+        officialMetaTags,
+        year: safeYear,
+        sort: normalizedSort,
+        page: safePage,
+        limit: safeLimit
+      });
+      if (indexed) {
+        return {
+          ...indexed,
+          tag: tag || '',
+          _servedFromIndex: true,
+          _partialIndex: needsSharedCollection,
+          _staleWhileRevalidate: true
+        };
       }
     }
 

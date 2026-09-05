@@ -37,6 +37,28 @@ curl -fsS https://47.109.87.3:8443/health
 ss -lntup
 ```
 
+## Catalog snapshot seeding
+
+When the ECS cannot reach public Bangumi mirrors, build the snapshot on a development PC
+with working metadata access and upload only the generated data file:
+
+```powershell
+npm run build:catalog-snapshot
+scp artifacts/catalog-snapshot.json sakurafall:/var/lib/sakurafall/catalog-snapshot.json.next
+ssh sakurafall "mv /var/lib/sakurafall/catalog-snapshot.json.next /var/lib/sakurafall/catalog-snapshot.json && systemctl restart sakurafall"
+```
+
+Page checkpoints are kept in `artifacts/catalog-snapshot.json.pages` for 24 hours,
+so rerunning an interrupted build resumes completed requests. A successful build
+replaces the snapshot atomically; an incomplete build does not replace it.
+
+The desktop imports the initial snapshot in batches of 200, yielding between batches,
+then requests deltas every six hours. Failed imports retain the previous cursor.
+After an initial catalog scan is imported, filters and ordering use the same local
+index, including empty results. A missing server or snapshot never deletes the
+client's existing local index. Remote deletions are not reconciled by this version;
+catalog snapshots merge metadata and are not an authoritative deletion feed.
+
 ## TLS renewal
 
 The current endpoint uses a trusted short-lived Let's Encrypt IP certificate.

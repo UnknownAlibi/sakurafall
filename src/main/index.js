@@ -1,7 +1,6 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog, session, shell, nativeImage, protocol, clipboard } = require('electron');
 const processStartedAt = Date.now();
 
-// Episode selection happens in the catalog window and playback starts in a separate player window.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 protocol.registerSchemesAsPrivileged([{
@@ -543,6 +542,7 @@ async function applyNetworkConfig(config = {}) {
         fastFail: !!automaticService
     });
     bangumiApi.setCoverProxyBase?.(activeServiceBaseUrl);
+    subjectIndexService.setSnapshotBaseUrl(activeServiceBaseUrl);
     updateChecker.setServiceBaseUrl?.(activeServiceBaseUrl);
     watchTogetherService.setRelayBaseUrl?.(activeServiceBaseUrl);
     console.log(`[Network] 数据连接方式: ${serviceMode === 'cloud' ? 'SakuraFall 云服务（带本机回退）' : '本机直连'}`);
@@ -551,7 +551,6 @@ async function applyNetworkConfig(config = {}) {
         console.log(`[Network] Bangumi 使用代理: ${proxy}（视频源与播放流保持直连）`);
     }
     bangumiApi.setProxy?.(proxy);
-    // 备用元数据源 AniList 与 Bangumi 走相同代理
     subjectService.setProxy?.(proxy);
     cmsApiService.setProxy?.('');
     // 视频解析与播放流保持直连，与片源包请求策略相互独立。

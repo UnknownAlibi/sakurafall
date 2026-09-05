@@ -28,7 +28,7 @@ test('WebGPU Anime4K capability probe requires every frame-transfer primitive', 
   assert.equal(canUseWebgpuAnime4k({ ...complete, VideoFrame: undefined }), false);
 });
 
-test('WebGPU profile uses x2 CNN for common SD and 720p sources within the realtime budget', () => {
+test('WebGPU profile reserves balanced x2 CNN for SD and protects 720p decoding', () => {
   assert.deepEqual(resolveWebgpuAnime4kProfile({
     preset: 'balanced',
     inputWidth: 960,
@@ -47,7 +47,7 @@ test('WebGPU profile uses x2 CNN for common SD and 720p sources within the realt
     inputHeight: 720,
     displayWidth: 1920,
     displayHeight: 1080
-  }).pipeline, 'CNNx2M');
+  }).pipeline, 'CNNM');
   assert.equal(resolveWebgpuAnime4kProfile({
     preset: 'light',
     inputWidth: 960,
@@ -61,14 +61,14 @@ test('WebGPU profile uses x2 CNN for common SD and 720p sources within the realt
     inputHeight: 720,
     displayWidth: 1920,
     displayHeight: 1080
-  }).pipeline, 'CNNx2VL');
+  }).pipeline, 'CNNx2M');
   assert.equal(resolveWebgpuAnime4kProfile({
     preset: 'quality',
     inputWidth: 960,
     inputHeight: 540,
     displayWidth: 1920,
     displayHeight: 1080
-  }).pipeline, 'CNNx2VL');
+  }).pipeline, 'CNNx2M');
 });
 
 test('WebGPU profile restores 1080p without allocating a 4K CNN output', () => {
@@ -101,9 +101,9 @@ test('WebGPU worker prewarms shaders and guards its one-frame mailbox', () => {
   assert.match(client, /setTimeout\(\(\) => worker\.terminate\(\), 200\)/);
 });
 
-test('Anime4K canvas restarts by source and only presents after a verified frame', () => {
+test('Anime4K canvas restarts by source and only shows after a verified frame', () => {
   const source = fs.readFileSync(new URL('../src/renderer/components/Player/Anime4KCanvas.vue', import.meta.url), 'utf8');
   assert.match(source, /sourceKey/);
-  assert.match(source, /v-show="presenting"/);
+  assert.match(source, /v-show="showCanvas"/);
   assert.match(source, /if \(!this\.presenting\)/);
 });

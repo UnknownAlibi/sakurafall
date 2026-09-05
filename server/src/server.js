@@ -8,6 +8,7 @@ const { BangumiProxy } = require('./bangumiProxy');
 const { CoverProxy } = require('./coverProxy');
 const { RoomRelay } = require('./relay');
 const { ReleaseService } = require('./releaseService');
+const { CatalogSnapshotService } = require('./catalogSnapshot');
 const { applyCommonHeaders, sendJson } = require('./httpUtils');
 
 function createRateLimiter(limit) {
@@ -30,12 +31,20 @@ function createRateLimiter(limit) {
 
 function createApplication(config = loadConfig()) {
   const cache = new CacheStore(config.cacheDir, { maxBytes: config.cacheMaxBytes });
+  const catalog = new CatalogSnapshotService({
+    dataDir: config.dataDir,
+    enabled: config.catalogSnapshotEnabled !== false,
+    warmEnabled: config.catalogWarmEnabled === true,
+    warmIntervalMs: config.catalogWarmIntervalMs,
+    warmDelayMs: config.catalogWarmDelayMs
+  });
   const bangumi = new BangumiProxy({
     cache,
     upstreams: config.upstreams,
     timeoutMs: config.requestTimeoutMs,
     coverProxyBase: config.publicBaseUrl,
-    warmCovers: config.coverWarmEnabled ? warmCovers : null
+    warmCovers: config.coverWarmEnabled ? warmCovers : null,
+    observeCatalog: payload => catalog.ingest(payload)
   });
   const covers = new CoverProxy({
     cache,
@@ -75,6 +84,9 @@ function createApplication(config = loadConfig()) {
   const releases = new ReleaseService(config.releaseDir);
   const rateLimit = createRateLimiter(config.rateLimitPerMinute);
   const startedAt = Date.now();
+  catalog.startWarmup(({ category, limit, offset }) => bangumi.requestJson(
+    `/v0/subjects?type=2&cat=${category}&sort=date&limit=${limit}&offset=${offset}`
+  ));
 
   const handler = async (req, res) => {
     const requestStarted = performance.now();
@@ -104,6 +116,7 @@ function createApplication(config = loadConfig()) {
         return;
       }
       if (await relay.handleHttp(req, res, url)) return;
+      if (catalog.handle(req, res, url)) return;
       if (releases.handle(req, res, url)) return;
       if (await covers.handle(req, res, url)) return;
       if (await bangumi.handle(req, res, url)) return;
@@ -134,7 +147,7 @@ function createApplication(config = loadConfig()) {
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 70_000;
 
-  return { server, cache, relay, config, tlsEnabled };
+  return { server, cache, relay, catalog, config, tlsEnabled };
 }
 
 function start() {
@@ -151,6 +164,7 @@ function start() {
   const shutdown = signal => {
     console.log(JSON.stringify({ level: 'info', event: 'shutdown', signal }));
     app.relay.close();
+    app.catalog.close();
     app.server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
   };

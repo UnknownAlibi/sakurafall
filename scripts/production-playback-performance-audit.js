@@ -143,9 +143,10 @@ async function collectPlaybackWindow(page, durationMs = 3000) {
       const averageMediaDelta = mediaIntervals.reduce((sum, value) => sum + value, 0) / Math.max(1, mediaIntervals.length);
       const animeCanvas = document.querySelector('.anime4k-canvas');
       const animeComponent = animeCanvas?.__vueParentComponent?.proxy || null;
+      const animeRuntime = JSON.parse(animeCanvas?.dataset.anime4kRuntime || '{}');
       container?.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 140, clientY: 140 }));
       const animeStatus = Array.from(document.querySelectorAll('.source-status-pill span'))
-        .find(item => item.textContent.includes('A4K'));
+        .find(item => /A4K|显示增强/.test(item.textContent));
       resolve({
         elapsedMs,
         currentTime: video.currentTime,
@@ -172,7 +173,7 @@ async function collectPlaybackWindow(page, durationMs = 3000) {
         rafMaximumMs: Math.max(0, ...rafIntervals),
         longFrameRatio: rafIntervals.filter(value => value > 32).length / Math.max(1, rafIntervals.length),
         fullscreen: Boolean(document.fullscreenElement),
-        anime4k: animeComponent?.buildStatus ? animeComponent.buildStatus() : { active: false },
+        anime4k: animeComponent?.buildStatus ? animeComponent.buildStatus() : animeRuntime,
         anime4kStatusText: animeStatus?.textContent.trim() || '',
         anime4kStatusTitle: animeStatus?.title || '',
         canvasVisible: (() => {
@@ -334,8 +335,8 @@ async function main() {
     const anime4kActivated = await waitFor(() => playerPage.evaluate(`(() => {
       const canvas = document.querySelector('.anime4k-canvas');
       const component = canvas?.__vueParentComponent?.proxy;
-      return Boolean(component?.buildStatus?.().active ||
-        (canvas && getComputedStyle(canvas).display !== 'none' && canvas.width > 0 && canvas.height > 0));
+      const runtime = component?.buildStatus?.() || JSON.parse(canvas?.dataset.anime4kRuntime || '{}');
+      return Boolean(runtime.active && runtime.presenting);
     })()`), 'Anime4K runtime', 12000, 150).catch(() => false);
     report.playback.anime4kActivation = await playerPage.evaluate(`(() => {
       const canvas = document.querySelector('.anime4k-canvas');
@@ -347,7 +348,7 @@ async function main() {
         enabled: Boolean(input?.checked),
         componentName: canvasNode?.type?.name || '',
         canvasEnabled: Boolean(canvasNode?.proxy?.enabled),
-        runtime: canvasNode?.proxy?.buildStatus ? canvasNode.proxy.buildStatus() : null,
+        runtime: canvasNode?.proxy?.buildStatus ? canvasNode.proxy.buildStatus() : JSON.parse(canvas?.dataset.anime4kRuntime || '{}'),
         canvasActive: Boolean(canvasNode?.proxy?.active),
         canvasBackend: canvasNode?.proxy?.backend || '',
         fullscreenSafeMode: Boolean(canvasNode?.proxy?.fullscreenSafeMode),

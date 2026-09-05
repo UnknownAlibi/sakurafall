@@ -63,6 +63,38 @@ test('BangumiApi shares one failed endpoint probe across concurrent requests', a
   }
 });
 
+test('BangumiApi hedges a slow cold endpoint instead of waiting for its timeout', async () => {
+  const slow = await createServer((_req, res) => {
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"source":"slow"}');
+    }, 900);
+  });
+  const fast = await createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"source":"fast"}');
+  });
+  const api = new BangumiApi();
+  api.defaultBaseUrl = slow.baseUrl;
+  api.baseUrl = slow.baseUrl;
+  api.publicApiMirrors = [fast.baseUrl];
+  api._mirrorScore = base => base === slow.baseUrl ? 100 : 0;
+
+  try {
+    const startedAt = Date.now();
+    const result = await api.request(`${slow.baseUrl}/calendar`);
+    const elapsed = Date.now() - startedAt;
+
+    assert.equal(result.source, 'fast');
+    assert.ok(elapsed < 700, `hedged request took ${elapsed}ms`);
+    assert.equal(slow.hits(), 1);
+    assert.equal(fast.hits(), 1);
+  } finally {
+    await slow.close();
+    await fast.close();
+  }
+});
+
 test('SakuraFall service mode keeps upstream fallback and rewrites allowlisted covers', () => {
   const api = new BangumiApi();
   api.setBaseUrl('https://47.109.87.3:8443', { allowFallback: true, fastFail: true });

@@ -36,6 +36,10 @@ function loadConfig(env = process.env) {
     // 让客户端滚动加载时封面直接命中服务器磁盘缓存。
     coverWarmEnabled: env.SAKURAFALL_COVER_WARM_ENABLED !== 'false',
     coverWarmConcurrency: positiveInteger(env.SAKURAFALL_COVER_WARM_CONCURRENCY, 6),
+    catalogSnapshotEnabled: env.SAKURAFALL_CATALOG_SNAPSHOT_ENABLED !== 'false',
+    catalogWarmEnabled: env.SAKURAFALL_CATALOG_WARM_ENABLED !== 'false',
+    catalogWarmIntervalMs: positiveInteger(env.SAKURAFALL_CATALOG_WARM_HOURS, 24) * 60 * 60 * 1000,
+    catalogWarmDelayMs: positiveInteger(env.SAKURAFALL_CATALOG_WARM_DELAY_MS, 180),
     rateLimitPerMinute: positiveInteger(env.SAKURAFALL_RATE_LIMIT_PER_MINUTE, 360),
     roomTtlMs: positiveInteger(env.SAKURAFALL_ROOM_TTL_MINUTES, 30) * 60 * 1000,
     maxRoomMembers: positiveInteger(env.SAKURAFALL_MAX_ROOM_MEMBERS, 24),

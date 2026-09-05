@@ -1,6 +1,6 @@
 <template>
   <canvas
-    v-show="presenting"
+    v-show="showCanvas"
     :key="canvasEpoch"
     ref="canvas"
     class="anime4k-canvas"
@@ -9,20 +9,16 @@
 </template>
 
 <script>
-import { createAnime4kPipeline } from '../../player/anime4kWebgl.js';
 import {
   canUseWebgpuAnime4k,
   createAnime4kWebgpuPipeline
 } from '../../player/anime4kWebgpuClient.js';
 
 const MAX_VIDEO_EDGE = 1920;
-const WEBGL_SLOW_FRAME_MS = 22;
-const WEBGPU_SLOW_FRAME_MS = 34;
-const WEBGPU_HARD_FRAME_MS = 100;
-const WEBGPU_CALLBACK_STALL_MS = 450;
-const PERF_WINDOW = 90;
-const CALLBACK_LAG_MS = 240;
-const MEDIA_JUMP_SECONDS = 0.18;
+const WEBGPU_SLOW_FRAME_MS = 30;
+const WEBGPU_HARD_FRAME_MS = 70;
+const WEBGPU_CALLBACK_STALL_MS = 300;
+const PERF_WINDOW = 30;
 
 function lowerPreset(preset) {
   if (preset === 'quality') return 'balanced';
@@ -42,6 +38,7 @@ export default {
     return {
       active: false,
       presenting: false,
+      showCanvas: false,
       canvasEpoch: 0
     };
   },
@@ -63,12 +60,7 @@ export default {
   mounted() {
     this._lifecycleGeneration = 0;
     this._canvasTransferred = false;
-    this._fullscreenHandler = () => {
-      const shouldChangeBackend = (this.backend === 'webgl' && this.isFullscreen()) ||
-        (this.fullscreenSafeMode && !this.isFullscreen());
-      if (shouldChangeBackend) this.restart();
-      else this.syncDisplaySize();
-    };
+    this._fullscreenHandler = () => this.syncDisplaySize();
     document.addEventListener('fullscreenchange', this._fullscreenHandler);
     if (this.enabled) this.start();
   },
@@ -84,9 +76,6 @@ export default {
     },
     notify(title, message) {
       try { this.$notify?.warning(title, message); } catch (_) { /* notifications must not break playback */ }
-    },
-    isFullscreen() {
-      return !!document.fullscreenElement;
     },
     async ensureWritableCanvas() {
       if (!this._canvasTransferred) return this.$refs.canvas;
@@ -108,23 +97,24 @@ export default {
       };
       video.addEventListener('loadedmetadata', this._metadataHandler, { once: true });
     },
-    startFullscreenSafeMode(reason = '') {
+    startDisplaySafeMode(reason = '') {
       if (!this.video) return;
-      this.backend = 'fullscreen-safe';
-      this.fullscreenSafeMode = true;
-      this.video.classList.add('anime4k-fullscreen-safe');
+      this.backend = 'display-safe';
+      this.displaySafeMode = true;
+      this.video.classList.add('anime4k-display-safe');
       this.active = false;
       this.presenting = true;
+      this.showCanvas = false;
       this.emitStatus({ presenting: true, degraded: true, fallbackReason: reason });
     },
     buildStatus(extra = {}) {
       if (!this.video) return { active: false };
-      if (this.fullscreenSafeMode) {
+      if (this.displaySafeMode) {
         return {
           active: true,
           backend: 'css',
-          mode: 'fullscreen-safe',
-          preset: 'fullscreen-safe',
+          mode: 'display-safe',
+          preset: 'display-safe',
           requestedPreset: this.preset,
           adaptive: true,
           presenting: true,
@@ -163,6 +153,7 @@ export default {
     },
     emitStatus(extra = {}) {
       const status = this.buildStatus(extra);
+      if (this.$refs.canvas) this.$refs.canvas.dataset.anime4kRuntime = JSON.stringify(status);
       const key = JSON.stringify(status);
       if (key === this._lastStatusKey) return;
       this._lastStatusKey = key;
@@ -212,13 +203,16 @@ export default {
           if (generation !== this._lifecycleGeneration || this.backend !== 'webgpu') return;
           this.perfEma = this.perfEma ? this.perfEma * 0.92 + stats.renderMs * 0.08 : stats.renderMs;
           this.perfFrames += 1;
-          if (!this.presenting) {
-            this.presenting = true;
-            this.emitStatus();
-          }
+          // Never cover the native video with a frame that already proved the
+          // CNN cannot sustain in real time.
           if (stats.renderedFrames <= 2 && stats.renderMs > WEBGPU_HARD_FRAME_MS) {
             this.handleWebgpuFailure(new Error(`CNN 实时性能不足（${stats.renderMs.toFixed(0)}ms/帧）`));
             return;
+          }
+          if (!this.presenting) {
+            this.presenting = true;
+            this.showCanvas = true;
+            this.emitStatus();
           }
           if (this.perfFrames % 30 === 0) this.emitStatus();
           if (this.perfFrames >= PERF_WINDOW && this.perfEma > WEBGPU_SLOW_FRAME_MS) this.handleSlowWebgpu();
@@ -226,15 +220,6 @@ export default {
         onFatal: (error) => {
           if (generation === this._lifecycleGeneration) this.handleWebgpuFailure(error);
         }
-      });
-    },
-    async createWebglBackend(canvas, video) {
-      this.passthrough = localStorage.getItem('player-anime4k-debug') === 'passthrough';
-      return createAnime4kPipeline(canvas, this._runtimePresetOverride || this.preset, {
-        passthrough: this.passthrough,
-        inputWidth: video.videoWidth,
-        inputHeight: video.videoHeight,
-        maxOutputEdge: 1920
       });
     },
     async start() {
@@ -261,45 +246,27 @@ export default {
         return;
       }
 
-      let webgpuError = this._skipWebgpuOnce && this._webgpuFallbackReason
-        ? new Error(this._webgpuFallbackReason)
-        : null;
+      let webgpuError = null;
       let engine = null;
       let backend = '';
       let effectivePreset = '';
-      if (!this._skipWebgpuOnce) {
-        try {
-          engine = await this.createWebgpuBackend(canvas, video, generation);
-          backend = 'webgpu';
-          effectivePreset = engine.profile?.effectivePreset || this._runtimePresetOverride || this.preset;
-        } catch (error) {
-          webgpuError = error;
-        }
+      try {
+        engine = await this.createWebgpuBackend(canvas, video, generation);
+        backend = 'webgpu';
+        effectivePreset = engine.profile?.effectivePreset || this._runtimePresetOverride || this.preset;
+      } catch (error) {
+        webgpuError = error;
       }
-      this._skipWebgpuOnce = false;
-      this._webgpuFallbackReason = '';
 
       if (!this.enabled || generation !== this._lifecycleGeneration) {
         engine?.dispose?.();
         return;
       }
       if (!engine) {
-        if (this.isFullscreen()) {
-          this.startFullscreenSafeMode(webgpuError?.message || 'WebGPU Worker 不可用');
-          return;
-        }
-        const fallbackCanvas = await this.ensureWritableCanvas();
-        if (generation !== this._lifecycleGeneration || !this.enabled) return;
-        try {
-          engine = await this.createWebglBackend(fallbackCanvas, video);
-          backend = 'webgl';
-          effectivePreset = engine.effectivePreset || this._runtimePresetOverride || this.preset;
-        } catch (error) {
-          const reason = webgpuError?.message || error?.message || 'GPU 渲染不可用';
-          this.notify('超分不可用', reason);
-          this.$emit('auto-disabled', 'unsupported');
-          return;
-        }
+        // Main-thread WebGL CNN can monopolize the renderer precisely on the
+        // machines where WebGPU failed. Preserve native playback instead.
+        this.startDisplaySafeMode(webgpuError?.message || 'WebGPU Worker 不可用');
+        return;
       }
 
       if (!this.enabled || generation !== this._lifecycleGeneration) {
@@ -312,10 +279,10 @@ export default {
       this.effectivePreset = effectivePreset;
       this.active = true;
       this.presenting = false;
+      this.showCanvas = false;
       this.perfEma = 0;
       this.perfFrames = 0;
       this.lastCallbackAt = 0;
-      this.lastMediaTime = 0;
       await this.$nextTick();
       if (!this.engine || !this.enabled) return;
       this.setupResizeTracking();
@@ -338,16 +305,18 @@ export default {
         try { this.engine.dispose?.(); } catch (_) { /* GPU context may already be gone */ }
       }
       this.engine = null;
-      this.video?.classList.remove('anime4k-fullscreen-safe');
-      this.fullscreenSafeMode = false;
+      this.video?.classList.remove('anime4k-display-safe');
+      this.displaySafeMode = false;
       this.backend = '';
       this.active = false;
       this.presenting = false;
+      this.showCanvas = false;
       this._lastStatusKey = '';
+      if (this.$refs.canvas) this.$refs.canvas.dataset.anime4kRuntime = JSON.stringify({ active: false });
     },
     stop() {
       this._lifecycleGeneration += 1;
-      const wasActive = this.active || this.fullscreenSafeMode;
+      const wasActive = this.active || this.displaySafeMode;
       this.cleanupRuntime();
       this.video = null;
       this.effectivePreset = '';
@@ -369,7 +338,7 @@ export default {
       if (this._webgpuWatchdogId != null) clearInterval(this._webgpuWatchdogId);
       this.lastCallbackAt = performance.now();
       this._webgpuWatchdogId = setInterval(() => {
-        if (!this.enabled || this.backend !== 'webgpu' || !this.video || this.video.paused || this.video.seeking) {
+        if (!this.enabled || this.backend !== 'webgpu' || !this.video || this.video.paused || this.video.seeking || this.video.readyState < 3) {
           this.lastCallbackAt = performance.now();
           return;
         }
@@ -388,34 +357,7 @@ export default {
         return;
       }
 
-      const mediaTime = Number(metadata?.mediaTime);
-      const callbackGap = this.lastCallbackAt ? now - this.lastCallbackAt : 0;
-      const mediaJump = Number.isFinite(mediaTime) && this.lastMediaTime ? mediaTime - this.lastMediaTime : 0;
-      this.lastCallbackAt = now;
-      if (Number.isFinite(mediaTime)) this.lastMediaTime = mediaTime;
-      if (!video.paused && callbackGap > CALLBACK_LAG_MS && mediaJump > MEDIA_JUMP_SECONDS) {
-        this.handleTerminalFailure('frame-lag', '主线程 WebGL 增强跟不上视频帧率');
-        return;
-      }
-      if (video.readyState >= 2) {
-        try {
-          const cost = this.engine.renderFrame(video);
-          this.perfEma = this.perfEma ? this.perfEma * 0.92 + cost * 0.08 : cost;
-          this.perfFrames += 1;
-          if (!this.presenting) {
-            this.presenting = true;
-            this.emitStatus();
-          }
-          if (this.perfFrames >= PERF_WINDOW && this.perfEma > WEBGL_SLOW_FRAME_MS) {
-            this.handleTerminalFailure('performance', `主线程 WebGL 平均耗时 ${this.perfEma.toFixed(1)}ms/帧`);
-            return;
-          }
-        } catch (error) {
-          this.handleTerminalFailure('error', error?.message || 'WebGL 渲染异常');
-          return;
-        }
-      }
-      this.scheduleNext();
+      // Display-safe mode has no engine and never reaches this branch.
     },
     handleSlowWebgpu() {
       if (this._handlingBackendFailure) return;
@@ -431,11 +373,24 @@ export default {
     },
     handleWebgpuFailure(error) {
       if (this._handlingBackendFailure) return;
+      const currentPreset = this.effectivePreset || this._runtimePresetOverride || this.preset;
+      if (currentPreset !== 'light') {
+        this._handlingBackendFailure = true;
+        this._runtimePresetOverride = 'light';
+        this.notify('增强已自动调节', '实时 CNN 影响了解码，已切换到轻量档');
+        this.restart().finally(() => { this._handlingBackendFailure = false; });
+        return;
+      }
+
       this._handlingBackendFailure = true;
-      this._skipWebgpuOnce = true;
-      this._webgpuFallbackReason = error?.message || 'Worker 渲染异常';
-      this.notify('WebGPU 已降级', `${error?.message || 'Worker 渲染异常'}，正在切换兼容模式`);
-      this.restart().finally(() => { this._handlingBackendFailure = false; });
+      const video = this.video;
+      this._lifecycleGeneration += 1;
+      this.cleanupRuntime();
+      this.video = video;
+      const reason = error?.message || 'Worker 渲染异常';
+      this.startDisplaySafeMode(reason);
+      this.notify('实时增强已降级', `${reason}，已保留原生流畅播放`);
+      this._handlingBackendFailure = false;
     },
     handleTerminalFailure(reason, message) {
       this.stop();
@@ -457,7 +412,7 @@ export default {
   pointer-events: none;
 }
 
-:global(.video-element.anime4k-fullscreen-safe) {
+:global(.video-element.anime4k-display-safe) {
   filter: contrast(1.055) saturate(1.035) brightness(1.01);
 }
 </style>

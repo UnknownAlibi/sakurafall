@@ -184,14 +184,19 @@ export default {
     async requestPlayback(trigger = 'auto') {
       const video = this.$refs.videoElement;
       if (!video || this.casting) return false;
+      const generation = this.mediaLoadGeneration;
+      const url = this.currentVideo?.url;
+      const isCurrent = () => generation === this.mediaLoadGeneration
+        && video === this.$refs.videoElement && url === this.currentVideo?.url;
       this.playbackIntent = true;
       try {
         await video.play();
+        if (!isCurrent()) return false;
         this.playRetryCount = 0;
         return true;
       } catch (error) {
+        if (!isCurrent()) return false;
         if (error?.name === 'AbortError' && this.playbackIntent && this.playRetryCount < 3) {
-          const generation = this.mediaLoadGeneration;
           this.playRetryCount += 1;
           this.trackTimer(setTimeout(() => {
             const currentVideo = this.$refs.videoElement;

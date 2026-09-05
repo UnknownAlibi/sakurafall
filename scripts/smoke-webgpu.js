@@ -27,21 +27,23 @@ async function run() {
     const result = await win.webContents.executeJavaScript(`(async () => {
       const api = await import('/player/anime4kWebgpuClient.js');
       const source = document.createElement('canvas');
-      source.width = 320;
-      source.height = 180;
+      // Match the most common problematic stream instead of benchmarking a
+      // tiny synthetic frame that understates real playback cost.
+      source.width = 1280;
+      source.height = 720;
       const sourceContext = source.getContext('2d');
       sourceContext.fillStyle = '#101525';
       sourceContext.fillRect(0, 0, source.width, source.height);
       sourceContext.fillStyle = '#ff77aa';
-      sourceContext.fillRect(32, 24, 120, 96);
+      sourceContext.fillRect(128, 96, 480, 384);
       sourceContext.fillStyle = '#71d7ff';
       sourceContext.beginPath();
-      sourceContext.arc(220, 90, 52, 0, Math.PI * 2);
+      sourceContext.arc(880, 360, 208, 0, Math.PI * 2);
       sourceContext.fill();
 
       const output = document.createElement('canvas');
-      output.style.width = '640px';
-      output.style.height = '360px';
+      output.style.width = '1920px';
+      output.style.height = '1080px';
       document.body.appendChild(output);
 
       let stats = null;
@@ -50,8 +52,8 @@ async function run() {
         preset: 'balanced',
         inputWidth: source.width,
         inputHeight: source.height,
-        displayWidth: 640,
-        displayHeight: 360,
+        displayWidth: 1920,
+        displayHeight: 1080,
         pixelRatio: 1,
         maxOutputEdge: 1920,
         onStats(value) { stats = value; },
@@ -66,7 +68,7 @@ async function run() {
       client.setDisplaySize(1920, 1080, 1);
       stats = null;
       sourceContext.fillStyle = '#ffffff';
-      sourceContext.fillRect(144, 72, 32, 36);
+      sourceContext.fillRect(576, 288, 128, 144);
       client.renderFrame(source, { mediaTime: 1 / 24 });
       const fullscreenDeadline = performance.now() + 15000;
       while (!stats && !fatal && performance.now() < fullscreenDeadline) {

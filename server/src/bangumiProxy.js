@@ -112,6 +112,7 @@ class BangumiProxy {
     this.timeoutMs = options.timeoutMs;
     this.coverProxyBase = String(options.coverProxyBase || '').replace(/\/+$/, '');
     this.warmCovers = typeof options.warmCovers === 'function' ? options.warmCovers : null;
+    this.observeCatalog = typeof options.observeCatalog === 'function' ? options.observeCatalog : null;
     this.prefetchNextPage = options.prefetchNextPage !== false;
     this.inflight = new Map();
     this.cooldowns = new Map();
@@ -152,6 +153,9 @@ class BangumiProxy {
         });
         if (!response.ok) throw new Error(`upstream returned ${response.status}`);
         const parsed = JSON.parse(responseBody.toString('utf8'));
+        if (this.observeCatalog && /^\/(?:calendar|v0\/(?:search\/)?subjects(?:\/\d+)?)$/.test(url.pathname)) {
+          try { this.observeCatalog(parsed); } catch (_) { /* 索引观察不影响代理响应 */ }
+        }
         // 列表/搜索响应：后台预热封面（r/400 变体）。客户端的懒加载请求
         // 到达时要么直接命中磁盘缓存，要么通过 inflight 去重搭上同一次
         // 上游抓取，滚动加载不再逐张等 1-2 秒。
@@ -199,6 +203,20 @@ class BangumiProxy {
     const cached = await this.cache.get('bangumi', key);
     if (cached) return;
     await this._refresh(key, url, method, body);
+  }
+
+  async requestJson(pathname) {
+    const url = new URL(pathname, 'http://localhost');
+    const key = this._cacheKey('GET', url, Buffer.alloc(0));
+    const cached = await this.cache.get('bangumi', key, { allowStale: true });
+    const result = cached
+      ? { body: cached.body }
+      : await this._refresh(key, url, 'GET', Buffer.alloc(0));
+    const parsed = JSON.parse(result.body.toString('utf8'));
+    if (this.observeCatalog) {
+      try { this.observeCatalog(parsed); } catch (_) { /* 快照失败不影响预热 */ }
+    }
+    return parsed;
   }
 
   async handle(req, res, url) {

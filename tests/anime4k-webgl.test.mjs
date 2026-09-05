@@ -49,13 +49,14 @@ test('realtime preset protects fullscreen playback from oversized CNN workloads'
   assert.equal(resolveRealtimeAnime4kPreset('balanced', 1280, 720), 'balanced');
 });
 
-test('fullscreen keeps the WebGPU worker path and only uses display enhancement as fallback', () => {
+test('fullscreen keeps the WebGPU worker path and uses non-blocking display enhancement as fallback', () => {
   const source = fs.readFileSync(new URL('../src/renderer/components/Player/Anime4KCanvas.vue', import.meta.url), 'utf8');
   const start = source.slice(source.indexOf('async start()'), source.indexOf('cleanupRuntime() {', source.indexOf('async start()')));
-  assert.ok(start.indexOf('createWebgpuBackend') < start.indexOf('this.isFullscreen()'));
+  assert.match(start, /createWebgpuBackend/);
+  assert.doesNotMatch(start, /createWebglBackend/);
   assert.match(source, /createAnime4kWebgpuPipeline/);
   assert.match(source, /webgpu-worker/);
-  assert.match(source, /anime4k-fullscreen-safe/);
+  assert.match(source, /anime4k-display-safe/);
   assert.match(source, /fullscreenchange/);
 });
 

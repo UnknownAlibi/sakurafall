@@ -365,58 +365,99 @@ class BangumiApi {
   /**
    * 发起 HTTP 请求并解析 JSON
    */
+  async _requestApiCandidate(candidate, candidates, options = {}) {
+    const base = this._baseOfUrl(candidate);
+    const startedAt = Date.now();
+    try {
+      const requestOptions = { ...options };
+      if (
+        this.fastFailConfiguredBase &&
+        candidates.length > 1 &&
+        base === this.baseUrl
+      ) {
+        requestOptions.timeout = Math.min(
+          Number(options.timeout) || this.timeout,
+          this.fastFailTimeoutMs
+        );
+      }
+      if (
+        candidates.length > 1 &&
+        candidate !== candidates[candidates.length - 1] &&
+        base === this.defaultBaseUrl &&
+        !this.http.proxy
+      ) {
+        requestOptions.timeout = Math.min(Number(options.timeout) || this.timeout, 4500);
+      }
+      const data = await this._withBaseProbe(base, async () => {
+        const text = await this.http.fetch(candidate, requestOptions);
+        try {
+          return JSON.parse(text);
+        } catch (e) {
+          throw new Error(`JSON解析失败: ${e.message}`);
+        }
+      });
+      this._markBaseSuccess(base, Date.now() - startedAt);
+      return { data, candidate, base };
+    } catch (error) {
+      if (error?.code !== 'BANGUMI_BASE_UNAVAILABLE') this._markBaseFailure(base);
+      throw error;
+    }
+  }
+
+  _acceptApiCandidate(result, originalUrl) {
+    if (result.candidate !== originalUrl && result.base) {
+      const mirrorChanged = this._preferredMirrorBase !== result.base;
+      this._preferredMirrorBase = result.base;
+      if (mirrorChanged) {
+        console.warn(`[BangumiApi] 已切换到响应更快的 API: ${result.base}`);
+      }
+    }
+    return result.data;
+  }
+
   async request(url, options = {}) {
     const candidates = this._buildApiCandidates(url, options);
     let lastError = null;
+    let startIndex = 0;
 
-    for (const candidate of candidates) {
-      const base = this._baseOfUrl(candidate);
-      const startedAt = Date.now();
+    // Cold endpoint selection used to wait for one full timeout before trying a
+    // mirror. Hedge only the first two candidates; shared base probes ensure a
+    // page-wide request burst still performs one connectivity attempt per host.
+    if (!this.http.proxy && !options.disableHedge && candidates.length > 1) {
+      let winnerChosen = false;
+      const primary = this._requestApiCandidate(candidates[0], candidates, options);
+      const hedge = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          if (winnerChosen) {
+            const error = new Error('Hedge no longer needed');
+            error.code = 'HEDGE_CANCELLED';
+            reject(error);
+            return;
+          }
+          this._requestApiCandidate(candidates[1], candidates, options).then(resolve, reject);
+        }, 280);
+      });
       try {
-        const requestOptions = { ...options };
-        if (
-          this.fastFailConfiguredBase &&
-          candidates.length > 1 &&
-          base === this.baseUrl
-        ) {
-          requestOptions.timeout = Math.min(
-            Number(options.timeout) || this.timeout,
-            this.fastFailTimeoutMs
-          );
-        }
-        if (
-          candidates.length > 1 &&
-          candidate !== candidates[candidates.length - 1] &&
-          base === this.defaultBaseUrl &&
-          !this.http.proxy
-        ) {
-          requestOptions.timeout = Math.min(Number(options.timeout) || this.timeout, 4500);
-        }
-        const data = await this._withBaseProbe(base, async () => {
-          const text = await this.http.fetch(candidate, requestOptions);
-          try {
-            return JSON.parse(text);
-          } catch (e) {
-            throw new Error(`JSON解析失败: ${e.message}`);
-          }
-        });
-        this._markBaseSuccess(base, Date.now() - startedAt);
-        if (candidate !== url && base) {
-          const mirrorChanged = this._preferredMirrorBase !== base;
-          this._preferredMirrorBase = base;
-          if (mirrorChanged) {
-            console.warn(`[BangumiApi] 官方 API 不可用，已使用镜像: ${base}`);
-          }
-        }
-        return data;
-      } catch (e) {
-        lastError = e;
-        const skippedBySharedProbe = e?.code === 'BANGUMI_BASE_UNAVAILABLE';
-        if (!skippedBySharedProbe) {
-          this._markBaseFailure(base);
-        }
+        const result = await Promise.any([primary, hedge]);
+        winnerChosen = true;
+        return this._acceptApiCandidate(result, url);
+      } catch (aggregate) {
+        const errors = Array.isArray(aggregate?.errors) ? aggregate.errors : [];
+        lastError = errors.find(error => error?.code !== 'HEDGE_CANCELLED') || aggregate;
+        startIndex = 2;
+      }
+    }
+
+    for (let index = startIndex; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      try {
+        const result = await this._requestApiCandidate(candidate, candidates, options);
+        return this._acceptApiCandidate(result, url);
+      } catch (error) {
+        lastError = error;
+        const skippedBySharedProbe = error?.code === 'BANGUMI_BASE_UNAVAILABLE';
         if (!skippedBySharedProbe && candidate !== candidates[candidates.length - 1]) {
-          console.warn(`[BangumiApi] 请求失败，尝试备用 API: ${candidate} -> ${e.message}`);
+          console.warn(`[BangumiApi] 请求失败，尝试备用 API: ${candidate} -> ${error.message}`);
         }
       }
     }

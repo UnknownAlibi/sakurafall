@@ -14,6 +14,7 @@
  */
 
 const bangumiApi = require('./BangumiApi');
+const HttpClient = require('../utils/HttpClient');
 const { subjectYearHints } = require('./SubjectCatalogPolicy');
 
 function resolveSubjectYear(item, airDate = '') {
@@ -32,12 +33,46 @@ class SubjectIndexService {
     // 列表过期阈值：6 小时（新番数据可能更新）
     this.LIST_STALE_MS = 6 * 60 * 60 * 1000;
     this.DEFAULT_PAGE_SIZE = 24;
+    this.SNAPSHOT_SCHEMA_VERSION = 1;
+    this.SNAPSHOT_MIN_INTERVAL = 6 * 60 * 60 * 1000;
+    this._snapshotBaseUrl = '';
+    this._snapshotTimer = null;
+    this._snapshotSyncPromise = null;
+    this._snapshotGeneration = 0;
+    this._snapshotController = null;
+    this._snapshotHttp = new HttpClient({
+      timeout: 20_000,
+      maxResponseBytes: 80 * 1024 * 1024,
+      headers: { Accept: 'application/json' }
+    });
   }
 
   setDatabase(db) {
     this.db = db && typeof db.prepare === 'function'
       ? db
       : (db && db.db && typeof db.db.prepare === 'function' ? db.db : null);
+    this._scheduleSnapshotSync();
+  }
+
+  setSnapshotBaseUrl(baseUrl) {
+    const value = String(baseUrl || '').trim().replace(/\/+$/, '');
+    const next = /^https?:\/\//i.test(value) ? value : '';
+    if (next === this._snapshotBaseUrl) return;
+    this._snapshotGeneration += 1;
+    this._snapshotController?.abort();
+    this._snapshotBaseUrl = next;
+    if (this._snapshotTimer) clearTimeout(this._snapshotTimer);
+    this._snapshotTimer = null;
+    this._scheduleSnapshotSync();
+  }
+
+  _scheduleSnapshotSync(delayMs = 3500) {
+    if (!this.db || !this._snapshotBaseUrl || this._snapshotTimer || this._snapshotSyncPromise) return;
+    this._snapshotTimer = setTimeout(() => {
+      this._snapshotTimer = null;
+      this.syncSnapshot().catch(error => console.warn('[SubjectIndex] 目录快照同步失败:', error.message));
+    }, Math.max(0, delayMs));
+    this._snapshotTimer.unref?.();
   }
 
   // ── 写入：upsert ────────────────────────────────────────
@@ -133,6 +168,7 @@ class SubjectIndexService {
       tx(subjects);
     } catch (e) {
       console.error('[SubjectIndex] upsert 失败:', e.message);
+      return 0;
     }
     return count;
   }
@@ -382,6 +418,89 @@ class SubjectIndexService {
     }
   }
 
+  async importSnapshot(snapshot, isCurrent = () => true) {
+    if (!this.db) return { imported: 0, skipped: true, reason: 'database_unavailable' };
+    if (!snapshot || Number(snapshot.schemaVersion) !== this.SNAPSHOT_SCHEMA_VERSION) {
+      throw new Error('目录快照版本不受支持');
+    }
+    if (!Array.isArray(snapshot.subjects) || snapshot.subjects.some(item =>
+      !item || !Number.isSafeInteger(Number(item.id)) || Number(item.id) <= 0 ||
+      (item.type !== undefined && Number(item.type) !== 2))) {
+      throw new Error('Invalid catalog snapshot subjects');
+    }
+    const subjects = snapshot.subjects;
+    let imported = 0;
+    const batchSize = 200;
+    for (let offset = 0; offset < subjects.length; offset += batchSize) {
+      if (!isCurrent()) return { imported, skipped: true, reason: 'config_changed' };
+      const batch = subjects.slice(offset, offset + batchSize).map(item => {
+        const normalized = typeof bangumiApi._normalizeItem === 'function'
+          ? bangumiApi._normalizeItem(item)
+          : item;
+        if (item.platform && !normalized.platform) normalized.platform = item.platform;
+        if (item.area && !normalized.area) normalized.area = item.area;
+        return this._normalizeForIndex(normalized);
+      });
+      const written = await this.upsertSubjects(batch);
+      if (written !== batch.length) throw new Error('Incomplete catalog snapshot import');
+      imported += written;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    if (!isCurrent()) return { imported, skipped: true, reason: 'config_changed' };
+    const generatedAt = Math.max(0, Number(snapshot.generatedAt) || 0);
+    this._setSyncState('catalog-snapshot', {
+      generatedAt,
+      total: Math.max(Number(snapshot.total) || 0, this.getIndexCount()),
+      imported,
+      full: snapshot.full !== false,
+      catalogReady: snapshot.catalogReady === true,
+      syncedAt: Date.now(),
+      baseUrl: this._snapshotBaseUrl
+    });
+    return { imported, generatedAt, total: this.getIndexCount() };
+  }
+
+  async syncSnapshot({ force = false } = {}) {
+    if (!this.db || !this._snapshotBaseUrl) {
+      return { imported: 0, skipped: true, reason: 'snapshot_disabled' };
+    }
+    if (this._snapshotSyncPromise) return this._snapshotSyncPromise;
+    const status = this.getSyncStatus().lastSync['catalog-snapshot'] || {};
+    const sameServer = !status.baseUrl || status.baseUrl === this._snapshotBaseUrl;
+    const lastSyncAt = sameServer ? Number(status.syncedAt || status.updatedAt) || 0 : 0;
+    if (!force && lastSyncAt > 0 && Date.now() - lastSyncAt < this.SNAPSHOT_MIN_INTERVAL) {
+      this._scheduleSnapshotSync(this.SNAPSHOT_MIN_INTERVAL - (Date.now() - lastSyncAt));
+      return { imported: 0, skipped: true, reason: 'fresh', generatedAt: Number(status.generatedAt) || 0 };
+    }
+    const since = force || !sameServer ? 0 : Math.max(0, Number(status.generatedAt) || 0);
+    const generation = this._snapshotGeneration;
+    const isCurrent = () => generation === this._snapshotGeneration && Boolean(this._snapshotBaseUrl);
+    let nextDelay = 5 * 60 * 1000;
+    this._snapshotController = new AbortController();
+    const endpoint = `${this._snapshotBaseUrl}/v1/catalog/snapshot${since ? `?since=${since}` : ''}`;
+    this._snapshotSyncPromise = this._snapshotHttp.fetch(endpoint, {
+      signal: this._snapshotController.signal,
+      timeout: 20_000,
+      maxResponseBytes: 80 * 1024 * 1024
+    }).then(text => JSON.parse(text))
+      .then(snapshot => {
+        if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+        if ((snapshot.subjects?.length || 0) === 0 && Number(snapshot.total) === 0) {
+          return { imported: 0, skipped: true, reason: 'snapshot_warming' };
+        }
+        return this.importSnapshot(snapshot, isCurrent).then(result => {
+          nextDelay = this.SNAPSHOT_MIN_INTERVAL;
+          return result;
+        });
+      })
+      .finally(() => {
+        this._snapshotSyncPromise = null;
+        this._snapshotController = null;
+        this._scheduleSnapshotSync(isCurrent() ? nextDelay : 3500);
+      });
+    return this._snapshotSyncPromise;
+  }
+
   /**
    * 同步搜索结果（keyword 搜索时顺带写入索引）
    */
@@ -436,6 +555,10 @@ class SubjectIndexService {
       }
     }
     return { indexed, lastSync };
+  }
+
+  hasCatalogSnapshot() {
+    return this.getSyncStatus().lastSync['catalog-snapshot']?.catalogReady === true;
   }
 
   // ── 内部辅助 ────────────────────────────────────────────
@@ -551,3 +674,4 @@ class SubjectIndexService {
 }
 
 module.exports = new SubjectIndexService();
+module.exports.SubjectIndexService = SubjectIndexService;

@@ -401,13 +401,6 @@ export default {
                 }
 
                 if (commitResult) {
-                    // Resolve all existing thumbnails in one IPC round trip before
-                    // Vue mounts the new cards, so cached covers paint immediately.
-                    await batchPreloadImageCache(
-                        (result.data || []).map(item => item?.cover).filter(Boolean),
-                        { variant: 'thumbnail', width: 480 }
-                    );
-                    if (!isCurrent()) return { ...result, stale: true };
                     commit('SET_ANIME_LIST', {
                         data: result.data || [],
                         total: result.total || 0,
@@ -415,6 +408,12 @@ export default {
                         totalPages: result.totalPages || 1
                     });
                     commit('SET_SEARCH_KEYWORD', search);
+                    // CachedImage paints a resized remote preview immediately.
+                    // Populate the disk-cache memo without blocking the list.
+                    batchPreloadImageCache(
+                        (result.data || []).map(item => item?.cover).filter(Boolean),
+                        { variant: 'thumbnail', width: 480 }
+                    ).catch(() => {});
                 }
 
                 return result;

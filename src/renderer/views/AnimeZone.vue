@@ -156,6 +156,7 @@ import {
   resolveContinueWatching
 } from '../utils/continueWatching.js';
 import { plannedEpisodeCount } from '../utils/episodeMetadata.js';
+import backgroundTaskScheduler, { BACKGROUND_PRIORITY } from '../services/backgroundTaskScheduler.js';
 
 export default {
   name: 'AnimeZone',
@@ -449,20 +450,10 @@ export default {
 
     scheduleBangumiStaleRefresh(page = 1, search = '') {
       if (!this.isBangumiMode) return;
-      if (this._bangumiRefreshTimer) {
-        clearTimeout(this._bangumiRefreshTimer);
-        this._bangumiRefreshTimer = null;
-      }
-      if (this._bangumiRefreshIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
-        window.cancelIdleCallback(this._bangumiRefreshIdleHandle);
-        this._bangumiRefreshIdleHandle = null;
-      }
-
+      backgroundTaskScheduler.cancelGroup('catalog-cache-refresh');
       const token = ++this._bangumiRefreshToken;
       const signature = this.bangumiListSignature(page, search);
       const run = async () => {
-        this._bangumiRefreshTimer = null;
-        this._bangumiRefreshIdleHandle = null;
         if (token !== this._bangumiRefreshToken || signature !== this.bangumiListSignature(page, search)) return;
 
         try {
@@ -480,14 +471,13 @@ export default {
           console.warn('[AnimeZone] Bangumi 后台刷新失败:', error?.message || error);
         }
       };
-
-      this._bangumiRefreshTimer = setTimeout(() => {
-        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-          this._bangumiRefreshIdleHandle = window.requestIdleCallback(run, { timeout: 1500 });
-        } else {
-          run();
-        }
-      }, 2200);
+      backgroundTaskScheduler.schedule({
+        key: `catalog-refresh:${signature}`,
+        group: 'catalog-cache-refresh',
+        priority: BACKGROUND_PRIORITY.cacheRefresh,
+        delayMs: 2200,
+        run
+      }).catch(error => console.warn('[AnimeZone] Bangumi 后台刷新失败:', error?.message || error));
     },
 
     scheduleBangumiListMetaEnrichment(list = this.animeList) {
@@ -503,24 +493,10 @@ export default {
       if (targets.length === 0) return;
 
       const token = ++this._bangumiMetaEnrichToken;
-      const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-      const waitForIdle = () => new Promise(resolve => {
-        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-          window.requestIdleCallback(() => resolve(), { timeout: 2200 });
-        } else {
-          setTimeout(resolve, 420);
-        }
-      });
       const isActive = () => token === this._bangumiMetaEnrichToken && this.isBangumiMode;
 
       const enrichOne = async (item) => {
         if (!isActive()) return;
-        while (this._isMainScrolling && isActive()) {
-          await delay(260);
-        }
-        await waitForIdle();
-        if (!isActive()) return;
-
         const bgmId = item.bgm_id || item.bgmId;
         const detail = await window.electronAPI?.subjectDetail?.(bgmId);
         if (!isActive() || !detail) return;
@@ -552,37 +528,23 @@ export default {
           this.queueAnimeListUpdate(item.id, updates);
         }
       };
-
-      const run = async () => {
-        const concurrency = 1;
-        for (let i = 0; i < targets.length && isActive(); i += concurrency) {
-          await Promise.all(targets.slice(i, i + concurrency).map(enrichOne));
-          await delay(120);
-        }
-      };
-
-      const start = () => {
-        this._bangumiMetaStartTimer = null;
-        this._bangumiMetaIdleHandle = null;
-        if (!isActive()) return;
-        run().catch(error => {
+      targets.forEach((item, index) => {
+        const bgmId = item.bgm_id || item.bgmId;
+        backgroundTaskScheduler.schedule({
+          key: `catalog-meta:${token}:${bgmId}`,
+          group: 'catalog-metadata',
+          priority: BACKGROUND_PRIORITY.visibleMetadata + index,
+          delayMs: 2600 + index * 120,
+          run: () => enrichOne(item)
+        }).catch(error => {
           if (isActive()) console.warn('[AnimeZone] Bangumi 列表元数据补全失败:', error?.message || error);
         });
-      };
-
-      // Let initial card rendering and image decoding finish before enrichment.
-      this._bangumiMetaStartTimer = setTimeout(() => {
-        this._bangumiMetaStartTimer = null;
-        if (!isActive()) return;
-        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-          this._bangumiMetaIdleHandle = window.requestIdleCallback(start, { timeout: 3000 });
-        } else {
-          this._bangumiMetaStartTimer = setTimeout(start, 500);
-        }
-      }, 2600);
+      });
     },
 
     cancelBangumiMetaEnrichmentSchedule() {
+      this._bangumiMetaEnrichToken += 1;
+      backgroundTaskScheduler.cancelGroup('catalog-metadata');
       if (this._bangumiMetaStartTimer) {
         clearTimeout(this._bangumiMetaStartTimer);
         this._bangumiMetaStartTimer = null;
@@ -595,23 +557,13 @@ export default {
 
     scheduleBangumiAdjacentPagePrefetch(page = 1, search = '') {
       if (!this.isBangumiMode || search || page >= this.totalPages) return;
-      if (this._bangumiPagePrefetchTimer) {
-        clearTimeout(this._bangumiPagePrefetchTimer);
-        this._bangumiPagePrefetchTimer = null;
-      }
-      if (this._bangumiPagePrefetchIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
-        window.cancelIdleCallback(this._bangumiPagePrefetchIdleHandle);
-        this._bangumiPagePrefetchIdleHandle = null;
-      }
-
+      backgroundTaskScheduler.cancelGroup('catalog-page-prefetch');
       const nextPage = page + 1;
       const signature = this.bangumiListSignature(nextPage, search);
       if (this._bangumiPrefetchedPageKeys.has(signature)) return;
       const token = ++this._bangumiPagePrefetchToken;
 
       const run = async () => {
-        this._bangumiPagePrefetchTimer = null;
-        this._bangumiPagePrefetchIdleHandle = null;
         if (token !== this._bangumiPagePrefetchToken || !this.isBangumiMode) return;
         try {
           await this.fetchBangumiList(this.buildBangumiListRequest(nextPage, search, {
@@ -628,14 +580,13 @@ export default {
           console.warn('[AnimeZone] Bangumi 下一页预取失败:', error?.message || error);
         }
       };
-
-      this._bangumiPagePrefetchTimer = setTimeout(() => {
-        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-          this._bangumiPagePrefetchIdleHandle = window.requestIdleCallback(run, { timeout: 1800 });
-        } else {
-          run();
-        }
-      }, 2400);
+      backgroundTaskScheduler.schedule({
+        key: `catalog-page:${signature}`,
+        group: 'catalog-page-prefetch',
+        priority: BACKGROUND_PRIORITY.pagePrefetch,
+        delayMs: 2400,
+        run
+      }).catch(error => console.warn('[AnimeZone] Bangumi 下一页预取失败:', error?.message || error));
     },
 
     // 切换数据源模式（本地/在线）
@@ -1315,6 +1266,7 @@ export default {
 
     onMainScroll() {
       this._isMainScrolling = true;
+      backgroundTaskScheduler.pause('catalog-scroll');
       this._lastMainScrollAt = performance.now();
       this.scheduleVirtualGridUpdate();
       this.scheduleInfiniteLoadCheck();
@@ -1328,6 +1280,7 @@ export default {
         }
         this._scrollIdleTimer = null;
         this._isMainScrolling = false;
+        backgroundTaskScheduler.resume('catalog-scroll');
         this.scheduleVirtualGridMeasure();
         this.scheduleVisibleCoverPrefetch();
         if (this._prefetchQueue.length > 0 && !this._prefetchAbort) {
@@ -1703,6 +1656,11 @@ export default {
   },
 
   deactivated() {
+    this._bangumiRefreshToken += 1;
+    this._bangumiPagePrefetchToken += 1;
+    backgroundTaskScheduler.resume('catalog-scroll');
+    backgroundTaskScheduler.cancelGroup('catalog-cache-refresh');
+    backgroundTaskScheduler.cancelGroup('catalog-page-prefetch');
     window.removeEventListener('resize', this.scheduleVirtualGridMeasure);
     if (this._mainScrollEl) {
       this._mainScrollEl.removeEventListener('scroll', this.onMainScroll);
@@ -1734,6 +1692,10 @@ export default {
   },
 
   beforeUnmount() {
+    backgroundTaskScheduler.resume('catalog-scroll');
+    backgroundTaskScheduler.cancelGroup('catalog-cache-refresh');
+    backgroundTaskScheduler.cancelGroup('catalog-metadata');
+    backgroundTaskScheduler.cancelGroup('catalog-page-prefetch');
     this._animeZoneLifecycleToken = null;
     this._listRequestToken += 1;
     this._detailRequestToken += 1;
