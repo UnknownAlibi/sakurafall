@@ -16,10 +16,48 @@ test('local latest sorting puts valid dates first and remains deterministic', ()
   assert.match(order, /s\.bgm_id DESC/);
 });
 
-test('local numeric rating sorting keeps unrated subjects at the end', () => {
+test('local rating sorting prefers the official rank and discounts tiny samples', () => {
   const order = subjectIndexService._resolveOrderBy('rating');
-  assert.match(order, /CASE WHEN s\.rating > 0 THEN 0 ELSE 1 END ASC/);
-  assert.match(order, /s\.rating DESC, s\.votes DESC/);
+  assert.match(order, /WHEN s\.rank > 0 THEN 0/);
+  assert.match(order, /WHEN s\.rating > 0 AND s\.votes >= 10 THEN 1/);
+  assert.match(order, /CASE WHEN s\.rank > 0 THEN s\.rank/);
+  assert.match(order, /s\.rating \* s\.votes/);
+});
+
+test('local rating results do not let one-vote tens outrank trusted subjects', () => {
+  const originalDb = subjectIndexService.db;
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE bangumi_subjects (
+      bgm_id INTEGER PRIMARY KEY, name TEXT, name_cn TEXT, aliases TEXT, summary TEXT,
+      cover_url TEXT, cover_local TEXT, rating REAL, rank INTEGER, votes INTEGER,
+      eps INTEGER, air_date TEXT, air_weekday INTEGER, year INTEGER, month INTEGER,
+      type INTEGER, nsfw INTEGER, popularity INTEGER, updated_at INTEGER, raw_json TEXT,
+      platform TEXT
+    );
+    CREATE TABLE bangumi_subject_tags (bgm_id INTEGER, tag TEXT, count INTEGER);
+    INSERT INTO bangumi_subjects (bgm_id, name_cn, rating, rank, votes, air_date, year, platform)
+      VALUES (1, 'Official first', 9.2, 1, 30000, '2008-10-02', 2008, 'TV'),
+             (2, 'Official second', 9.1, 2, 10000, '2004-01-01', 2004, 'TV'),
+             (3, 'Tiny perfect score', 10, 0, 1, '2024-01-01', 2024, 'TV'),
+             (4, 'Small high score', 9.3, 0, 20, '2005-04-23', 2005, 'TV'),
+             (5, 'Established score', 8.8, 0, 1000, '2011-04-06', 2011, 'TV'),
+             (6, 'Unrated', 0, 0, 0, '2020-01-01', 2020, 'TV');
+  `);
+  subjectIndexService.db = db;
+  try {
+    const result = subjectIndexService.querySubjects({
+      sort: 'rating',
+      releasedOnly: true,
+      platform: 'TV',
+      pageSize: 20
+    });
+    assert.deepEqual(result.data.map(item => item.bgm_id), [1, 2, 5, 4, 3, 6]);
+    assert.equal(result.total, 6);
+  } finally {
+    subjectIndexService.db = originalDb;
+    db.close();
+  }
 });
 
 test('local catalog eligibility SQL does not let undated titles into latest', () => {

@@ -694,7 +694,22 @@ class SubjectIndexService {
       return "CASE WHEN s.air_date GLOB '????-??-??' THEN 0 ELSE 1 END ASC, s.air_date DESC, CASE WHEN s.rank > 0 THEN s.rank ELSE 2147483647 END ASC, s.bgm_id DESC";
     }
     if (sort === 'rating') {
-      return 'CASE WHEN s.rating > 0 THEN 0 ELSE 1 END ASC, s.rating DESC, s.votes DESC, CASE WHEN s.rank > 0 THEN s.rank ELSE 2147483647 END ASC, s.bgm_id ASC';
+      return `
+        CASE
+          WHEN s.rank > 0 THEN 0
+          WHEN s.rating > 0 AND s.votes >= 10 THEN 1
+          WHEN s.rating > 0 THEN 2
+          ELSE 3
+        END ASC,
+        CASE WHEN s.rank > 0 THEN s.rank ELSE 2147483647 END ASC,
+        CASE WHEN s.rank <= 0 AND s.rating > 0
+          THEN ((s.rating * s.votes) + (6.5 * 50.0)) / (s.votes + 50.0)
+          ELSE 0
+        END DESC,
+        s.votes DESC,
+        s.rating DESC,
+        s.bgm_id ASC
+      `;
     }
     return 'CASE WHEN s.rank > 0 THEN 0 ELSE 1 END ASC, s.rank ASC, s.rating DESC, s.votes DESC, s.bgm_id ASC';
   }
