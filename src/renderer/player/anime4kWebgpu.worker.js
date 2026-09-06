@@ -70,10 +70,15 @@ async function submitPipelinePass(current, label, timeoutMs) {
 }
 
 async function warmupPipeline(current) {
+  const warmupStartedAt = performance.now();
+  // WebGPU defers shader compilation until the first submission. The first pass
+  // therefore includes compile time and is reported separately from the steady
+  // state benchmark so slow compilations can be told apart from slow hardware.
   await submitPipelinePass(current, 'Anime4K GPU 预热', 12000);
+  const warmupMs = performance.now() - warmupStartedAt;
   const startedAt = performance.now();
   await submitPipelinePass(current, 'Anime4K GPU 实时能力检测', 3000);
-  return performance.now() - startedAt;
+  return { warmupMs, benchmarkMs: performance.now() - startedAt };
 }
 
 function postFatal(error) {
@@ -100,9 +105,14 @@ function writePresentationUniforms(current) {
 
 async function initialize(message) {
   if (!self.navigator?.gpu) throw new Error('Worker 中 WebGPU 不可用');
+  const initStartedAt = performance.now();
+  const adapterStartedAt = performance.now();
   const adapter = await self.navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('未找到可用的 WebGPU 显卡适配器');
+  const adapterMs = performance.now() - adapterStartedAt;
+  const deviceStartedAt = performance.now();
   const device = await adapter.requestDevice();
+  const deviceMs = performance.now() - deviceStartedAt;
   const canvas = message.canvas;
   canvas.width = message.outputWidth;
   canvas.height = message.outputHeight;
@@ -111,15 +121,22 @@ async function initialize(message) {
   const format = self.navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format, alphaMode: 'opaque' });
 
+  // The input texture is copy-only + sampled: rgba8unorm is the native
+  // copyExternalImageToTexture target for 8-bit video and samples identically
+  // (normalized f32) in the library's texture_2d<f32> bindings. rgba16float
+  // forces a float conversion blit per frame on some drivers.
+  const inputFormat = message.inputFormat === 'rgba16float' ? 'rgba16float' : 'rgba8unorm';
   const inputTexture = device.createTexture({
     label: 'Anime4K video input',
     size: [message.inputWidth, message.inputHeight, 1],
-    format: 'rgba16float',
+    format: inputFormat,
     usage: self.GPUTextureUsage.TEXTURE_BINDING | self.GPUTextureUsage.COPY_DST | self.GPUTextureUsage.RENDER_ATTACHMENT
   });
 
   device.pushErrorScope('validation');
+  const pipelineStartedAt = performance.now();
   const pipeline = await buildAnime4kPipeline(device, inputTexture, message.profile);
+  const pipelineMs = performance.now() - pipelineStartedAt;
   const presentationBuffer = device.createBuffer({
     label: 'Anime4K presentation uniforms',
     size: 16,
@@ -172,11 +189,14 @@ async function initialize(message) {
   writePresentationUniforms(state);
   // WebGPU defers shader compilation until the first submission. Compile while
   // the native video is still visible so enabling Anime4K cannot freeze frame 1.
-  const benchmarkMs = await warmupPipeline(state);
-  // A 24 fps source has 41.7 ms per frame. Leave a little headroom for decode,
-  // presentation and UI work; otherwise the enhanced canvas would visibly lag.
-  if (benchmarkMs > 36) {
-    throw new Error(`CNN 实时性能不足（${benchmarkMs.toFixed(0)}ms/帧）`);
+  const { warmupMs, benchmarkMs } = await warmupPipeline(state);
+  // The budget scales with the source frame rate (see resolveWebgpuAnime4kProfile);
+  // fall back to the historical 24 fps budget when the profile omits it.
+  const frameBudgetMs = Number(message.profile?.frameBudgetMs) > 0
+    ? Number(message.profile.frameBudgetMs)
+    : 36;
+  if (benchmarkMs > frameBudgetMs) {
+    throw new Error(`CNN 实时性能不足（${benchmarkMs.toFixed(0)}ms/帧，预算 ${frameBudgetMs}ms）`);
   }
   device.lost.then((info) => {
     if (!disposed) postFatal(new Error(`WebGPU 设备已丢失：${info.message || info.reason}`));
@@ -189,7 +209,15 @@ async function initialize(message) {
       outputWidth: pipeline.getOutputTexture().width,
       outputHeight: pipeline.getOutputTexture().height,
       benchmarkMs,
-      adapterDescription: adapter.info?.description || adapter.info?.device || ''
+      adapterDescription: adapter.info?.description || adapter.info?.device || '',
+      initTimes: {
+        adapterMs: Math.round(adapterMs * 100) / 100,
+        deviceMs: Math.round(deviceMs * 100) / 100,
+        pipelineMs: Math.round(pipelineMs * 100) / 100,
+        warmupMs: Math.round(warmupMs * 100) / 100,
+        benchmarkMs: Math.round(benchmarkMs * 100) / 100,
+        totalMs: Math.round((performance.now() - initStartedAt) * 100) / 100
+      }
     }
   });
 }
@@ -219,6 +247,7 @@ async function renderFrame(message) {
       [state.inputWidth, state.inputHeight]
     );
     frame.close();
+    const uploadedAt = performance.now();
     const encoder = state.device.createCommandEncoder({ label: `Anime4K frame ${message.id}` });
     state.pipeline.pass(encoder);
     const renderPass = encoder.beginRenderPass({
@@ -234,8 +263,19 @@ async function renderFrame(message) {
     renderPass.draw(6);
     renderPass.end();
     state.device.queue.submit([encoder.finish()]);
+    const encodedAt = performance.now();
     await waitForSubmittedWork(state.device, 1500, 'Anime4K 单帧渲染');
-    self.postMessage({ type: 'frame-complete', id: message.id, renderMs: performance.now() - startedAt });
+    const gpuDoneAt = performance.now();
+    self.postMessage({
+      type: 'frame-complete',
+      id: message.id,
+      renderMs: gpuDoneAt - startedAt,
+      stageMs: {
+        uploadMs: uploadedAt - startedAt,
+        encodeMs: encodedAt - uploadedAt,
+        gpuMs: gpuDoneAt - encodedAt
+      }
+    });
   } catch (error) {
     try { frame?.close(); } catch (_) { /* frame may already be closed */ }
     postFatal(error);

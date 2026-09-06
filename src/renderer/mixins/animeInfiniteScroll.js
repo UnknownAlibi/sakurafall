@@ -67,6 +67,16 @@ export default {
         }));
         if (!isActive() || result?.stale) return false;
         if (!result || result.error) throw new Error(result?.error || '加载下一页失败');
+
+        // 目录快照在本次浏览期间更新（或首次导入中途就绪）：旧分页会话
+        // 不可继续拼接（重复只能靠去重兜底，漏项无法兜底），
+        // 明确触发整组列表刷新，由首页重新锚定目录版本。
+        const sessionVersion = this.$store?.state?.anime?.bangumiCatalogVersion ?? null;
+        if (result._snapshotBacked && result.catalogVersion != null &&
+            result.catalogVersion !== sessionVersion) {
+          return await this.reloadListAfterCatalogUpdate(search);
+        }
+
         if (result._outOfRange) {
           this.loadMoreLimitReason = '已到番剧库接口浏览上限，请使用年份或类型筛选继续查看';
           this.$store.commit('anime/APPEND_ANIME_LIST', {
@@ -129,6 +139,16 @@ export default {
     retryLoadMore() {
       this.loadMoreError = '';
       this.$nextTick(() => this.loadNextAnimePage());
+    },
+
+    // 目录版本变化后的整组刷新：重置无限加载状态并回到第一页重新拉取，
+    // 由 SET_ANIME_LIST 重新锚定新的目录版本。
+    async reloadListAfterCatalogUpdate(search = '') {
+      this.resetInfiniteLoadState();
+      console.info('[AnimeZone] 目录数据已更新，刷新列表以保持分页一致');
+      await this.loadCurrentList(1, search);
+      this.$nextTick(() => this.scheduleInfiniteLoadCheck(200));
+      return true;
     }
   }
 };

@@ -1223,6 +1223,8 @@ export default {
         this._dnaCollector = new EpisodeDnaCollector(video, {
           windowMs: 500,
           maxSeconds: 240,
+          // 增强时避开 captureStream（原因见 episodeDnaCollector.js 头注释）
+          allowCaptureStream: !this.anime4kEnabled,
           onDone: (features) => this.onDnaCollectionDone(features)
         });
         this._dnaCollector.start();
@@ -2383,6 +2385,10 @@ export default {
         ? { active: false, presenting: false, state: 'initializing' }
         : { active: false, presenting: false };
       localStorage.setItem('player-anime4k', String(this.anime4kEnabled));
+      if (this.anime4kEnabled && this._dnaCollector) {
+        this.stopDnaCollection(true);
+        this.startDnaCollection();
+      }
     },
 
     setAnime4kPreset(preset) {

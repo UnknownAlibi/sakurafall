@@ -26,6 +26,9 @@ export default {
         bangumiBrowseTag: '',
         listRequestSeq: 0,
         activeListRequestSeq: 0,
+        // 当前列表会话绑定的目录数据版本（快照同步推进）：
+        // 首页加载时锚定，翻页发现版本变化则整组刷新，避免新旧版本页拼接。
+        bangumiCatalogVersion: null,
 
         // 非凡资源网相关
         fanzhiCategories: [],
@@ -69,10 +72,12 @@ export default {
     },
 
     mutations: {
-        SET_ANIME_LIST(state, { data, total: _total, page, totalPages }) {
+        SET_ANIME_LIST(state, { data, total: _total, page, totalPages, catalogVersion = null }) {
             state.animeList = data;
             state.currentPage = page;
             state.totalPages = totalPages;
+            // 仅快照支撑的结果带 catalogVersion；网络/降级路径为 null（会话不绑定版本）
+            state.bangumiCatalogVersion = catalogVersion;
         },
 
         APPEND_ANIME_LIST(state, { data, page, totalPages }) {
@@ -405,7 +410,8 @@ export default {
                         data: result.data || [],
                         total: result.total || 0,
                         page: result.page || page,
-                        totalPages: result.totalPages || 1
+                        totalPages: result.totalPages || 1,
+                        catalogVersion: result._snapshotBacked ? result.catalogVersion : null
                     });
                     commit('SET_SEARCH_KEYWORD', search);
                     // CachedImage paints a resized remote preview immediately.

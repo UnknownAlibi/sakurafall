@@ -13,9 +13,9 @@ import {
   canUseWebgpuAnime4k,
   createAnime4kWebgpuPipeline
 } from '../../player/anime4kWebgpuClient.js';
+import { isNearLoopEnd, isSourceStarved } from '../../player/anime4kWatchdog.js';
 
 const MAX_VIDEO_EDGE = 1920;
-const WEBGPU_SLOW_FRAME_MS = 30;
 const WEBGPU_HARD_FRAME_MS = 70;
 const WEBGPU_CALLBACK_STALL_MS = 300;
 const PERF_WINDOW = 30;
@@ -25,6 +25,7 @@ function lowerPreset(preset) {
   if (preset === 'balanced') return 'light';
   return '';
 }
+
 
 export default {
   name: 'Anime4KCanvas',
@@ -109,6 +110,9 @@ export default {
     },
     buildStatus(extra = {}) {
       if (!this.video) return { active: false };
+      // 看门狗动作必须可观测：打包环境读不到 Vue 开发模式内部对象，探针只能
+      // 通过 data-anime4k-runtime 判断"兜底到底有没有执行"。
+      const watchdogEvent = this._lastWatchdogEvent || null;
       if (this.displaySafeMode) {
         return {
           active: true,
@@ -119,6 +123,7 @@ export default {
           adaptive: true,
           presenting: true,
           degraded: true,
+          watchdogEvent,
           inputWidth: this.video.videoWidth || 0,
           inputHeight: this.video.videoHeight || 0,
           ...extra
@@ -139,15 +144,27 @@ export default {
         requestedPreset: this.preset,
         adaptive: (this.effectivePreset || this.preset) !== this.preset,
         passthrough: !!this.passthrough,
+        watchdogEvent,
         inputWidth: this.video.videoWidth || 0,
         inputHeight: this.video.videoHeight || 0,
         outputWidth: output[0] || 0,
         outputHeight: output[1] || 0,
         renderMs: this.perfEma || 0,
+        sourceFps: this.backend === 'webgpu' ? Math.round((this.sourceFpsEstimate || 0) * 10) / 10 : 0,
+        stageMs: this.backend === 'webgpu'
+          ? Object.fromEntries(Object.entries(this.perfStageEma || {}).map(([stage, value]) => [stage, Math.round(value * 100) / 100]))
+          : null,
+        initMs: this.backend === 'webgpu' ? (this.engine.profile?.initTimes || null) : null,
         renderedFrames: this.backend === 'webgpu'
           ? (this.engine.renderedFrames || 0)
           : this.perfFrames,
         droppedFrames: this.engine.droppedFrames || 0,
+        fps: this.backend === 'webgpu' ? Math.round((this.engine.fpsEma || 0) * 10) / 10 : 0,
+        frameAgeMs: this.backend === 'webgpu' ? Math.round((this.engine.frameAgeEma || 0) * 100) / 100 : 0,
+        dropRate: this.backend === 'webgpu'
+          ? Math.round((this.engine.droppedFrames || 0) /
+              Math.max(1, (this.engine.renderedFrames || 0) + (this.engine.droppedFrames || 0)) * 1000) / 1000
+          : 0,
         ...extra
       };
     },
@@ -186,11 +203,10 @@ export default {
         this._windowResizeHandler = null;
       }
     },
-    async createWebgpuBackend(canvas, video, generation) {
+    async createWebgpuBackend(canvas, video, generation, requestedPreset) {
       if (!canUseWebgpuAnime4k()) throw new Error('当前 Electron 不支持完整的 WebGPU Worker 视频管线');
       const target = canvas.parentElement;
       this._canvasTransferred = true;
-      const requestedPreset = this._runtimePresetOverride || this.preset;
       return createAnime4kWebgpuPipeline(canvas, {
         preset: requestedPreset,
         inputWidth: video.videoWidth,
@@ -199,9 +215,18 @@ export default {
         displayHeight: target?.clientHeight || video.videoHeight,
         pixelRatio: window.devicePixelRatio || 1,
         maxOutputEdge: 1920,
+        inputFps: this.sourceFpsEstimate || 0,
         onStats: (stats) => {
           if (generation !== this._lifecycleGeneration || this.backend !== 'webgpu') return;
           this.perfEma = this.perfEma ? this.perfEma * 0.92 + stats.renderMs * 0.08 : stats.renderMs;
+          if (stats.stageMs) {
+            this.perfStageEma = this.perfStageEma || {};
+            for (const [stage, value] of Object.entries(stats.stageMs)) {
+              this.perfStageEma[stage] = this.perfStageEma[stage] != null
+                ? this.perfStageEma[stage] * 0.92 + value * 0.08
+                : value;
+            }
+          }
           this.perfFrames += 1;
           // Never cover the native video with a frame that already proved the
           // CNN cannot sustain in real time.
@@ -215,7 +240,7 @@ export default {
             this.emitStatus();
           }
           if (this.perfFrames % 30 === 0) this.emitStatus();
-          if (this.perfFrames >= PERF_WINDOW && this.perfEma > WEBGPU_SLOW_FRAME_MS) this.handleSlowWebgpu();
+          if (this.perfFrames >= PERF_WINDOW && this.perfEma > this.webgpuSlowFrameThreshold()) this.handleSlowWebgpu();
         },
         onFatal: (error) => {
           if (generation === this._lifecycleGeneration) this.handleWebgpuFailure(error);
@@ -250,12 +275,29 @@ export default {
       let engine = null;
       let backend = '';
       let effectivePreset = '';
-      try {
-        engine = await this.createWebgpuBackend(canvas, video, generation);
-        backend = 'webgpu';
-        effectivePreset = engine.profile?.effectivePreset || this._runtimePresetOverride || this.preset;
-      } catch (error) {
-        webgpuError = error;
+      // A benchmark rejection means the GPU cannot sustain this preset in real
+      // time; retry once per lower preset before giving up on WebGPU entirely.
+      // Capability errors (no adapter / no Worker) never improve on retry.
+      for (let candidate = this._runtimePresetOverride || this.preset; candidate; candidate = lowerPreset(candidate)) {
+        const attemptCanvas = candidate === (this._runtimePresetOverride || this.preset)
+          ? canvas
+          : await this.ensureWritableCanvas();
+        if (generation !== this._lifecycleGeneration || !this.enabled) return;
+        try {
+          engine = await this.createWebgpuBackend(attemptCanvas, video, generation, candidate);
+          backend = 'webgpu';
+          effectivePreset = engine.profile?.effectivePreset || candidate;
+          if (candidate !== (this._runtimePresetOverride || this.preset)) {
+            this._runtimePresetOverride = candidate;
+            this.notify('增强已自动调节', `GPU 实时性能不足，已切换到${candidate === 'light' ? '轻量' : '均衡'}档`);
+          }
+          webgpuError = null;
+          break;
+        } catch (error) {
+          webgpuError = error;
+          engine = null;
+          if (!String(error?.message || '').includes('实时性能不足')) break;
+        }
       }
 
       if (!this.enabled || generation !== this._lifecycleGeneration) {
@@ -281,6 +323,7 @@ export default {
       this.presenting = false;
       this.showCanvas = false;
       this.perfEma = 0;
+      this.perfStageEma = null;
       this.perfFrames = 0;
       this.lastCallbackAt = 0;
       await this.$nextTick();
@@ -298,6 +341,7 @@ export default {
       this._rafId = null;
       if (this._metadataHandler && this.video) this.video.removeEventListener('loadedmetadata', this._metadataHandler);
       this._metadataHandler = null;
+      this._lastMediaTime = null;
       this.cleanupResizeTracking();
       if (this._webgpuWatchdogId != null) clearInterval(this._webgpuWatchdogId);
       this._webgpuWatchdogId = null;
@@ -337,21 +381,67 @@ export default {
     setupWebgpuPlaybackWatchdog() {
       if (this._webgpuWatchdogId != null) clearInterval(this._webgpuWatchdogId);
       this.lastCallbackAt = performance.now();
+      this.lastWatchdogMediaTime = Number(this.video?.currentTime) || 0;
+      this._watchdogNearLoopEnd = false;
       this._webgpuWatchdogId = setInterval(() => {
-        if (!this.enabled || this.backend !== 'webgpu' || !this.video || this.video.paused || this.video.seeking || this.video.readyState < 3) {
-          this.lastCallbackAt = performance.now();
+        const video = this.video;
+        if (!this.enabled || this.backend !== 'webgpu' || !video) return;
+        const now = performance.now();
+        const mediaTime = Number(video.currentTime) || 0;
+        const resetWatchdog = () => {
+          this.lastCallbackAt = now;
+          this.lastWatchdogMediaTime = mediaTime;
+          this._watchdogNearLoopEnd = false;
+        };
+        // 只看"是不是真的没数据/不该在播"，不看 readyState >= 3。
+        // 之前的写法要求 readyState >= 3 才计停滞，而解码停摆恰恰表现为
+        // readyState 掉到 2（有当前帧、拿不到下一帧）：看门狗对唯一需要它
+        // 兜底的场景是瞎的（实测 artifacts/anime4k-packaged-probe.json 中
+        // 停滞 55.8s 期间只触发了一次降档，随后彻底失声）。
+        // 数据源饥饿（缓冲耗尽、seek、暂停、播放结束）不能算到 CNN 头上。
+        if (isSourceStarved(video)) {
+          resetWatchdog();
           return;
         }
-        if (performance.now() - this.lastCallbackAt > WEBGPU_CALLBACK_STALL_MS) {
+        // 循环回绕豁免：loop 播放在样本尾部重启解码的短暂停顿（~0.5s）不是阻塞。
+        const nearLoopEnd = isNearLoopEnd(video);
+        const loopGrace = this._watchdogNearLoopEnd && mediaTime < 1;
+        this._watchdogNearLoopEnd = nearLoopEnd;
+        if (mediaTime !== this.lastWatchdogMediaTime || nearLoopEnd || loopGrace) {
+          this.lastWatchdogMediaTime = mediaTime;
+          this.lastCallbackAt = now;
+          return;
+        }
+        if (now - this.lastCallbackAt > WEBGPU_CALLBACK_STALL_MS) {
           this.handleWebgpuFailure(new Error('CNN 阻塞了视频解码帧'));
         }
       }, 100);
+    },
+    webgpuSlowFrameThreshold() {
+      // 24 fps ≈ 30 ms (the historical fixed threshold); faster sources get a
+      // proportionally tighter budget so the CNN never starves the decoder.
+      const fps = Math.min(60, Math.max(12, this.sourceFpsEstimate || 24));
+      return Math.min(45, Math.max(20, Math.round((1000 / fps) * 0.72)));
     },
     onFrame(now = performance.now(), metadata = null) {
       if (!this.enabled || !this.engine || !this.video) return;
       const video = this.video;
       if (this.backend === 'webgpu') {
         this.lastCallbackAt = now;
+        // Estimate the source frame rate from media-time deltas between decoded
+        // frames; the init benchmark and runtime budget scale with it.
+        if (metadata && Number.isFinite(metadata.mediaTime)) {
+          if (this._lastMediaTime != null) {
+            const delta = metadata.mediaTime - this._lastMediaTime;
+            if (delta > 0.001 && delta < 0.5) {
+              const fps = 1 / delta;
+              this.sourceFpsEstimate = this.sourceFpsEstimate
+                ? this.sourceFpsEstimate * 0.9 + fps * 0.1
+                : fps;
+            }
+          }
+          this._lastMediaTime = metadata.mediaTime;
+        }
         this.engine.renderFrame(video, metadata);
         this.scheduleNext();
         return;
@@ -365,6 +455,7 @@ export default {
       if (nextPreset) {
         this._handlingBackendFailure = true;
         this._runtimePresetOverride = nextPreset;
+        this._lastWatchdogEvent = { type: 'slow-frame', from: this.effectivePreset || this.preset, to: nextPreset, at: Date.now() };
         this.notify('增强已自动调节', `GPU 实时耗时偏高，已切换到${nextPreset === 'light' ? '轻量' : '均衡'}档`);
         this.restart().finally(() => { this._handlingBackendFailure = false; });
         return;
@@ -377,6 +468,7 @@ export default {
       if (currentPreset !== 'light') {
         this._handlingBackendFailure = true;
         this._runtimePresetOverride = 'light';
+        this._lastWatchdogEvent = { type: 'decode-stall', from: currentPreset, to: 'light', at: Date.now(), reason: error?.message || '' };
         this.notify('增强已自动调节', '实时 CNN 影响了解码，已切换到轻量档');
         this.restart().finally(() => { this._handlingBackendFailure = false; });
         return;
@@ -388,6 +480,7 @@ export default {
       this.cleanupRuntime();
       this.video = video;
       const reason = error?.message || 'Worker 渲染异常';
+      this._lastWatchdogEvent = { type: 'decode-stall', from: 'light', to: 'display-safe', at: Date.now(), reason };
       this.startDisplaySafeMode(reason);
       this.notify('实时增强已降级', `${reason}，已保留原生流畅播放`);
       this._handlingBackendFailure = false;
@@ -410,6 +503,16 @@ export default {
   height: 100%;
   background: #000;
   pointer-events: none;
+  /* 必须保持"不完全不透明"。
+     完全不透明的画布会让合成器把被它盖住的 video 图层整块剔除：video 不再被
+     绘制，解码器就拿不到帧释放信号，表现为 currentTime 冻结、readyState 掉到
+     2、buffered 仍有余量，而 CNN 的 renderedFrames 同时也停住（它是受害者，
+     不是加害者）。实测 artifacts/anime4k-occlusion-probe.json：完全遮挡时
+     20s 内出现 306ms 停滞、CNN 少渲染 19% 的帧；改为 0.99 或让画布不遮挡后
+     0 停滞、CNN 帧数与解码帧数 1:1。
+     0.99 只会让底层原画以 1% 权重透出，肉眼不可见，但足以让 video 图层继续
+     参与绘制。不要为了"更干净"把它调回 1。 */
+  opacity: 0.99;
 }
 
 :global(.video-element.anime4k-display-safe) {

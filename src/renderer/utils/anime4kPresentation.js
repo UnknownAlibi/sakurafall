@@ -29,7 +29,7 @@ export function formatAnime4kRuntimeTitle(status, preset) {
     : '';
   const pipeline = status?.pipeline ? `；${status.pipeline}` : '';
   const performance = status?.renderMs
-    ? `；GPU ${status.renderMs.toFixed(1)}ms/帧；丢弃 ${status.droppedFrames || 0} 帧`
+    ? `；GPU ${status.renderMs.toFixed(1)}ms/帧${status.fps ? `；增强 ${Math.round(status.fps)}fps${status.sourceFps ? `（源 ${Math.round(status.sourceFps)}fps）` : ''}` : ''}；丢弃 ${status.droppedFrames || 0} 帧`
     : '';
   return `Anime4K ${formatAnime4kPreset(effectivePreset)}档；${formatAnime4kBackend(status)}${pipeline}；输入 ${input}；增强输出 ${output}${performance}${adaptive}`;
 }

@@ -387,6 +387,14 @@ class AnimeDatabase {
                 // Episode DNA P1：片头/片尾/广告段/关键剧情段保存与确认
                 version: 8,
                 run: () => this._createEpisodeSegmentsTable()
+            },
+            {
+                // S1：详情新鲜度独立于列表/快照更新时间。
+                // 列表与快照 upsert 只推进 updated_at；detail_updated_at 仅由详情写入推进。
+                version: 9,
+                run: () => {
+                    this._addColumnIfNotExists('bangumi_subjects', 'detail_updated_at', 'INTEGER');
+                }
             }
         ];
 

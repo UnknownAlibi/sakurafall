@@ -98,7 +98,8 @@ class SubjectIndexService {
       ON CONFLICT(bgm_id) DO UPDATE SET
         name = excluded.name,
         name_cn = excluded.name_cn,
-        aliases = excluded.aliases,
+        -- 稀疏列表元数据不得清空已缓存的详细字段（快照增量/列表页可能缺 summary/aliases）
+        aliases = CASE WHEN excluded.aliases IS NULL OR excluded.aliases = '' THEN bangumi_subjects.aliases ELSE excluded.aliases END,
         cover_url = excluded.cover_url,
         rating = excluded.rating,
         rank = excluded.rank,
@@ -133,7 +134,7 @@ class SubjectIndexService {
           bgmId: Number(bgmId),
           name: item.nameRaw || item.name_raw || item.name || '',
           nameCn: item.name || '',
-          aliases: Array.isArray(item.aliases) ? JSON.stringify(item.aliases) : '',
+          aliases: Array.isArray(item.aliases) && item.aliases.length > 0 ? JSON.stringify(item.aliases) : '',
           summary: item.intro || item.summary || '',
           coverUrl: item.cover || '',
           coverLocal: '',
@@ -189,17 +190,17 @@ class SubjectIndexService {
         INSERT INTO bangumi_subjects (
           bgm_id, name, name_cn, aliases, summary, cover_url, cover_local,
           rating, rank, votes, eps, air_date, air_weekday, year, month,
-          type, nsfw, popularity, updated_at, raw_json, platform
+          type, nsfw, popularity, updated_at, raw_json, platform, detail_updated_at
         ) VALUES (
           @bgmId, @name, @nameCn, @aliases, @summary, @coverUrl, @coverLocal,
           @rating, @rank, @votes, @eps, @airDate, @airWeekday, @year, @month,
-          @type, @nsfw, @popularity, @updatedAt, @rawJson, @platform
+          @type, @nsfw, @popularity, @updatedAt, @rawJson, @platform, @detailUpdatedAt
         )
         ON CONFLICT(bgm_id) DO UPDATE SET
           name = excluded.name,
           name_cn = excluded.name_cn,
-          aliases = excluded.aliases,
-          summary = excluded.summary,
+          aliases = CASE WHEN excluded.aliases IS NULL OR excluded.aliases = '' THEN bangumi_subjects.aliases ELSE excluded.aliases END,
+          summary = CASE WHEN excluded.summary IS NULL OR excluded.summary = '' THEN bangumi_subjects.summary ELSE excluded.summary END,
           cover_url = excluded.cover_url,
           rating = excluded.rating,
           rank = excluded.rank,
@@ -214,12 +215,13 @@ class SubjectIndexService {
           popularity = excluded.popularity,
           updated_at = excluded.updated_at,
           raw_json = excluded.raw_json,
-          platform = excluded.platform
+          platform = excluded.platform,
+          detail_updated_at = excluded.detail_updated_at
       `).run({
         bgmId: Number(bgmId),
         name: detail.nameRaw || detail.name_raw || detail.name || '',
         nameCn: detail.name || '',
-        aliases: Array.isArray(detail.aliases) ? JSON.stringify(detail.aliases) : '',
+        aliases: Array.isArray(detail.aliases) && detail.aliases.length > 0 ? JSON.stringify(detail.aliases) : '',
         summary: detail.summary || detail.intro || '',
         coverUrl: detail.cover || '',
         coverLocal: '',
@@ -237,7 +239,8 @@ class SubjectIndexService {
         popularity: Number(detail.popularity || 0),
         updatedAt: now,
         rawJson: '',
-        platform: detail.platform || detail.area || ''
+        platform: detail.platform || detail.area || '',
+        detailUpdatedAt: now
       });
     } catch (e) {
       console.error('[SubjectIndex] upsertDetail 失败:', e.message);
@@ -341,7 +344,10 @@ class SubjectIndexService {
       page: safePage,
       pageSize: safePageSize,
       totalPages: Math.ceil(total / safePageSize) || 1,
-      fromIndex: true
+      fromIndex: true,
+      // 目录数据版本（由快照同步推进）：分页会话绑定它，
+      // 版本变化的后续页不再与旧页拼接（见 AnimeZone 整组刷新）。
+      catalogVersion: this.getCatalogVersion()
     };
   }
 
@@ -483,8 +489,21 @@ class SubjectIndexService {
       timeout: 20_000,
       maxResponseBytes: 80 * 1024 * 1024
     }).then(text => JSON.parse(text))
-      .then(snapshot => {
+      .then(async snapshot => {
         if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+        // generatedAt 回退（服务器重建/备份恢复）：旧 since 游标已失效，
+        // 增量响应可能为空甚至倒退版本。此时强制一次全量重同步，
+        // 不把"回退后的空增量"当成"无变化"写进游标。
+        if (since > 0 && (Number(snapshot.generatedAt) || 0) < (Number(status.generatedAt) || 0)) {
+          if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+          const fullText = await this._snapshotHttp.fetch(`${this._snapshotBaseUrl}/v1/catalog/snapshot`, {
+            signal: this._snapshotController.signal,
+            timeout: 20_000,
+            maxResponseBytes: 80 * 1024 * 1024
+          });
+          snapshot = JSON.parse(fullText);
+          if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+        }
         if ((snapshot.subjects?.length || 0) === 0 && Number(snapshot.total) === 0) {
           return { imported: 0, skipped: true, reason: 'snapshot_warming' };
         }
@@ -518,13 +537,16 @@ class SubjectIndexService {
 
   /**
    * 详情过期则同步（不阻塞，静默补全）
+   * 详情新鲜度由 detail_updated_at 独立记录：列表/快照 upsert 只推进
+   * updated_at，不代表详情已补全，不能把列表更新时间当详情新鲜度。
    */
   async syncDetailIfStale(bgmId) {
     if (!this.db || !bgmId) return null;
     const existing = this.getSubjectByBgmId(bgmId);
     const now = Date.now();
-    // 详情未过期：直接返回
-    if (existing && existing.updated_at && (now - existing.updated_at < this.DETAIL_STALE_MS)) {
+    // 详情未过期：直接返回（旧数据无 detail_updated_at 时回退 updated_at）
+    const detailUpdatedAt = Number(existing?.detailUpdatedAt) || Number(existing?.updated_at) || 0;
+    if (existing && detailUpdatedAt > 0 && (now - detailUpdatedAt < this.DETAIL_STALE_MS)) {
       return existing;
     }
     try {
@@ -544,21 +566,39 @@ class SubjectIndexService {
    */
   getSyncStatus() {
     if (!this.db) return { indexed: 0, lastSync: {} };
-    const indexed = this.getIndexCount();
-    const rows = this.db.prepare(`SELECT key, value, updated_at FROM bangumi_sync_state`).all();
-    const lastSync = {};
-    for (const row of rows) {
-      try {
-        lastSync[row.key] = { ...JSON.parse(row.value), updatedAt: row.updated_at };
-      } catch (_e) {
-        lastSync[row.key] = { updatedAt: row.updated_at };
+    try {
+      const indexed = this.getIndexCount();
+      const rows = this.db.prepare(`SELECT key, value, updated_at FROM bangumi_sync_state`).all();
+      const lastSync = {};
+      for (const row of rows) {
+        try {
+          lastSync[row.key] = { ...JSON.parse(row.value), updatedAt: row.updated_at };
+        } catch (_e) {
+          lastSync[row.key] = { updatedAt: row.updated_at };
+        }
       }
+      return { indexed, lastSync };
+    } catch (_e) {
+      // 表缺失（旧库/测试库）等情况：按无同步状态处理
+      return { indexed: 0, lastSync: {} };
     }
-    return { indexed, lastSync };
   }
 
   hasCatalogSnapshot() {
     return this.getSyncStatus().lastSync['catalog-snapshot']?.catalogReady === true;
+  }
+
+  /**
+   * 目录数据版本：与快照 generatedAt 一致（服务器仅在数据变化时推进它）。
+   * 无变化的增量同步不改变版本，不会造成浏览中列表的无谓刷新。
+   * 渲染层列表会话绑定首次加载时的版本，翻页发现版本变化则整组刷新，
+   * 避免新旧版本的页被悄悄拼接（重复由去重兜底，漏项无法兜底）。
+   */
+  getCatalogVersion() {
+    const state = this.getSyncStatus().lastSync['catalog-snapshot'];
+    if (!state) return null;
+    const generatedAt = Math.max(0, Number(state.generatedAt) || 0);
+    return generatedAt > 0 ? String(generatedAt) : null;
   }
 
   // ── 内部辅助 ────────────────────────────────────────────
@@ -610,6 +650,7 @@ class SubjectIndexService {
       url: '',
       week_day_cn: '',
       updated_at: row.updated_at,
+      detailUpdatedAt: Number(row.detail_updated_at) || 0,
       fromIndex: true
     };
   }

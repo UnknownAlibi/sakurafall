@@ -47,6 +47,85 @@ test('APPEND_ANIME_LIST advances through an empty page without duplicating data'
   assert.equal(state.currentPage, 3);
 });
 
+test('SET_ANIME_LIST anchors the catalog version for snapshot-backed sessions', () => {
+  const state = {
+    animeList: [],
+    currentPage: 1,
+    totalPages: 0,
+    bangumiCatalogVersion: null
+  };
+
+  animeStore.mutations.SET_ANIME_LIST(state, {
+    data: [{ id: '1', source: 'bangumi' }],
+    page: 1,
+    totalPages: 10,
+    total: 240,
+    catalogVersion: '1000'
+  });
+  assert.equal(state.bangumiCatalogVersion, '1000');
+
+  // 非快照支撑的结果（网络/降级路径）：解除版本绑定
+  animeStore.mutations.SET_ANIME_LIST(state, {
+    data: [],
+    page: 2,
+    totalPages: 10
+  });
+  assert.equal(state.bangumiCatalogVersion, null);
+});
+
+test('a snapshot update mid-session reloads the list instead of appending mixed versions', async () => {
+  const commits = [];
+  const reloads = [];
+  const context = {
+    isBangumiMode: true,
+    loading: false,
+    loadingMore: false,
+    loadMoreError: '',
+    loadMoreLimitReason: '',
+    hasMoreAnimePages: true,
+    currentPage: 2,
+    totalPages: 42,
+    totalItems: 1000,
+    animeList: Array.from({ length: 48 }, (_, index) => ({ id: String(index + 1), source: 'bangumi' })),
+    searchKeyword: '',
+    _infiniteLoadToken: 0,
+    bangumiListSignature: () => 'stable-filter',
+    buildBangumiListRequest: () => ({}),
+    fetchBangumiList: async () => ({
+      data: [{ id: '49', source: 'bangumi' }],
+      page: 3,
+      total: 1000,
+      totalPages: 42,
+      _snapshotBacked: true,
+      catalogVersion: '2000'
+    }),
+    $store: {
+      state: { anime: { bangumiCatalogVersion: '1000' } },
+      commit(type, payload) {
+        commits.push({ type, payload });
+      }
+    },
+    resetInfiniteLoadState() {
+      this.loadingMore = false;
+      this._infiniteLoadToken += 1;
+    },
+    // 组件中由 mixin 合并提供；单测上下文显式绑定真实实现
+    reloadListAfterCatalogUpdate: animeInfiniteScroll.methods.reloadListAfterCatalogUpdate,
+    async loadCurrentList(page, search) {
+      reloads.push({ page, search });
+    },
+    scheduleInfiniteLoadCheck() {},
+    $nextTick(callback) { callback(); }
+  };
+
+  const loaded = await animeInfiniteScroll.methods.loadNextAnimePage.call(context);
+
+  // 整组刷新：回到第 1 页重载，而不是把新版本的第 3 页拼进旧会话
+  assert.equal(loaded, true);
+  assert.deepEqual(reloads, [{ page: 1, search: '' }]);
+  assert.deepEqual(commits, [], 'no APPEND_ANIME_LIST may run for a stale session');
+});
+
 test('virtualization measures the actual grid instead of its section wrapper', () => {
   const grid = { matches: selector => selector === '.anime-grid' };
   const section = {

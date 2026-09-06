@@ -3,7 +3,9 @@ module.exports = {
   productName: 'SakuraFall',
   copyright: 'Copyright © 2026 SakuraFall',
   directories: {
-    output: 'dist-app',
+    // SAKURAFALL_BUILD_OUTPUT 用于把产物指到其他目录（如 dist-app-v2），
+    // 避免主输出目录被 IDE 索引器等占用时 EBUSY 无法重建。
+    output: process.env.SAKURAFALL_BUILD_OUTPUT || 'dist-app',
     buildResources: 'build'
   },
   asar: true,

@@ -10,7 +10,8 @@ export function resolveWebgpuAnime4kProfile({
   inputWidth = 0,
   inputHeight = 0,
   displayWidth = 0,
-  displayHeight = 0
+  displayHeight = 0,
+  inputFps = 0
 } = {}) {
   const requestedPreset = normalizeWebgpuAnime4kPreset(preset);
   const inputEdge = Math.max(Number(inputWidth) || 0, Number(inputHeight) || 0);
@@ -18,6 +19,12 @@ export function resolveWebgpuAnime4kProfile({
     (Number(displayWidth) || inputWidth || 1) / Math.max(1, Number(inputWidth) || 1),
     (Number(displayHeight) || inputHeight || 1) / Math.max(1, Number(inputHeight) || 1)
   );
+  // The per-frame GPU budget scales with the source frame rate: a 30 fps source
+  // gets a tighter budget than a 24 fps one. Keep 15% headroom for decode,
+  // presentation and UI work; 16 ms is the floor so a 60 fps source cannot ask
+  // for an impossible budget.
+  const sourceFps = Number(inputFps) > 1 ? Number(inputFps) : 24;
+  const frameBudgetMs = Math.max(16, Math.floor((1000 / sourceFps) * 0.85));
   // The presentation canvas is capped separately and the worker benchmark
   // rejects hardware that cannot sustain the selected pipeline in real time.
   // Balanced 720p x2 can starve Chromium's decoder on some AMD drivers.
@@ -30,7 +37,8 @@ export function resolveWebgpuAnime4kProfile({
       requestedPreset,
       effectivePreset: requestedPreset,
       pipeline: 'CNNx2M',
-      upscale: 2
+      upscale: 2,
+      frameBudgetMs
     };
   }
 
@@ -38,7 +46,8 @@ export function resolveWebgpuAnime4kProfile({
     requestedPreset,
     effectivePreset: requestedPreset,
     pipeline: requestedPreset === 'quality' ? 'CNNVL' : (requestedPreset === 'balanced' ? 'CNNM' : 'CNNSoftM'),
-    upscale: 1
+    upscale: 1,
+    frameBudgetMs
   };
 }
 
@@ -80,6 +89,10 @@ export class Anime4kWebgpuClient {
     this.renderedFrames = 0;
     this.profile = null;
     this.pendingFrameId = 0;
+    this.pendingFrameSentAt = 0;
+    this.lastFrameCompleteAt = 0;
+    this.fpsEma = 0;
+    this.frameAgeEma = 0;
     this.frameTimeoutId = null;
   }
 
@@ -128,8 +141,25 @@ export class Anime4kWebgpuClient {
           this.clearFrameTimeout();
           this.busy = false;
           this.renderedFrames += 1;
+          const completedAt = performance.now();
+          const frameAgeMs = this.pendingFrameSentAt ? completedAt - this.pendingFrameSentAt : 0;
+          this.pendingFrameSentAt = 0;
+          if (this.lastFrameCompleteAt > 0) {
+            const interval = completedAt - this.lastFrameCompleteAt;
+            if (interval > 0) {
+              const fps = 1000 / interval;
+              this.fpsEma = this.fpsEma ? this.fpsEma * 0.9 + fps * 0.1 : fps;
+            }
+          }
+          this.lastFrameCompleteAt = completedAt;
+          this.frameAgeEma = this.frameAgeEma ? this.frameAgeEma * 0.9 + frameAgeMs * 0.1 : frameAgeMs;
+          const totalFrames = this.renderedFrames + this.droppedFrames;
           this.options.onStats?.({
             renderMs: message.renderMs,
+            stageMs: message.stageMs || null,
+            frameAgeMs,
+            fps: this.fpsEma,
+            dropRate: totalFrames > 0 ? this.droppedFrames / totalFrames : 0,
             renderedFrames: this.renderedFrames,
             droppedFrames: this.droppedFrames
           });
@@ -150,6 +180,7 @@ export class Anime4kWebgpuClient {
         inputHeight: this.options.inputHeight,
         outputWidth,
         outputHeight,
+        inputFormat: this.options.inputFormat === 'rgba16float' ? 'rgba16float' : 'rgba8unorm',
         profile: this.profile
       }, [offscreenCanvas]);
     });
@@ -186,6 +217,7 @@ export class Anime4kWebgpuClient {
     this.busy = true;
     this.frameSequence += 1;
     this.pendingFrameId = this.frameSequence;
+    this.pendingFrameSentAt = performance.now();
     let frame;
     try {
       const mediaTime = Number.isFinite(metadata?.mediaTime) ? metadata.mediaTime : (Number(source.currentTime) || 0);

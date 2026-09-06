@@ -4,6 +4,18 @@
 //   - 音频 RMS 能量（经 WebAudio AnalyserNode，路由失败自动降级为仅画面）
 //   - 画面平均亮度（32x18 缩略图，跨域受限时自动降级为仅音频）
 // 采集完成后交给 Worker 分析（episodeDnaClient），不在主线程做重计算。
+//
+// 注意：captureStream() 会让 Chromium 把视频元素置为"捕获"状态——被捕获的
+// 元素不能丢弃迟到帧，每帧都要克隆给流。因此增强开启时以 allowCaptureStream:
+// false 启动，降级为仅画面采样（2Hz 的 32x18 drawImage 是拉取式复制，开销可
+// 忽略，不影响解码）。
+//
+// 归因订正（2026-09-06）：这里曾把 captureStream 写成"开启 CNN 后解码停摆"
+// 的根因，该结论不成立。13:38 的打包探针所用的 app.asar（13:26 构建）已包含
+// allowCaptureStream 修复，停滞照样复现；真正的成因是增强画布完全不透明地
+// 盖住 video，合成器剔除了被覆盖的 video 图层，解码器收不到帧释放信号。
+// 修复见 Anime4KCanvas.vue 的 opacity 说明。本开关作为降低每帧额外克隆开销
+// 的防御性措施保留，不再自称根因。
 
 const FRAME_W = 32;
 const FRAME_H = 18;
@@ -26,6 +38,7 @@ export class EpisodeDnaCollector {
     this.ctx2d = null;
     this.audioFailed = false;
     this.videoFailed = false;
+    this.allowCaptureStream = options.allowCaptureStream !== false;
     this.lastError = '';
     this.onDone = typeof options.onDone === 'function' ? options.onDone : null;
     this.notified = false;
@@ -39,6 +52,12 @@ export class EpisodeDnaCollector {
   }
 
   _initAudio() {
+    if (!this.allowCaptureStream) {
+      // 增强开启时禁止捕获流（见文件头注释）：降级为仅画面采样
+      this.audioFailed = true;
+      this.lastError = 'capture-stream-disabled';
+      return;
+    }
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) { this.audioFailed = true; return; }

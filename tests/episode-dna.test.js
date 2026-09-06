@@ -207,3 +207,65 @@ test('dna worker reports errors without crashing', () => {
   worker.self.onmessage({ data: { type: 'other' } });
   assert.equal(worker.posted.length, 0);
 });
+
+// ===== 采集器：增强开启时必须避开 captureStream =====
+// captureStream 会把视频元素置为"捕获"状态（不能丢帧），与 Anime4K CNN
+// 管线并行会让解码在 seek/循环回绕后长时间停摆，见采集器文件头注释。
+
+function loadCollector() {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../src/renderer/player/episodeDnaCollector.js'),
+    'utf8'
+  );
+  const window = {
+    AudioContext: class {
+      resume() { return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createAnalyser() { return { fftSize: 512, disconnect() {} }; }
+    }
+  };
+  const document = { createElement: () => ({ getContext: () => null }) };
+  return new Function(
+    'window',
+    'document',
+    `${source.replace('export class', 'class')}\nreturn EpisodeDnaCollector;`
+  )(window, document);
+}
+
+test('dna collector never attaches captureStream when disallowed', () => {
+  const EpisodeDnaCollector = loadCollector();
+  let captureCalls = 0;
+  const video = {
+    currentTime: 1,
+    ended: false,
+    readyState: 4,
+    captureStream() {
+      captureCalls += 1;
+      return { getAudioTracks: () => [{}], getTracks: () => [] };
+    }
+  };
+
+  const gated = new EpisodeDnaCollector(video, { allowCaptureStream: false });
+  gated.start();
+  assert.equal(captureCalls, 0, '禁用时不得触碰 captureStream');
+  assert.equal(gated.audioFailed, true);
+  assert.equal(gated.lastError, 'capture-stream-disabled');
+  gated.destroy();
+
+  const normal = new EpisodeDnaCollector(video, {});
+  normal.start();
+  assert.equal(captureCalls, 1, '默认路径仍使用 captureStream');
+  normal.destroy();
+});
+
+test('player wires dna collector to avoid captureStream while enhancing', () => {
+  const player = fs.readFileSync(
+    path.join(__dirname, '../src/renderer/components/Player/VideoPlayer.vue'),
+    'utf8'
+  );
+  // 增强开启时采集器以仅画面模式启动
+  assert.match(player, /allowCaptureStream:\s*!this\.anime4kEnabled/);
+  // 播放中途开启增强：丢弃持有 captureStream 的采集器并重启
+  assert.match(player, /setAnime4kEnabled\(enabled\)[\s\S]{0,400}?if \(this\.anime4kEnabled && this\._dnaCollector\)[\s\S]{0,200}?this\.stopDnaCollection\(true\);\s*this\.startDnaCollection\(\);/);
+});
