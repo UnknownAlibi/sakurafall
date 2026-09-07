@@ -6,6 +6,7 @@ const https = require('https');
 const zlib = require('zlib');
 const { pathToFileURL } = require('url');
 const HttpsProxyAgent = require('https-proxy-agent');
+const HostTaskQueue = require('../utils/hostTaskQueue');
 
 const DEFAULT_TIMEOUT = 12000;
 const DEFAULT_MAX_ENTRIES = 2000;
@@ -38,6 +39,7 @@ class ImageCacheService {
     this.publicUrlResolver = options.publicUrlResolver || null;
     this._proxyAgent = null;
     this.pending = new Map();
+    this.downloadQueue = new HostTaskQueue();
     this.proxyFallbackCooldownUntil = new Map();
     this.proxyFallbackCooldownMs = 60 * 1000;
     this.index = {};
@@ -161,7 +163,9 @@ class ImageCacheService {
     }
 
     if (this.pending.has(key)) return this.pending.get(key);
-    const promise = this._downloadAndStore(normalizedUrl, key, variant)
+    const promise = this.downloadQueue.run(new URL(normalizedUrl).host,
+      () => this._downloadAndStore(normalizedUrl, key, variant))
+      .catch(error => ({ success: false, error: error.message, originalUrl: normalizedUrl }))
       .finally(() => this.pending.delete(key));
     this.pending.set(key, promise);
     return promise;

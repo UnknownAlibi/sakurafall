@@ -283,6 +283,19 @@ export default {
     };
     document.addEventListener('visibilitychange', this._handleVisibilityChange);
     this._handleVisibilityChange();
+    let pressureRevision = 0;
+    const applyPlaybackPressure = active => {
+      if (location.hash.includes('/player-window')) return;
+      if (active) backgroundTaskScheduler.pause('playback-window');
+      else backgroundTaskScheduler.resume('playback-window');
+    };
+    this._removePlaybackPressure = window.electronAPI?.onBackgroundPlaybackPressure?.(active => {
+      pressureRevision += 1;
+      applyPlaybackPressure(active);
+    });
+    window.electronAPI?.getBackgroundPlaybackPressure?.().then(active => {
+      if (pressureRevision === 0 && this._removePlaybackPressure) applyPlaybackPressure(active);
+    }).catch(() => {});
 
     // 方向性过渡：基于 history.state.position 判断前进/后退
     // （Vue Router 4 为每条历史记录维护递增 position，popstate 返回时值变小）
@@ -407,6 +420,9 @@ export default {
   beforeUnmount() {
     document.removeEventListener('visibilitychange', this._handleVisibilityChange);
     backgroundTaskScheduler.resume('window-hidden');
+    this._removePlaybackPressure?.();
+    this._removePlaybackPressure = null;
+    backgroundTaskScheduler.resume('playback-window');
     this._unregisterRouteDirection?.();
     if (this._bootPhraseTimer) {
       clearInterval(this._bootPhraseTimer);

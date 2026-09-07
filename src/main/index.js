@@ -420,6 +420,7 @@ app.on('child-process-gone', (_event, details) => {
 });
 // 独立播放窗口集合（支持同时打开多个）
 const playerWindows = new Set();
+const playbackPressure = require('./utils/playbackPressure')(playerWindows, () => mainWindow);
 // 待传递给各播放窗口的视频数据，按 webContents.id 隔离（播放窗口加载后通过 IPC 拉取）
 const pendingPlayerDataMap = new Map();
 
@@ -797,8 +798,6 @@ function releasePlayerRuntimeResources() {
     try {
         imageCacheService.trim();
     } catch (e) { /* ignore */ }
-    // 窗口已销毁，此时触发一次主动 GC 把主进程内存还给系统
-    if (typeof global.gc === 'function') global.gc();
 }
 
 /**
@@ -836,7 +835,7 @@ function createPlayerWindow(videoData) {
     // 注意：closed 事件触发时 webContents 已被销毁，所以必须提前缓存 id
     const webContentsId = win.webContents.id;
     pendingPlayerDataMap.set(webContentsId, videoData || null);
-    playerWindows.add(win);
+    playbackPressure.add(win);
 
     // Phase 9: 应用持久化的播放窗口尺寸/位置
     applyWindowState(win, 'playerWindow', { minWidth: 480, minHeight: 360 });
@@ -865,7 +864,7 @@ function createPlayerWindow(videoData) {
     win.on('closed', () => {
         pendingPlayerDataMap.delete(webContentsId);
         playerPreMiniBounds.delete(webContentsId);
-        playerWindows.delete(win);
+        playbackPressure.delete(win);
         releasePlayerRuntimeResources();
     });
 
@@ -1183,6 +1182,8 @@ secureIpcHandle('is-maximized', (event) => {
 });
 
 // 独立播放窗口：打开
+secureIpcHandle('background-playback-pressure', () => playerWindows.size > 0);
+
 secureIpcHandle('open-player-window', (event, videoData) => {
     try {
         const win = createPlayerWindow(videoData);

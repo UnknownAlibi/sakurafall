@@ -67,6 +67,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('window-state-changed', handler);
         return () => ipcRenderer.removeListener('window-state-changed', handler);
     },
+    getBackgroundPlaybackPressure: () => ipcRenderer.invoke('background-playback-pressure'),
+    onBackgroundPlaybackPressure: callback => {
+        const handler = (_event, active) => callback(Boolean(active));
+        ipcRenderer.on('background-playback-pressure', handler);
+        return () => ipcRenderer.removeListener('background-playback-pressure', handler);
+    },
 
     // 独立播放窗口
     openPlayerWindow: (videoData) => ipcRenderer.invoke('open-player-window', toIpcSafeValue(videoData)),

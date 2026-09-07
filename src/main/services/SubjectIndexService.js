@@ -15,6 +15,7 @@
 
 const bangumiApi = require('./BangumiApi');
 const HttpClient = require('../utils/HttpClient');
+const parseSnapshot = require('../utils/parseSnapshot');
 const { subjectYearHints } = require('./SubjectCatalogPolicy');
 
 function resolveSubjectYear(item, airDate = '') {
@@ -488,7 +489,7 @@ class SubjectIndexService {
       signal: this._snapshotController.signal,
       timeout: 20_000,
       maxResponseBytes: 80 * 1024 * 1024
-    }).then(text => JSON.parse(text))
+    }).then(text => parseSnapshot(text, { signal: this._snapshotController.signal }))
       .then(async snapshot => {
         if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
         // generatedAt 回退（服务器重建/备份恢复）：旧 since 游标已失效，
@@ -501,7 +502,7 @@ class SubjectIndexService {
             timeout: 20_000,
             maxResponseBytes: 80 * 1024 * 1024
           });
-          snapshot = JSON.parse(fullText);
+          snapshot = await parseSnapshot(fullText, { signal: this._snapshotController.signal });
           if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
         }
         if ((snapshot.subjects?.length || 0) === 0 && Number(snapshot.total) === 0) {
@@ -511,6 +512,12 @@ class SubjectIndexService {
           nextDelay = this.SNAPSHOT_MIN_INTERVAL;
           return result;
         });
+      })
+      .catch(error => {
+        if (!isCurrent() && error.name === 'AbortError') {
+          return { imported: 0, skipped: true, reason: 'config_changed' };
+        }
+        throw error;
       })
       .finally(() => {
         this._snapshotSyncPromise = null;
