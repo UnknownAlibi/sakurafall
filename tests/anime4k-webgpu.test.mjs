@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
+  Anime4kWebgpuClient,
   canUseWebgpuAnime4k,
   getWebgpuAnime4kCapabilities,
   normalizeWebgpuAnime4kPreset,
@@ -98,8 +99,13 @@ test('WebGPU worker prewarms shaders and guards its one-frame mailbox', () => {
   assert.match(client, /armFrameTimeout/);
   assert.match(worker, /frame\.close\(\)/);
   assert.match(worker, /inputTexture\?\.destroy/);
+  assert.match(worker, /presentationBuffer\?\.destroy/);
+  assert.match(worker, /context\?\.unconfigure/);
   assert.match(worker, /device\?\.destroy/);
-  assert.match(client, /setTimeout\(\(\) => worker\.terminate\(\), 200\)/);
+  assert.match(worker, /type: 'disposed'/);
+  assert.match(client, /message\.type === 'disposed'/);
+  assert.match(client, /this\.initializeReject/);
+  assert.match(client, /setTimeout\(\(\) => this\.finalizeWorker\(worker\), 1000\)/);
 });
 
 test('WebGPU worker reports stage timings and the client tracks frame-rate health', () => {
@@ -170,4 +176,57 @@ test('Anime4K canvas restarts by source and only shows after a verified frame', 
   assert.match(source, /sourceKey/);
   assert.match(source, /v-show="showCanvas"/);
   assert.match(source, /if \(!this\.presenting\)/);
+  assert.match(source, /this\._pendingEngine = engine/);
+  assert.match(source, /this\._pendingEngine\.dispose/);
+});
+
+test('disposing during WebGPU initialization aborts promptly and waits for worker cleanup acknowledgement', async () => {
+  const original = new Map();
+  const install = (name, value) => {
+    original.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  };
+  let workerInstance;
+  class Canvas {}
+  Canvas.prototype.transferControlToOffscreen = () => ({ kind: 'offscreen' });
+  class FakeWorker {
+    constructor() {
+      workerInstance = this;
+      this.messages = [];
+      this.terminated = false;
+    }
+    postMessage(message) {
+      this.messages.push(message);
+      if (message.type === 'dispose') {
+        queueMicrotask(() => this.onmessage?.({ data: { type: 'disposed' } }));
+      }
+    }
+    terminate() {
+      this.terminated = true;
+    }
+  }
+
+  try {
+    install('navigator', { gpu: {} });
+    install('Worker', FakeWorker);
+    install('OffscreenCanvas', function OffscreenCanvas() {});
+    install('VideoFrame', function VideoFrame() {});
+    install('HTMLCanvasElement', Canvas);
+    const canvas = Object.assign(new Canvas(), { clientWidth: 640, clientHeight: 360 });
+    const client = new Anime4kWebgpuClient(canvas, { inputWidth: 640, inputHeight: 360 });
+    const initializing = client.initialize();
+    client.dispose();
+    await assert.rejects(initializing, error => error?.name === 'AbortError');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(workerInstance.messages.at(-1).type, 'dispose');
+    assert.equal(workerInstance.terminated, true);
+    assert.equal(client.worker, null);
+    assert.equal(client.initializeTimeoutId, null);
+    assert.equal(client.disposeTimeoutId, null);
+  } finally {
+    for (const [name, descriptor] of original) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  }
 });

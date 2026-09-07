@@ -2,35 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const videoPlayerSource = await readFile(
-  new URL('../src/renderer/components/Player/VideoPlayer.vue', import.meta.url),
-  'utf8'
-);
-const playbackLifecycleSource = await readFile(
-  new URL('../src/renderer/mixins/playerPlaybackLifecycle.js', import.meta.url),
-  'utf8'
-);
-const playerWindowSource = await readFile(
-  new URL('../src/renderer/views/PlayerWindow.vue', import.meta.url),
-  'utf8'
-);
-const animeDetailModalSource = await readFile(
-  new URL('../src/renderer/mixins/animeDetailModal.js', import.meta.url),
-  'utf8'
-);
+const readSource = async relativePath => (
+  await readFile(new URL(relativePath, import.meta.url), 'utf8')
+).replace(/\r\n?/g, '\n');
+
+const videoPlayerSource = await readSource('../src/renderer/components/Player/VideoPlayer.vue');
+const playbackLifecycleSource = await readSource('../src/renderer/mixins/playerPlaybackLifecycle.js');
+const playerWindowSource = await readSource('../src/renderer/views/PlayerWindow.vue');
+const animeDetailModalSource = await readSource('../src/renderer/mixins/animeDetailModal.js');
 const playerSources = `${videoPlayerSource}\n${playbackLifecycleSource}`;
-const fallbackPolicySource = await readFile(
-  new URL('../src/renderer/utils/playbackFallbackPolicy.js', import.meta.url),
-  'utf8'
-);
+const fallbackPolicySource = await readSource('../src/renderer/utils/playbackFallbackPolicy.js');
 const { evaluatePlaybackEvidence, hasPlaybackStartupActivity, shouldAutoFallback } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(fallbackPolicySource)}`
 );
 
-const moduleSource = await readFile(
-  new URL('../src/renderer/utils/playbackDiagnostics.js', import.meta.url),
-  'utf8'
-);
+const moduleSource = await readSource('../src/renderer/utils/playbackDiagnostics.js');
 const {
   describeHlsError,
   describeNativeVideoError,

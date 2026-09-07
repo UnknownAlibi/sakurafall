@@ -82,6 +82,7 @@ async function warmupPipeline(current) {
 }
 
 function postFatal(error) {
+  if (disposed) return;
   self.postMessage({ type: 'fatal', message: error?.message || String(error || 'WebGPU Worker 异常') });
 }
 
@@ -112,6 +113,10 @@ async function initialize(message) {
   const adapterMs = performance.now() - adapterStartedAt;
   const deviceStartedAt = performance.now();
   const device = await adapter.requestDevice();
+  if (disposed) {
+    try { device.destroy?.(); } catch (_) { /* worker is already shutting down */ }
+    return;
+  }
   const deviceMs = performance.now() - deviceStartedAt;
   const canvas = message.canvas;
   canvas.width = message.outputWidth;
@@ -190,6 +195,7 @@ async function initialize(message) {
   // WebGPU defers shader compilation until the first submission. Compile while
   // the native video is still visible so enabling Anime4K cannot freeze frame 1.
   const { warmupMs, benchmarkMs } = await warmupPipeline(state);
+  if (disposed) return;
   // The budget scales with the source frame rate (see resolveWebgpuAnime4kProfile);
   // fall back to the historical 24 fps budget when the profile omits it.
   const frameBudgetMs = Number(message.profile?.frameBudgetMs) > 0
@@ -284,13 +290,17 @@ async function renderFrame(message) {
   }
 }
 
-function dispose() {
+async function dispose() {
+  if (disposed) return;
   disposed = true;
-  try { state?.context?.unconfigure?.(); } catch (_) { /* canvas may already be detached */ }
-  try { state?.inputTexture?.destroy(); } catch (_) { /* device may already be lost */ }
-  try { state?.presentationBuffer?.destroy(); } catch (_) { /* device may already be lost */ }
-  try { state?.device?.destroy?.(); } catch (_) { /* device may already be lost */ }
+  const current = state;
   state = null;
+  try { await waitForSubmittedWork(current?.device, 500, 'Anime4K GPU 清理'); } catch (_) { /* bounded cleanup */ }
+  try { current?.context?.unconfigure?.(); } catch (_) { /* canvas may already be detached */ }
+  try { current?.inputTexture?.destroy(); } catch (_) { /* device may already be lost */ }
+  try { current?.presentationBuffer?.destroy(); } catch (_) { /* device may already be lost */ }
+  try { current?.device?.destroy?.(); } catch (_) { /* device may already be lost */ }
+  try { self.postMessage({ type: 'disposed' }); } catch (_) { /* owner may already be gone */ }
   self.close();
 }
 
@@ -303,6 +313,6 @@ self.onmessage = (event) => {
   } else if (message.type === 'frame') {
     renderFrame(message);
   } else if (message.type === 'dispose') {
-    dispose();
+    dispose().catch(() => self.close());
   }
 };

@@ -13,15 +13,14 @@
 //
 // 运行: node scripts/probe-anime4k-occlusion.js
 // 环境: SAKURAFALL_AUDIT_EXECUTABLE / SAKURAFALL_PROBE_PORT / SAKURAFALL_PROBE_VARIANT_SECONDS
-const { execFile, spawn } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { promisify } = require('node:util');
 const { CdpClient, waitFor } = require('./playback-e2e-smoke');
+const { stopProcessTree } = require('./audit-process-tree');
 
-const execFileAsync = promisify(execFile);
 const workspace = path.resolve(__dirname, '..');
 const executable = process.env.SAKURAFALL_AUDIT_EXECUTABLE
   || path.join(workspace, 'dist-app', 'win-unpacked', 'SakuraFall.exe');
@@ -32,6 +31,7 @@ const debugUrl = `http://127.0.0.1:${debugPort}`;
 const variantSeconds = Number(process.env.SAKURAFALL_PROBE_VARIANT_SECONDS || 20);
 const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sakurafall-occlusion-'));
 const userData = path.join(runRoot, 'user-data');
+let child;
 
 const VARIANTS = [
   { id: 'cover-default', css: '', note: '画布完全遮挡 video（当前线上行为）' },
@@ -54,10 +54,6 @@ function seedDatabase() {
     const candidate = `${source}${suffix}`;
     if (fs.existsSync(candidate)) fs.copyFileSync(candidate, path.join(userData, `anime.db${suffix}`));
   }
-}
-
-function powershellLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 async function fetchTargets() {
@@ -127,13 +123,11 @@ async function setVariantCss(page, css) {
 }
 
 async function stopApp() {
-  const script = `
-$targetPath = ${powershellLiteral(executable)}
-Get-CimInstance Win32_Process |
-  Where-Object { $_.ExecutablePath -eq $targetPath } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-`;
-  await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }).catch(() => {});
+  await stopProcessTree({
+    rootPid: child?.pid,
+    executable,
+    marker: `--smoke-user-data=${userData}`
+  });
 }
 
 // 只看"解码是否健康"：媒体时间推进速率 + 停滞次数 + 解码帧增量。
@@ -200,7 +194,7 @@ async function main() {
   // 显式开启并在报告里记录，不能作为默认行为。
   const noSandbox = process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1';
   if (noSandbox) args.push('--no-sandbox');
-  const child = spawn(executable, args, {
+  child = spawn(executable, args, {
     cwd: path.dirname(executable),
     env: childEnv,
     windowsHide: false,

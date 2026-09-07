@@ -14,15 +14,14 @@
 //   3s 以后且未暂停）的播放速率、停滞次数与 CNN 呈现率。
 //
 // 运行: SAKURAFALL_PIXEL_SECONDS=300 node scripts/probe-anime4k-pixels.js
-const { execFile, spawn } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { promisify } = require('node:util');
 const { CdpClient, waitFor } = require('./playback-e2e-smoke');
+const { stopProcessTree } = require('./audit-process-tree');
 
-const execFileAsync = promisify(execFile);
 const workspace = path.resolve(__dirname, '..');
 const executable = process.env.SAKURAFALL_AUDIT_EXECUTABLE
   || path.join(workspace, 'dist-app', 'win-unpacked', 'SakuraFall.exe');
@@ -33,6 +32,7 @@ const debugUrl = `http://127.0.0.1:${debugPort}`;
 const seconds = Number(process.env.SAKURAFALL_PIXEL_SECONDS || 300);
 const intervalMs = Number(process.env.SAKURAFALL_PIXEL_INTERVAL_MS || 1000);
 const interactionMs = Number(process.env.SAKURAFALL_PIXEL_INTERACTION_MS || 6000);
+let child;
 const steadyAfterMs = Number(process.env.SAKURAFALL_PIXEL_STEADY_MS || 3000);
 const episodeCount = Math.max(12, Number(process.env.SAKURAFALL_PIXEL_EPISODES || 12));
 const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sakurafall-pixel-'));
@@ -50,10 +50,6 @@ function seedDatabase() {
   }
 }
 
-function powershellLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 async function fetchTargets() {
   const response = await fetch(`${debugUrl}/json/list`);
   if (!response.ok) throw new Error(`DevTools target request failed: HTTP ${response.status}`);
@@ -61,13 +57,11 @@ async function fetchTargets() {
 }
 
 async function stopApp() {
-  const script = `
-$targetPath = ${powershellLiteral(executable)}
-Get-CimInstance Win32_Process |
-  Where-Object { $_.ExecutablePath -eq $targetPath } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-`;
-  await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }).catch(() => {});
+  await stopProcessTree({
+    rootPid: child?.pid,
+    executable,
+    marker: `--smoke-user-data=${userData}`
+  });
 }
 
 async function setAnime4k(page, enabled) {
@@ -317,7 +311,7 @@ async function main() {
   const launchArgs = [`--remote-debugging-port=${debugPort}`, `--smoke-user-data=${userData}`];
   const noSandbox = process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1';
   if (noSandbox) launchArgs.push('--no-sandbox');
-  const child = spawn(executable, launchArgs, {
+  child = spawn(executable, launchArgs, {
     cwd: path.dirname(executable),
     env: childEnv,
     windowsHide: false,

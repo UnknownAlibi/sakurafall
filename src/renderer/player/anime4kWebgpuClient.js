@@ -94,6 +94,9 @@ export class Anime4kWebgpuClient {
     this.fpsEma = 0;
     this.frameAgeEma = 0;
     this.frameTimeoutId = null;
+    this.disposeTimeoutId = null;
+    this.initializeTimeoutId = null;
+    this.initializeReject = null;
   }
 
   async initialize() {
@@ -117,10 +120,22 @@ export class Anime4kWebgpuClient {
     );
 
     this.worker = new Worker(new URL('./anime4kWebgpu.worker.js', import.meta.url), { type: 'module' });
+    const worker = this.worker;
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('WebGPU Worker 初始化超时')), 15000);
+      this.initializeTimeoutId = setTimeout(() => {
+        this.initializeTimeoutId = null;
+        this.initializeReject = null;
+        reject(new Error('WebGPU Worker 初始化超时'));
+      }, 15000);
+      this.initializeReject = reject;
+      const settleInitialization = () => {
+        if (this.initializeTimeoutId != null) clearTimeout(this.initializeTimeoutId);
+        this.initializeTimeoutId = null;
+        this.initializeReject = null;
+      };
       const fail = (error) => {
-        clearTimeout(timeout);
+        if (this.disposed) return;
+        settleInitialization();
         const normalized = error instanceof Error ? error : new Error(String(error?.message || error || 'Worker 初始化失败'));
         if (this.ready) this.options.onFatal?.(normalized);
         else reject(normalized);
@@ -128,8 +143,13 @@ export class Anime4kWebgpuClient {
       this.worker.onerror = fail;
       this.worker.onmessage = (event) => {
         const message = event.data || {};
+        if (message.type === 'disposed') {
+          this.finalizeWorker(worker);
+          return;
+        }
+        if (this.disposed) return;
         if (message.type === 'ready') {
-          clearTimeout(timeout);
+          settleInitialization();
           this.ready = true;
           this.profile = { ...this.profile, ...message.profile };
           this.options.onReady?.(message);
@@ -198,6 +218,13 @@ export class Anime4kWebgpuClient {
     this.frameTimeoutId = null;
   }
 
+  finalizeWorker(worker = this.worker) {
+    if (this.disposeTimeoutId != null) clearTimeout(this.disposeTimeoutId);
+    this.disposeTimeoutId = null;
+    try { worker?.terminate(); } catch (_) { /* worker may already have closed itself */ }
+    if (this.worker === worker) this.worker = null;
+  }
+
   armFrameTimeout(frameId) {
     this.clearFrameTimeout();
     this.frameTimeoutId = setTimeout(() => {
@@ -237,15 +264,24 @@ export class Anime4kWebgpuClient {
     if (this.disposed) return;
     this.disposed = true;
     this.clearFrameTimeout();
+    if (this.initializeTimeoutId != null) clearTimeout(this.initializeTimeoutId);
+    this.initializeTimeoutId = null;
     this.ready = false;
     this.busy = false;
     const worker = this.worker;
+    if (this.initializeReject) {
+      const reject = this.initializeReject;
+      this.initializeReject = null;
+      const error = typeof DOMException === 'function'
+        ? new DOMException('Anime4K 初始化已取消', 'AbortError')
+        : Object.assign(new Error('Anime4K 初始化已取消'), { name: 'AbortError' });
+      reject(error);
+    }
     try { worker?.postMessage({ type: 'dispose' }); } catch (_) { /* worker may already be gone */ }
-    // Give the worker a short window to unconfigure the canvas and destroy the
-    // GPUDevice. Immediate terminate skips its cleanup handler and retains large
-    // driver allocations until Chromium eventually trims the GPU process.
-    if (worker) setTimeout(() => worker.terminate(), 200);
-    this.worker = null;
+    // Wait for the worker to drain submitted GPU work, unconfigure the canvas and
+    // acknowledge resource destruction. A bounded fallback still handles a hung
+    // driver or a worker that failed before installing its message handler.
+    if (worker) this.disposeTimeoutId = setTimeout(() => this.finalizeWorker(worker), 1000);
   }
 }
 

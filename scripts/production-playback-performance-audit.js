@@ -1,13 +1,12 @@
-const { execFile, spawn } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { promisify } = require('node:util');
 const { CdpClient, waitFor } = require('./playback-e2e-smoke');
+const { sampleProcessTree, stopProcessTree } = require('./audit-process-tree');
 
-const execFileAsync = promisify(execFile);
 const workspace = path.resolve(__dirname, '..');
 // 支持通过 SAKURAFALL_AUDIT_EXECUTABLE 指定打包产物（如 dist-app-v2），
 // 避免主输出目录被 IDE 索引器等占用时无法重新构建。
@@ -38,10 +37,6 @@ function seedDatabase() {
   }
 }
 
-function powershellLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 async function fetchTargets() {
   const response = await fetch(`${debugUrl}/json/list`);
   if (!response.ok) throw new Error(`DevTools target request failed: HTTP ${response.status}`);
@@ -49,36 +44,11 @@ async function fetchTargets() {
 }
 
 async function sampleProcesses() {
-  const script = `
-$targetPath = ${powershellLiteral(executable)}
-$matches = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $targetPath })
-$rows = @()
-foreach ($item in $matches) {
-  $process = Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
-  if ($null -ne $process) {
-    $rows += [pscustomobject]@{
-      pid = $process.Id
-      role = if ($item.CommandLine -match '--type=gpu-process') { 'gpu' } elseif ($item.CommandLine -match '--type=renderer') { 'renderer' } elseif ($item.CommandLine -match '--utility-sub-type=audio') { 'audio' } elseif ($item.CommandLine -match '--type=utility') { 'utility' } else { 'main' }
-      workingSetMB = [math]::Round($process.WorkingSet64 / 1MB, 2)
-      privateMB = [math]::Round($process.PrivateMemorySize64 / 1MB, 2)
-      cpuSeconds = [math]::Round($process.CPU, 3)
-    }
-  }
-}
-[pscustomobject]@{
-  processCount = $rows.Count
-  workingSetMB = [math]::Round(($rows | Measure-Object workingSetMB -Sum).Sum, 2)
-  privateMB = [math]::Round(($rows | Measure-Object privateMB -Sum).Sum, 2)
-  cpuSeconds = [math]::Round(($rows | Measure-Object cpuSeconds -Sum).Sum, 3)
-  processes = $rows
-} | ConvertTo-Json -Depth 4 -Compress
-`;
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
-    encoding: 'utf8',
-    windowsHide: true,
-    maxBuffer: 1024 * 1024
+  return sampleProcessTree({
+    rootPid: _child?.pid,
+    executable,
+    marker: `--smoke-user-data=${userData}`
   });
-  return JSON.parse(stdout.trim());
 }
 
 async function rendererMetrics(page) {
@@ -330,13 +300,11 @@ async function soakInteraction(page, kind) {
 }
 
 async function stopApp() {
-  const script = `
-$targetPath = ${powershellLiteral(executable)}
-Get-CimInstance Win32_Process |
-  Where-Object { $_.ExecutablePath -eq $targetPath } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-`;
-  await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }).catch(() => {});
+  await stopProcessTree({
+    rootPid: _child?.pid,
+    executable,
+    marker: `--smoke-user-data=${userData}`
+  });
 }
 
 function delta(after, before) {

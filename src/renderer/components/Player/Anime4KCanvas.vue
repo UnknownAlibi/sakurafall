@@ -10,8 +10,8 @@
 
 <script>
 import {
-  canUseWebgpuAnime4k,
-  createAnime4kWebgpuPipeline
+  Anime4kWebgpuClient,
+  canUseWebgpuAnime4k
 } from '../../player/anime4kWebgpuClient.js';
 import { isNearLoopEnd, isSourceStarved } from '../../player/anime4kWatchdog.js';
 
@@ -61,6 +61,7 @@ export default {
   mounted() {
     this._lifecycleGeneration = 0;
     this._canvasTransferred = false;
+    this._pendingEngine = null;
     this._fullscreenHandler = () => this.syncDisplaySize();
     document.addEventListener('fullscreenchange', this._fullscreenHandler);
     if (this.enabled) this.start();
@@ -207,7 +208,7 @@ export default {
       if (!canUseWebgpuAnime4k()) throw new Error('当前 Electron 不支持完整的 WebGPU Worker 视频管线');
       const target = canvas.parentElement;
       this._canvasTransferred = true;
-      return createAnime4kWebgpuPipeline(canvas, {
+      const engine = new Anime4kWebgpuClient(canvas, {
         preset: requestedPreset,
         inputWidth: video.videoWidth,
         inputHeight: video.videoHeight,
@@ -246,6 +247,15 @@ export default {
           if (generation === this._lifecycleGeneration) this.handleWebgpuFailure(error);
         }
       });
+      this._pendingEngine = engine;
+      try {
+        return await engine.initialize();
+      } catch (error) {
+        engine.dispose();
+        throw error;
+      } finally {
+        if (this._pendingEngine === engine) this._pendingEngine = null;
+      }
     },
     async start() {
       const generation = ++this._lifecycleGeneration;
@@ -349,6 +359,10 @@ export default {
         try { this.engine.dispose?.(); } catch (_) { /* GPU context may already be gone */ }
       }
       this.engine = null;
+      if (this._pendingEngine) {
+        try { this._pendingEngine.dispose?.(); } catch (_) { /* initialization may already be aborting */ }
+      }
+      this._pendingEngine = null;
       this.video?.classList.remove('anime4k-display-safe');
       this.displaySafeMode = false;
       this.backend = '';

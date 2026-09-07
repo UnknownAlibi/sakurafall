@@ -54,7 +54,7 @@ test('fullscreen keeps the WebGPU worker path and uses non-blocking display enha
   const start = source.slice(source.indexOf('async start()'), source.indexOf('cleanupRuntime() {', source.indexOf('async start()')));
   assert.match(start, /createWebgpuBackend/);
   assert.doesNotMatch(start, /createWebglBackend/);
-  assert.match(source, /createAnime4kWebgpuPipeline/);
+  assert.match(source, /new Anime4kWebgpuClient/);
   assert.match(source, /webgpu-worker/);
   assert.match(source, /anime4k-display-safe/);
   assert.match(source, /fullscreenchange/);

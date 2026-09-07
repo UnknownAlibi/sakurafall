@@ -1,15 +1,14 @@
 // S2 诊断探针：在打包应用中复刻 audit:playback 的 Anime4K 激活场景，
 // 以 100ms 分辨率采样视频健康度与 CNN 运行时，捕捉看门狗触发的时间线。
 // 运行: node scripts/probe-anime4k-packaged.js
-const { execFile, spawn } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { promisify } = require('node:util');
 const { CdpClient, waitFor } = require('./playback-e2e-smoke');
+const { sampleProcessTree, stopProcessTree } = require('./audit-process-tree');
 
-const execFileAsync = promisify(execFile);
 const workspace = path.resolve(__dirname, '..');
 // SAKURAFALL_PROBE_DEV=1 时挂到开发态真实应用（electron . + Vite 渲染层），
 // 用于区分"应用代码问题"与"打包环境问题"
@@ -40,10 +39,6 @@ function seedDatabase() {
   }
 }
 
-function powershellLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 async function fetchTargets() {
   const response = await fetch(`${debugUrl}/json/list`);
   if (!response.ok) throw new Error(`DevTools target request failed: HTTP ${response.status}`);
@@ -51,30 +46,12 @@ async function fetchTargets() {
 }
 
 async function sampleProcesses() {
-  const script = `
-$targetPath = ${powershellLiteral(executable)}
-$matches = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $targetPath })
-$rows = @()
-foreach ($item in $matches) {
-  $process = Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue
-  if ($null -ne $process) {
-    $rows += [pscustomobject]@{
-      pid = $process.Id
-      role = if ($item.CommandLine -match '--type=gpu-process') { 'gpu' } elseif ($item.CommandLine -match '--type=renderer') { 'renderer' } elseif ($item.CommandLine -match '--type=utility') { 'utility' } else { 'main' }
-      workingSetMB = [math]::Round($process.WorkingSet64 / 1MB, 2)
-      cpuSeconds = [math]::Round($process.CPU, 3)
-    }
-  }
-}
-@($rows) | ConvertTo-Json -Depth 3 -Compress
-`;
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], {
-    encoding: 'utf8',
-    windowsHide: true,
-    maxBuffer: 1024 * 1024
+  const snapshot = await sampleProcessTree({
+    rootPid: _child?.pid,
+    executable,
+    marker: `--smoke-user-data=${userData}`
   });
-  const parsed = JSON.parse(stdout.trim());
-  return Array.isArray(parsed) ? parsed : [parsed];
+  return snapshot.processes;
 }
 
 // 播放器窗口内的高频采样：视频健康度 + Anime4K 运行时 + 节流/GPU 诊断维度。
@@ -175,13 +152,11 @@ async function setAnime4k(page, enabled) {
 }
 
 async function stopApp() {
-  const script = `
-$targetPath = ${powershellLiteral(executable)}
-Get-CimInstance Win32_Process |
-  Where-Object { $_.ExecutablePath -eq $targetPath } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-`;
-  await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true }).catch(() => {});
+  await stopProcessTree({
+    rootPid: _child?.pid,
+    executable,
+    marker: `--smoke-user-data=${userData}`
+  });
 }
 
 function summarizePhase(phase) {
