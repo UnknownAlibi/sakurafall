@@ -26,6 +26,8 @@ try {
     "mkdir -p '$release'"
     "tar -xzf '$remoteArchive' -C '$release'"
     "chown -R sakurafall:sakurafall '$release'"
+    'install -d -o sakurafall -g sakurafall -m 0750 /var/lib/sakurafall'
+    'install -d -o sakurafall -g sakurafall -m 0750 /var/lib/sakurafall/releases'
     "ln -sfn '$release/server' /opt/sakurafall/server"
     'systemctl restart sakurafall'
     'sleep 2'

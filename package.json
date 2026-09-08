@@ -34,6 +34,7 @@
     "smoke:upgrade": "node scripts/smoke-database-upgrade.js",
     "smoke:webgpu": "electron scripts/smoke-webgpu.js",
     "release": "node scripts/release.js",
+    "release:prepared": "node scripts/release.js --skip-build",
     "verify:release": "npm run verify && npm run build && npm run smoke:packaged && npm run smoke:packaged:offline && npm run smoke:installer"
   },
   "keywords": [

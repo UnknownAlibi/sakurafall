@@ -123,6 +123,11 @@ async function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
   const version = pkg.version;
 
+  if (!args.notes && !args.notesFile) {
+    const defaultNotes = path.join(process.cwd(), 'docs', `release-notes-${version}.md`);
+    if (fs.existsSync(defaultNotes)) args.notesFile = defaultNotes;
+  }
+
   if (args.notesFile) {
     args.notes = fs.readFileSync(path.resolve(args.notesFile), 'utf8').trim();
   }
