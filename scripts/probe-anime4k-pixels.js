@@ -21,6 +21,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { CdpClient, waitFor } = require('./playback-e2e-smoke');
 const { stopProcessTree } = require('./audit-process-tree');
+const summarizePlaybackSamples = require('./summarize-playback-samples');
 
 const workspace = path.resolve(__dirname, '..');
 const executable = process.env.SAKURAFALL_AUDIT_EXECUTABLE
@@ -461,9 +462,12 @@ async function main() {
     }
 
     report.summary = summarize(report.samples);
+    for (const key of ['playbackRate', 'steadyPlaybackRate', 'steadyCnnPresentRate', 'decodedFrames']) delete report.summary[key];
+    report.timing = summarizePlaybackSamples(report.samples);
     fs.writeFileSync(outputPath, JSON.stringify(report, null, 2), 'utf8');
     console.log('[pixel audit] interactions', JSON.stringify(report.interactionCounts));
     console.log('[pixel audit] summary', JSON.stringify(report.summary, null, 2));
+    console.log('[pixel audit] adjacent timing', JSON.stringify(report.timing, null, 2));
     return report;
   } finally {
     playerPage?.close();

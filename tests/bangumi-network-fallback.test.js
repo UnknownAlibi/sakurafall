@@ -29,6 +29,34 @@ test('BangumiApi keeps the learned mirror when identical settings are reapplied'
   assert.equal(api._preferredMirrorBase, 'https://mirror.example.com');
 });
 
+test('cancelling detail requests neither retries mirrors nor penalizes endpoint health', async () => {
+  let accepted;
+  const arrived = new Promise(resolve => { accepted = resolve; });
+  const primary = await createServer(() => accepted());
+  const mirror = await createServer((_req, res) => res.end('{}'));
+  const api = new BangumiApi();
+  api.defaultBaseUrl = primary.baseUrl;
+  api.baseUrl = primary.baseUrl;
+  api.publicApiMirrors = [mirror.baseUrl];
+  api._mirrorScore = base => base === primary.baseUrl ? 100 : 0;
+  let failures = 0;
+  api._markBaseFailure = () => failures++;
+  const controller = new AbortController();
+  try {
+    const pending = assert.rejects(api.getDetail(1, { signal: controller.signal }), { name: 'AbortError' });
+    await arrived;
+    controller.abort();
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 350));
+    assert.equal(primary.hits(), 1);
+    assert.equal(mirror.hits(), 0);
+    assert.equal(failures, 0);
+  } finally {
+    await primary.close();
+    await mirror.close();
+  }
+});
+
 test('BangumiApi shares one failed endpoint probe across concurrent requests', async () => {
   const unavailable = await createServer((_req, res) => {
     setTimeout(() => {

@@ -61,6 +61,11 @@ export default {
     this._detailReturnTo = null;
   },
 
+  beforeUnmount() {
+    this._detailController?.abort();
+    this._detailRequestToken += 1;
+  },
+
   methods: {
     /**
      * 判断动漫是否已收藏
@@ -173,6 +178,8 @@ export default {
      */
     async viewAnimeDetail(anime) {
       const detailToken = ++this._detailRequestToken;
+      this._detailController?.abort();
+      this._detailController = new AbortController();
       const isActive = () => detailToken === this._detailRequestToken;
       const perfMark = window.__perf?.start('detail-metadata');
       let perfEnded = false;
@@ -181,6 +188,7 @@ export default {
       try {
         await coordinateSubjectDetail({
           anime,
+          signal: this._detailController.signal,
           isActive,
           loadLegacyDetail: item => this.loadLegacySourceDetail(item),
           onStage: (detail, context = {}) => {
@@ -245,6 +253,7 @@ export default {
      * 若是带 returnTo 跳转过来的（如「发现」页），关闭后回到来源页。
      */
     closeDetail() {
+      this._detailController?.abort();
       this._detailRequestToken += 1;
       this._playRequestToken += 1;
       const pendingPlayerWindowId = this._pendingPlayerWindowId;

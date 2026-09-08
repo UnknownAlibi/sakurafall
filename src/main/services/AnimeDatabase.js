@@ -9,7 +9,7 @@ const {
     toPositiveInteger
 } = require('../utils/playHistoryIdentity');
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 10;
 
 class AnimeDatabase {
     constructor() {
@@ -395,6 +395,17 @@ class AnimeDatabase {
                 run: () => {
                     this._addColumnIfNotExists('bangumi_subjects', 'detail_updated_at', 'INTEGER');
                 }
+            },
+            {
+                // v9 早期开发构建遗漏字段白名单，却可能已经推进 user_version。
+                // v10 幂等补齐字段，使运行过该构建的本地数据库自动恢复。
+                version: 10,
+                run: () => {
+                    this._addColumnIfNotExists('bangumi_subjects', 'detail_updated_at', 'INTEGER');
+                    if (!this._hasColumn('bangumi_subjects', 'detail_updated_at')) {
+                        throw new Error('迁移后缺少字段 bangumi_subjects.detail_updated_at');
+                    }
+                }
             }
         ];
 
@@ -739,7 +750,7 @@ class AnimeDatabase {
         const allowedColumns = {
             favorites: ['last_episode', 'last_episode_index', 'updated_at', 'bgm_id'],
             play_history: ['play_position', 'bgm_id'],
-            bangumi_subjects: ['platform'],
+            bangumi_subjects: ['platform', 'detail_updated_at'],
             // 手帐 P1：分类标记（v7 迁移）
             viewing_notes: ['category']
         };

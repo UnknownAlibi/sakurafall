@@ -118,6 +118,7 @@ class HttpClient {
       method,
       referer: options.referer !== undefined ? options.referer : this.defaultReferer,
       charset: options.charset || this.defaultCharset,
+      responseType: options.responseType === 'buffer' ? 'buffer' : 'text',
       timeout: options.timeout || this.timeout,
       maxResponseBytes: options.maxResponseBytes || this.maxResponseBytes,
       headers: this._stableObject(options.headers || {}),
@@ -241,7 +242,8 @@ class HttpClient {
           try {
             const buffer = Buffer.concat(chunks);
             const encoding = (res.headers['content-encoding'] || '').toLowerCase();
-            const decode = (buf) => this._decodeCharset(buf, res.headers['content-type'], charset);
+            const decode = (buf) => options.responseType === 'buffer'
+              ? buf : this._decodeCharset(buf, res.headers['content-type'], charset);
 
             if (encoding === 'gzip') {
               zlib.gunzip(buffer, { maxOutputLength: maxResponseBytes }, (err, decoded) => {

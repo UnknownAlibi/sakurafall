@@ -16,6 +16,7 @@ import {
   getCachedImageUrlSync,
   getRemoteImagePreviewUrl,
   isCacheableImageUrl,
+  reprioritizeImageCache,
   resolveCachedImageUrl
 } from '../../utils/imageCache.js';
 
@@ -28,6 +29,17 @@ const LAZY_ROOT_MARGIN = '900px 0px';
 // 元素被回收后条目自动失效。
 const lazyObservers = new Map();
 const lazyCallbacks = new WeakMap();
+const visibilityCallbacks = new WeakMap();
+let visibilityObserver;
+
+function observeVisibility(element, callback) {
+  if (typeof IntersectionObserver === 'undefined') return;
+  if (!visibilityObserver) visibilityObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) visibilityCallbacks.get(entry.target)?.(entry.isIntersecting);
+  });
+  visibilityCallbacks.set(element, callback);
+  visibilityObserver.observe(element);
+}
 
 function getLazyObserver(rootMargin) {
   let observer = lazyObservers.get(rootMargin);
@@ -89,7 +101,10 @@ export default {
       pendingErrorEvent: null,
       originalLoaded: false,
       remoteDisplaySrc: '',
-      cacheResolveTimer: null
+      cacheResolveTimer: null,
+      cacheController: null,
+      cachePriority: 'visible',
+      cacheRequestSource: ''
     };
   },
   computed: {
@@ -122,6 +137,12 @@ export default {
     this.queueImageLoad();
   },
   beforeUnmount() {
+    this.cacheController?.abort();
+    const element = this.$refs.imageEl;
+    if (element) {
+      visibilityObserver?.unobserve(element);
+      visibilityCallbacks.delete(element);
+    }
     this.stopLazyObserver();
     this.clearCacheResolveTimer();
     this.requestToken++;
@@ -134,6 +155,15 @@ export default {
   },
   methods: {
     queueImageLoad() {
+      const oldElement = this.$refs.imageEl;
+      if (oldElement) {
+        visibilityObserver?.unobserve(oldElement);
+        visibilityCallbacks.delete(oldElement);
+      }
+      this.cacheController?.abort();
+      this.cacheController = new AbortController();
+      this.cacheRequestSource = '';
+      this.cachePriority = this.shouldLazyLoad ? 'prefetch' : 'visible';
       const rawSource = String(this.src || '').trim();
       // local 模式下把云服务代理 URL（…/cover?url=…）解包成直连原图；
       // 但 local 模式新拉取的列表本来就是直连 URL（lain.bgm.tv 等），
@@ -159,6 +189,13 @@ export default {
       this.clearCacheResolveTimer();
       this.stopLazyObserver();
       if (!source) return;
+      this.$nextTick(() => {
+        if (token !== this.requestToken || !this.$refs.imageEl) return;
+        observeVisibility(this.$refs.imageEl, visible => {
+          this.cachePriority = visible ? 'visible' : 'prefetch';
+          if (this.cacheRequestSource) reprioritizeImageCache(this.cacheRequestSource, this.cacheOptions, this.cachePriority);
+        });
+      });
 
       if (this.shouldLazyLoad && this.shouldResolveCacheAsync && typeof IntersectionObserver !== 'undefined') {
         this.$nextTick(() => {
@@ -192,7 +229,7 @@ export default {
       if (canUseCache && this.shouldResolveCacheAsync && this.shouldPreferCachedVariant) {
         this.remoteDisplaySrc = getRemoteImagePreviewUrl(source, this.cacheOptions) || source;
         this.displaySrc = this.remoteDisplaySrc;
-        // 持久化到应用磁盘缓存（LRU 2000 条/300MB，主进程队列限流 4 并发）：
+        // 持久化到应用磁盘缓存；跨窗口队列限流，卸载时撤销当前消费者。
         // 懒加载卡片也需入队，否则只有首屏封面落盘，重启后其余封面全部
         // 重新走慢速图床。延迟错开避免抢占当前视口的加载；组件销毁时
         // requestToken 失效 + 定时器清理，不会泄漏旧实例。
@@ -208,7 +245,7 @@ export default {
       // 3. 后台查询缓存（未命中会触发主进程下载并存储）
       //    期间原图可能加载失败，onError 会暂存 error 事件等这里处理
       this.cacheResolvePending = true;
-      const cachedUrl = await resolveCachedImageUrl(source, this.cacheOptions);
+      const cachedUrl = await this.requestCachedImage(source);
       if (token !== this.requestToken) return;
       this.cacheResolvePending = false;
       this.cachedFallbackSrc = cachedUrl || source;
@@ -243,6 +280,13 @@ export default {
       this.cacheResolveTimer = null;
     },
 
+    requestCachedImage(source) {
+      this.cacheRequestSource = source;
+      return resolveCachedImageUrl(source, {
+        ...this.cacheOptions, signal: this.cacheController?.signal, priority: this.cachePriority
+      });
+    },
+
     async resolveCacheFallback(source, token, errorEvent = null) {
       if (this.cacheResolvePending) {
         if (errorEvent) this.pendingErrorEvent = errorEvent;
@@ -250,7 +294,7 @@ export default {
       }
       this.cacheResolvePending = true;
       if (errorEvent) this.pendingErrorEvent = errorEvent;
-      const cachedUrl = await resolveCachedImageUrl(source, this.cacheOptions);
+      const cachedUrl = await this.requestCachedImage(source);
       if (token !== this.requestToken) return;
       this.cacheResolvePending = false;
       this.cachedFallbackSrc = cachedUrl || source;

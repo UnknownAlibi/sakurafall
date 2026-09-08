@@ -7,6 +7,7 @@ const zlib = require('zlib');
 const { pathToFileURL } = require('url');
 const HttpsProxyAgent = require('https-proxy-agent');
 const HostTaskQueue = require('../utils/hostTaskQueue');
+const SharedRequests = require('../utils/sharedRequests');
 
 const DEFAULT_TIMEOUT = 12000;
 const DEFAULT_MAX_ENTRIES = 2000;
@@ -38,7 +39,7 @@ class ImageCacheService {
     this.imageProcessor = options.imageProcessor || null;
     this.publicUrlResolver = options.publicUrlResolver || null;
     this._proxyAgent = null;
-    this.pending = new Map();
+    this.requests = new SharedRequests();
     this.downloadQueue = new HostTaskQueue();
     this.proxyFallbackCooldownUntil = new Map();
     this.proxyFallbackCooldownMs = 60 * 1000;
@@ -162,13 +163,22 @@ class ImageCacheService {
       return this._toResult(existing, normalizedUrl, true);
     }
 
-    if (this.pending.has(key)) return this.pending.get(key);
-    const promise = this.downloadQueue.run(new URL(normalizedUrl).host,
-      () => this._downloadAndStore(normalizedUrl, key, variant))
-      .catch(error => ({ success: false, error: error.message, originalUrl: normalizedUrl }))
-      .finally(() => this.pending.delete(key));
-    this.pending.set(key, promise);
-    return promise;
+    const request = this.requests.run(key, scheduling => this.downloadQueue.run(new URL(normalizedUrl).host,
+      async () => {
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        if (scheduling.signal.aborted) abort();
+        scheduling.signal.addEventListener('abort', abort, { once: true });
+        const timer = setTimeout(abort, 25000);
+        try { return await this._downloadAndStore(normalizedUrl, key, variant, controller.signal); }
+        finally {
+          clearTimeout(timer);
+          scheduling.signal.removeEventListener('abort', abort);
+        }
+      }, scheduling), { signal: options?.signal, priority: options?.priority, canRun: options?.canRun })
+      .catch(error => ({ success: false, error: error.message, originalUrl: normalizedUrl }));
+    this.downloadQueue.pump();
+    return request;
   }
 
   /**
@@ -316,8 +326,9 @@ class ImageCacheService {
     };
   }
 
-  async _downloadAndStore(url, key, variant = { type: 'original' }) {
+  async _downloadAndStore(url, key, variant = { type: 'original' }, signal) {
     try {
+      signal?.throwIfAborted();
       let response;
       let receivedUpstreamThumbnail = false;
       const originalEntry = variant.type === 'thumbnail'
@@ -334,10 +345,11 @@ class ImageCacheService {
         for (const attempt of attempts) {
           try {
             const timeout = attempt.proxy ? Math.min(2000, this.timeout) : this.timeout;
-            response = await this._fetchBuffer(attempt.url, 0, timeout);
+            response = await this._fetchBuffer(attempt.url, 0, timeout, signal);
             receivedUpstreamThumbnail = attempt.resized;
             break;
           } catch (error) {
+            signal?.throwIfAborted();
             lastError = error;
             if (attempt.proxy) this._markProxyFallbackFailure(url);
           }
@@ -345,6 +357,7 @@ class ImageCacheService {
         if (!response) throw lastError || new Error('image request failed');
       }
       let storedBuffer = response.buffer;
+      signal?.throwIfAborted();
       let storedContentType = response.contentType || '';
       let ext = this._extensionFor(url, response.contentType);
 
@@ -360,6 +373,7 @@ class ImageCacheService {
       }
 
       const fileName = `${key}${ext}`;
+      signal?.throwIfAborted();
       const filePath = path.join(this.cacheDir, fileName);
       const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 
@@ -468,7 +482,11 @@ class ImageCacheService {
     return this._proxyAgent;
   }
 
-  _fetchBuffer(url, redirectCount = 0, timeoutMs = this.timeout) {
+  _fetchBuffer(url, redirectCount = 0, timeoutMs = this.timeout, signal) {
+    if (process.env.SAKURAFALL_OFFLINE_MODE === '1' &&
+        !['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname)) {
+      return Promise.reject(new Error('Offline mode: remote cover requests are disabled'));
+    }
     if (redirectCount > MAX_REDIRECTS) {
       return Promise.reject(new Error(`too many redirects: ${MAX_REDIRECTS}`));
     }
@@ -481,7 +499,7 @@ class ImageCacheService {
         'Accept-Encoding': 'gzip, deflate, br',
         'Referer': this._refererFor(url)
       };
-      const reqOptions = { headers, timeout: timeoutMs };
+      const reqOptions = { headers, timeout: timeoutMs, signal };
       if (this._shouldUseProxy(url)) {
         reqOptions.agent = this._getProxyAgent();
       }
@@ -490,7 +508,7 @@ class ImageCacheService {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
           const nextUrl = new URL(res.headers.location, url).toString();
-          this._fetchBuffer(nextUrl, redirectCount + 1, timeoutMs).then(resolve).catch(reject);
+          this._fetchBuffer(nextUrl, redirectCount + 1, timeoutMs, signal).then(resolve).catch(reject);
           return;
         }
 

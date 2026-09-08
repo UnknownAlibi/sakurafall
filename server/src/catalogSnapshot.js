@@ -79,6 +79,8 @@ class CatalogSnapshotService {
     this._bulkIngest = false;
     this._closed = false;
     this._payloadCache = new Map();
+    this._payloadCacheBytes = 0;
+    this.payloadCacheMaxBytes = Math.max(1024, Number(options.payloadCacheMaxBytes) || 96 * 1024 * 1024);
     this._load();
   }
 
@@ -121,7 +123,7 @@ class CatalogSnapshotService {
     if (changed > 0) {
       this.generatedAt = Math.max(this.generatedAt, observedAt);
       this._dirty = true;
-      this._payloadCache.clear();
+      this._clearPayloadCache();
       if (!this._bulkIngest) this._scheduleWrite();
     }
     return changed;
@@ -161,7 +163,11 @@ class CatalogSnapshotService {
     const safeSince = Math.max(0, Number(since) || 0);
     const key = safeSince > 0 ? `delta:${safeSince}` : 'full';
     const cached = this._payloadCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      this._payloadCache.delete(key);
+      this._payloadCache.set(key, cached);
+      return cached;
+    }
     const subjects = [];
     for (const record of this.records.values()) {
       if (safeSince > 0 && record.updatedAt <= safeSince) continue;
@@ -178,9 +184,23 @@ class CatalogSnapshotService {
     const gzip = zlib.gzipSync(body, { level: 6 });
     const etag = `\"${crypto.createHash('sha1').update(gzip).digest('hex')}\"`;
     const result = { body, gzip, etag };
-    this._payloadCache.set(key, result);
-    if (this._payloadCache.size > 8) this._payloadCache.delete(this._payloadCache.keys().next().value);
+    const bytes = body.byteLength + gzip.byteLength;
+    if (bytes <= this.payloadCacheMaxBytes) {
+      while (this._payloadCache.size && (this._payloadCache.size >= 8 || this._payloadCacheBytes + bytes > this.payloadCacheMaxBytes)) {
+        const oldest = this._payloadCache.keys().next().value;
+        const evicted = this._payloadCache.get(oldest);
+        this._payloadCacheBytes -= evicted.body.byteLength + evicted.gzip.byteLength;
+        this._payloadCache.delete(oldest);
+      }
+      this._payloadCache.set(key, result);
+      this._payloadCacheBytes += bytes;
+    }
     return result;
+  }
+
+  _clearPayloadCache() {
+    this._payloadCache.clear();
+    this._payloadCacheBytes = 0;
   }
 
   handle(req, res, url) {
@@ -241,37 +261,52 @@ class CatalogSnapshotService {
   }
 
   async _runWarm(fetchPage) {
-    this._bulkIngest = true;
-    let completed = false;
-    try {
-      for (const category of DEFAULT_CATEGORIES) {
-        let offset = 0;
-        let total = Number.POSITIVE_INFINITY;
-        while (offset < total && offset <= 10_000) {
-          if (this._closed) return { skipped: true };
-          const page = await fetchPage({ category, limit: this.pageSize, offset });
-          if (this._closed) return { skipped: true };
-          const items = Array.isArray(page?.data)
-            ? page.data.map(item => ({ ...item, platform: item.platform || CATEGORY_PLATFORM[category] || '' }))
-            : [];
-          total = Math.max(0, Number(page?.total) || items.length);
-          if (total > 10_000 + this.pageSize) throw new Error('Catalog category exceeds scan range');
-          this.ingest(items);
-          if (items.length === 0 && offset < total) throw new Error('Catalog returned an incomplete page');
-          if (items.length === 0) break;
-          offset += this.pageSize;
-          if (offset < total) await new Promise(resolve => setTimeout(resolve, this.warmDelayMs));
+    // Keep published data unchanged until every category has a complete scan.
+    const staged = new Map();
+    for (const category of DEFAULT_CATEGORIES) {
+      let offset = 0;
+      let total = Number.POSITIVE_INFINITY;
+      const seen = new Set();
+      while (offset < total && offset <= 10_000) {
+        if (this._closed) return { skipped: true };
+        const observedAt = this.generatedAt;
+        const page = await fetchPage({ category, limit: this.pageSize, offset });
+        if (this._closed) return { skipped: true };
+        const items = Array.isArray(page?.data)
+          ? page.data.map(item => ({ ...item, platform: item.platform || CATEGORY_PLATFORM[category] || '' }))
+          : [];
+        const nextTotal = Number(page?.total);
+        if (!Number.isSafeInteger(nextTotal) || nextTotal < 0) throw new Error('Catalog returned an invalid total');
+        if (Number.isFinite(total) && nextTotal !== total) throw new Error('Catalog total changed during scan');
+        total = nextTotal;
+        if (total > 10_000 + this.pageSize) throw new Error('Catalog category exceeds scan range');
+        if (items.length === 0 && offset < total) throw new Error('Catalog returned an incomplete page');
+        if (offset + items.length > total) throw new Error('Catalog page exceeds reported total');
+        for (const item of items) {
+          const id = Number(item.id || item.bgm_id || item.bgmId);
+          if (!isSubject(item) || !Number.isSafeInteger(id) || seen.has(id)) throw new Error('Catalog returned an invalid or repeated subject');
+          seen.add(id);
+          staged.set(id, { subject: item, observedAt });
         }
+        if (items.length === 0) break;
+        offset += items.length;
+        if (offset < total) await new Promise(resolve => setTimeout(resolve, this.warmDelayMs));
       }
-      completed = true;
+      if (offset !== total) throw new Error('Catalog scan ended before reported total');
+    }
+    if (this._closed) return { skipped: true };
+    this._bulkIngest = true;
+    try {
+      this.ingest([...staged.entries()]
+        .filter(([id, record]) => (this.records.get(id)?.updatedAt || 0) <= record.observedAt)
+        .map(([, record]) => record.subject));
     } finally {
       this._bulkIngest = false;
-      if (!completed && this._dirty) this.flush();
     }
     this.lastFullWarmAt = Date.now();
     this.generatedAt = Math.max(this.generatedAt, this.lastFullWarmAt);
     this._dirty = true;
-    this._payloadCache.clear();
+    this._clearPayloadCache();
     this.flush();
     return { total: this.records.size, generatedAt: this.generatedAt };
   }

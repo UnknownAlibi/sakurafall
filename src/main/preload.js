@@ -202,6 +202,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 缓存操作
     clearCache: () => ipcRenderer.invoke('clear-cache'),
     imageCacheGetCover: (url, options) => ipcRenderer.invoke('image-cache-get-cover', url, options),
+    imageCacheUpdateRequest: (id, action) => ipcRenderer.invoke('image-cache-update-request', id, action),
+    imageCacheSetPressure: paused => ipcRenderer.invoke('image-cache-set-pressure', Boolean(paused)),
     imageCacheBatchLookup: (urls, options) => ipcRenderer.invoke('image-cache-batch-lookup', urls, options),
     imageCacheGetAll: () => ipcRenderer.invoke('image-cache-get-all'),
 
@@ -234,7 +236,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     subjectSearch: (keyword, page) => ipcRenderer.invoke('subject-search', keyword, page),
     subjectCatalog: (options) => ipcRenderer.invoke('subject-catalog', options),
     subjectBrowse: (options) => ipcRenderer.invoke('subject-browse', options),
-    subjectDetail: (bgmId) => ipcRenderer.invoke('subject-detail', bgmId),
+    subjectDetail: (bgmId, options) => ipcRenderer.invoke('subject-detail', bgmId, options),
+    subjectDetailCancel: id => ipcRenderer.invoke('subject-detail-cancel', id),
     subjectEpisodes: (bgmId, options) => ipcRenderer.invoke('subject-episodes', bgmId, options),
 
     // SubjectIndexService（P0：本地 Bangumi 索引，本地查询为主）

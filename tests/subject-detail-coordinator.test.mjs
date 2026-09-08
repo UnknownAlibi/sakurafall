@@ -1,19 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { coordinateSubjectDetail, createDetailPlaceholder, isSettledDetailStage } from '../src/renderer/services/subjectDetailCoordinator.js';
+import { requestSubjectDetail } from '../src/renderer/services/subjectDetailRequest.js';
 
-const episodeMetadataSource = await readFile(
-  new URL('../src/renderer/utils/episodeMetadata.js', import.meta.url),
-  'utf8'
-);
-const episodeMetadataUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(episodeMetadataSource)}`;
-const coordinatorSource = (await readFile(
-  new URL('../src/renderer/services/subjectDetailCoordinator.js', import.meta.url),
-  'utf8'
-)).replace("'../utils/episodeMetadata.js'", JSON.stringify(episodeMetadataUrl));
-const { coordinateSubjectDetail, createDetailPlaceholder, isSettledDetailStage } = await import(
-  `data:text/javascript;charset=utf-8,${encodeURIComponent(coordinatorSource)}`
-);
+test('detail request cancellation sends only an id and ignores a late result', async () => {
+  let complete;
+  const cancelled = [];
+  const api = {
+    subjectDetail: (_id, options) => {
+      structuredClone(options);
+      assert.equal('signal' in options, false);
+      return new Promise(resolve => { complete = resolve; });
+    },
+    subjectDetailCancel: async id => cancelled.push(id)
+  };
+  const controller = new AbortController();
+  const pending = requestSubjectDetail(api, 1, { signal: controller.signal });
+  await Promise.resolve();
+  controller.abort();
+  assert.equal(await pending, null);
+  complete({ name: 'obsolete' });
+  assert.equal(cancelled.length, 1);
+});
 
 test('only the completed detail stage is presented as the settled snapshot', () => {
   assert.equal(isSettledDetailStage({ phase: 'source' }), false);

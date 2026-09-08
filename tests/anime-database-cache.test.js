@@ -6,6 +6,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const Module = require('module');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // ── 拦截 require ──────────────────────────────────────
 const originalLoad = Module._load;
@@ -265,4 +267,13 @@ test('getCache: 内容损坏（非法 JSON）时返回 null 并删除脏数据',
   assert.strictEqual(result, null);
   // 脏数据应已被删除
   assert.strictEqual(db.db._cacheStore.find(r => r.cache_key === 'bad'), undefined);
+});
+
+test('declared schema version matches the highest migration', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/main/services/AnimeDatabase.js'), 'utf8');
+  const declared = Number(source.match(/const SCHEMA_VERSION = (\d+);/)?.[1]);
+  const migrations = [...source.matchAll(/\bversion:\s*(\d+),/g)].map(match => Number(match[1]));
+  assert.strictEqual(declared, Math.max(...migrations));
+  const bangumiAllowlist = source.match(/bangumi_subjects:\s*\[([^\]]+)\]/)?.[1] || '';
+  assert.match(bangumiAllowlist, /['"]detail_updated_at['"]/);
 });

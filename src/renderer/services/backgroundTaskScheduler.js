@@ -12,6 +12,7 @@ export class BackgroundTaskScheduler {
     this.pauses = new Set();
     this.active = 0;
     this.sequence = 0;
+    this.pressureListeners = new Set();
   }
 
   schedule({ key, group = 'default', priority = 50, delayMs = 0, idle = true, run }) {
@@ -31,6 +32,7 @@ export class BackgroundTaskScheduler {
       state: delayMs > 0 ? 'delayed' : 'queued',
       timer: null,
       idleHandle: null,
+      controller: new AbortController(),
       slotReleased: false,
       promise: new Promise((resolve, reject) => {
         resolveTask = resolve;
@@ -57,18 +59,39 @@ export class BackgroundTaskScheduler {
 
   pause(reason = 'manual') {
     this.pauses.add(reason);
+    this._notifyPressure();
   }
 
   resume(reason = 'manual') {
     this.pauses.delete(reason);
+    this._notifyPressure();
     this._pump();
+  }
+
+  subscribePressure(listener) {
+    this.pressureListeners.add(listener);
+    listener(this.pauses.size > 0);
+    return () => this.pressureListeners.delete(listener);
+  }
+
+  _notifyPressure() {
+    if (this._pressureQueued) return;
+    this._pressureQueued = true;
+    queueMicrotask(() => {
+      this._pressureQueued = false;
+      const paused = this.pauses.size > 0;
+      if (this._lastPressure === paused) return;
+      this._lastPressure = paused;
+      for (const listener of this.pressureListeners) listener(paused);
+    });
   }
 
   cancel(key) {
     const task = this.tasks.get(key);
-    if (!task || task.state === 'running') return false;
+    if (!task) return false;
     const wasWaiting = task.state === 'waiting';
     task.state = 'cancelled';
+    task.controller.abort();
     if (task.timer) clearTimeout(task.timer);
     if (task.idleHandle !== null && typeof globalThis.cancelIdleCallback === 'function') {
       globalThis.cancelIdleCallback(task.idleHandle);
@@ -119,11 +142,13 @@ export class BackgroundTaskScheduler {
           return;
         }
         task.state = 'running';
-        Promise.resolve().then(task.run)
+        Promise.resolve().then(() => {
+          if (!task.controller.signal.aborted) return task.run({ signal: task.controller.signal });
+        })
           .then(value => task.resolve(value), error => task.reject(error))
           .finally(() => {
             task.state = 'done';
-            this.tasks.delete(task.key);
+            if (this.tasks.get(task.key) === task) this.tasks.delete(task.key);
             this.active -= 1;
             this._pump();
           });

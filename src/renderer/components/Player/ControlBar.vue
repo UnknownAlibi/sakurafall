@@ -281,7 +281,7 @@
 
               <label class="settings-menu-row settings-toggle-row">
                 <span>
-                  <strong>Anime4K 实时增强</strong>
+                  <strong>Anime4K 实时增强（实验）</strong>
                   <small v-if="anime4kEnabled && anime4kActive">运行中 · 已验证增强帧输出</small>
                   <small v-else-if="anime4kEnabled && anime4kDegraded">兼容显示增强中 · CNN 当前未运行</small>
                   <small v-else-if="anime4kEnabled">正在初始化并验证 GPU 输出...</small>

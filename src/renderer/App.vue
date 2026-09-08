@@ -250,6 +250,9 @@ export default {
     }
   },
   async mounted() {
+    this._removeCoverPressure = backgroundTaskScheduler.subscribePressure(paused => {
+      window.electronAPI?.imageCacheSetPressure?.(paused)?.catch(() => {});
+    });
     // 软件渲染检测：GPU 被禁用（GpuGuard 降级）或极弱显卡时 WebGL 返回 SwiftShader，
     // 标记到 <html data-software-rendering>，CSS 层据此收缩动画开销
     let rendererProbeCanvas = null;
@@ -418,6 +421,7 @@ export default {
     this._mediaQuery.addEventListener('change', this.handleSystemThemeChange);
   },
   beforeUnmount() {
+    this._removeCoverPressure?.();
     document.removeEventListener('visibilitychange', this._handleVisibilityChange);
     backgroundTaskScheduler.resume('window-hidden');
     this._removePlaybackPressure?.();

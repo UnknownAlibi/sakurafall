@@ -178,7 +178,7 @@ class BangumiApi {
     const activeProbe = this._baseProbePromises.get(base);
     if (activeProbe) {
       const available = await activeProbe;
-      if (!available) {
+      if (available === false) {
         const error = new Error(`Bangumi endpoint unavailable: ${base}`);
         error.code = 'BANGUMI_BASE_UNAVAILABLE';
         throw error;
@@ -197,7 +197,7 @@ class BangumiApi {
       finishProbe(true);
       return result;
     } catch (error) {
-      finishProbe(false);
+      finishProbe(error?.name === 'AbortError' ? null : false);
       throw error;
     } finally {
       if (this._baseProbePromises.get(base) === probe) {
@@ -366,6 +366,7 @@ class BangumiApi {
    * 发起 HTTP 请求并解析 JSON
    */
   async _requestApiCandidate(candidate, candidates, options = {}) {
+    options.signal?.throwIfAborted();
     const base = this._baseOfUrl(candidate);
     const startedAt = Date.now();
     try {
@@ -399,7 +400,7 @@ class BangumiApi {
       this._markBaseSuccess(base, Date.now() - startedAt);
       return { data, candidate, base };
     } catch (error) {
-      if (error?.code !== 'BANGUMI_BASE_UNAVAILABLE') this._markBaseFailure(base);
+      if (error?.code !== 'BANGUMI_BASE_UNAVAILABLE' && error?.name !== 'AbortError' && !options.signal?.aborted) this._markBaseFailure(base);
       throw error;
     }
   }
@@ -416,6 +417,7 @@ class BangumiApi {
   }
 
   async request(url, options = {}) {
+    options.signal?.throwIfAborted();
     const candidates = this._buildApiCandidates(url, options);
     let lastError = null;
     let startIndex = 0;
@@ -442,6 +444,7 @@ class BangumiApi {
         winnerChosen = true;
         return this._acceptApiCandidate(result, url);
       } catch (aggregate) {
+        options.signal?.throwIfAborted();
         const errors = Array.isArray(aggregate?.errors) ? aggregate.errors : [];
         lastError = errors.find(error => error?.code !== 'HEDGE_CANCELLED') || aggregate;
         startIndex = 2;
@@ -449,11 +452,13 @@ class BangumiApi {
     }
 
     for (let index = startIndex; index < candidates.length; index += 1) {
+      options.signal?.throwIfAborted();
       const candidate = candidates[index];
       try {
         const result = await this._requestApiCandidate(candidate, candidates, options);
         return this._acceptApiCandidate(result, url);
       } catch (error) {
+        options.signal?.throwIfAborted();
         lastError = error;
         const skippedBySharedProbe = error?.code === 'BANGUMI_BASE_UNAVAILABLE';
         if (!skippedBySharedProbe && candidate !== candidates[candidates.length - 1]) {
@@ -693,7 +698,8 @@ class BangumiApi {
   /**
    * 获取番剧详情
    */
-  async getDetail(bgmId) {
+  async getDetail(bgmId, options = {}) {
+    options.signal?.throwIfAborted();
     const cacheKey = `bangumi:detail:${bgmId}`;
     const cached = this._readCache(cacheKey);
     if (cached) return { ...cached, cover: this._normalizeImageUrl(cached.cover), url: this._normalizeWebUrl(cached.url) };
@@ -704,10 +710,11 @@ class BangumiApi {
     try {
       let data;
       try {
-        data = await this.request(url);
+        data = await this.request(url, options);
       } catch (err) {
+        options.signal?.throwIfAborted();
         console.error('[BangumiApi] v0 详情失败，尝试旧接口:', err.message);
-        data = await this.request(`${this.baseUrl}/subject/${bgmId}`);
+        data = await this.request(`${this.baseUrl}/subject/${bgmId}`, options);
       }
       const detail = this._normalizeDetail(data);
       if (detail && detail.name) {
@@ -715,6 +722,7 @@ class BangumiApi {
       }
       return detail;
     } catch (err) {
+      options.signal?.throwIfAborted();
       console.error('[BangumiApi] 获取详情失败:', err);
       if (this.db) {
         const fallback = this.db.getCacheAny(cacheKey);

@@ -157,6 +157,7 @@ import {
 } from '../utils/continueWatching.js';
 import { plannedEpisodeCount } from '../utils/episodeMetadata.js';
 import backgroundTaskScheduler, { BACKGROUND_PRIORITY } from '../services/backgroundTaskScheduler.js';
+import { requestSubjectDetail } from '../services/subjectDetailRequest.js';
 
 export default {
   name: 'AnimeZone',
@@ -495,10 +496,10 @@ export default {
       const token = ++this._bangumiMetaEnrichToken;
       const isActive = () => token === this._bangumiMetaEnrichToken && this.isBangumiMode;
 
-      const enrichOne = async (item) => {
+      const enrichOne = async (item, signal) => {
         if (!isActive()) return;
         const bgmId = item.bgm_id || item.bgmId;
-        const detail = await window.electronAPI?.subjectDetail?.(bgmId);
+        const detail = await requestSubjectDetail(window.electronAPI, bgmId, { signal });
         if (!isActive() || !detail) return;
 
         const updates = {};
@@ -535,7 +536,7 @@ export default {
           group: 'catalog-metadata',
           priority: BACKGROUND_PRIORITY.visibleMetadata + index,
           delayMs: 2600 + index * 120,
-          run: () => enrichOne(item)
+          run: ({ signal }) => enrichOne(item, signal)
         }).catch(error => {
           if (isActive()) console.warn('[AnimeZone] Bangumi 列表元数据补全失败:', error?.message || error);
         });

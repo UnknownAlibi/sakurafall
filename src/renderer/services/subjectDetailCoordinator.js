@@ -4,6 +4,7 @@ import {
   countPlayableEpisodes,
   plannedEpisodeCount
 } from '../utils/episodeMetadata.js';
+import { requestSubjectDetail } from './subjectDetailRequest.js';
 
 function episodeLineCount(episodes) {
   if (!episodes || typeof episodes !== 'object') return 0;
@@ -143,6 +144,7 @@ export async function coordinateSubjectDetail(options) {
     anime,
     api = window.electronAPI,
     isActive = () => true,
+    signal,
     loadLegacyDetail,
     onStage = () => {}
   } = options;
@@ -154,7 +156,7 @@ export async function coordinateSubjectDetail(options) {
       ? Promise.resolve(api.subjectIndexGet(bgmId)).catch(() => null)
       : Promise.resolve(null),
     subjectPromise: bgmId && api?.subjectDetail
-      ? Promise.resolve(api.subjectDetail(bgmId)).catch(() => null)
+      ? requestSubjectDetail(api, bgmId, { signal })
       : Promise.resolve(null)
   }));
 

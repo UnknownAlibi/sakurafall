@@ -6,6 +6,44 @@ const os = require('node:os');
 const path = require('node:path');
 const { ImageCacheService } = require('../src/main/services/ImageCacheService');
 
+test('ImageCacheService: offline audits cannot silently fetch remote covers through Node', async () => {
+  const previous = process.env.SAKURAFALL_OFFLINE_MODE;
+  process.env.SAKURAFALL_OFFLINE_MODE = '1';
+  try {
+    await assert.rejects(new ImageCacheService()._fetchBuffer('https://images.test/a.png'), /Offline mode/);
+  } finally {
+    if (previous === undefined) delete process.env.SAKURAFALL_OFFLINE_MODE;
+    else process.env.SAKURAFALL_OFFLINE_MODE = previous;
+  }
+});
+
+test('ImageCacheService: cancelling the last consumer destroys an active network request', async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'image-abort-'));
+  const cache = new ImageCacheService({ cacheDir });
+  let accept;
+  const accepted = new Promise(resolve => { accept = resolve; });
+  const server = http.createServer(request => accept(request));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const controller = new AbortController();
+  try {
+    const pending = cache.getCover(`http://127.0.0.1:${server.address().port}/slow.jpg`, { signal: controller.signal });
+    const request = await accepted;
+    const closed = new Promise(resolve => request.once('close', resolve));
+    controller.abort();
+    assert.equal((await pending).success, false);
+    await closed;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(cache.requests.entries.size, 0);
+    assert.equal(cache.downloadQueue.active, 0);
+    assert.equal(Object.keys(cache.index).length, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    cache.flushIndex();
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  }
+});
+
 const PNG_1X1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
   'base64'

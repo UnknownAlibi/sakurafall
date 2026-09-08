@@ -1,9 +1,7 @@
 const resolvedImageUrls = new Map();
 const pendingImageUrls = new Map();
 const MAX_RESOLVED_IMAGE_URLS = 2000;
-const MAX_ACTIVE_IMAGE_CACHE_REQUESTS = 4;
-const imageCacheQueue = [];
-let activeImageCacheRequests = 0;
+let requestSequence = 0;
 let preloadedFlag = false;
 
 function normalizeCacheOptions(options = {}) {
@@ -107,41 +105,36 @@ export function getCachedImageUrlSync(url, options = {}) {
 }
 
 export function clearImageCacheMemo(url, options = null) {
+  const cancelKey = key => {
+    for (const request of pendingImageUrls.get(key) || []) request.cancel();
+  };
   if (url) {
     const originalUrl = String(url || '').trim();
     if (options) {
       const key = imageCacheKey(originalUrl, options);
       resolvedImageUrls.delete(key);
-      pendingImageUrls.delete(key);
+      cancelKey(key);
       return;
     }
     for (const key of resolvedImageUrls.keys()) {
       if (key === originalUrl || key.startsWith(`${originalUrl}::`)) resolvedImageUrls.delete(key);
     }
     for (const key of pendingImageUrls.keys()) {
-      if (key === originalUrl || key.startsWith(`${originalUrl}::`)) pendingImageUrls.delete(key);
+      if (key === originalUrl || key.startsWith(`${originalUrl}::`)) cancelKey(key);
     }
     return;
   }
   resolvedImageUrls.clear();
-  pendingImageUrls.clear();
+  for (const key of pendingImageUrls.keys()) cancelKey(key);
 }
 
-function runQueuedImageCacheTask(task) {
-  imageCacheQueue.push(task);
-  drainImageCacheQueue();
+function updateRequest(id, action) {
+  window.electronAPI?.imageCacheUpdateRequest?.(id, action)?.catch(() => {});
 }
 
-function drainImageCacheQueue() {
-  while (activeImageCacheRequests < MAX_ACTIVE_IMAGE_CACHE_REQUESTS && imageCacheQueue.length > 0) {
-    const task = imageCacheQueue.shift();
-    activeImageCacheRequests += 1;
-    task()
-      .catch(() => {})
-      .finally(() => {
-        activeImageCacheRequests -= 1;
-        drainImageCacheQueue();
-      });
+export function reprioritizeImageCache(url, options, priority) {
+  for (const request of pendingImageUrls.get(imageCacheKey(String(url || '').trim(), options)) || []) {
+    updateRequest(request.id, priority);
   }
 }
 
@@ -149,29 +142,45 @@ export async function resolveCachedImageUrl(url, options = {}) {
   const originalUrl = String(url || '').trim();
   if (!originalUrl || !isCacheableImageUrl(originalUrl)) return originalUrl;
   if (!window.electronAPI?.imageCacheGetCover) return originalUrl;
+  if (options.signal?.aborted) return originalUrl;
   const normalizedOptions = normalizeCacheOptions(options);
   const key = imageCacheKey(originalUrl, normalizedOptions);
   if (resolvedImageUrls.has(key)) return resolvedImageUrls.get(key);
-  if (pendingImageUrls.has(key)) return pendingImageUrls.get(key);
-
-  const pending = new Promise((resolve) => {
-    runQueuedImageCacheTask(async () => {
-      try {
-        const result = await window.electronAPI.imageCacheGetCover(originalUrl, normalizedOptions);
-        const resolvedUrl = result?.success && result.url ? result.url : originalUrl;
-        rememberResolvedImageUrl(key, resolvedUrl);
-        resolve(resolvedUrl);
-      } catch {
-        rememberResolvedImageUrl(key, originalUrl);
-        resolve(originalUrl);
-      } finally {
-        pendingImageUrls.delete(key);
-      }
-    });
+  // Sharing and admission limits live in the main process, across all windows.
+  // IPC receives plain data only; AbortSignal remains owned by this renderer.
+  return new Promise(resolve => {
+    const requests = pendingImageUrls.get(key) || new Set();
+    pendingImageUrls.set(key, requests);
+    let settled = false;
+    const request = { id: `cover-${++requestSequence}`, cancel: () => {
+      if (settled) return;
+      updateRequest(request.id, 'cancel');
+      finish(originalUrl);
+    } };
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', request.cancel);
+      requests.delete(request);
+      if (!requests.size && pendingImageUrls.get(key) === requests) pendingImageUrls.delete(key);
+      resolve(value);
+    };
+    const timer = setTimeout(request.cancel, 47000);
+    requests.add(request);
+    options.signal?.addEventListener('abort', request.cancel, { once: true });
+    Promise.resolve().then(() => {
+      if (settled) return null;
+      return window.electronAPI.imageCacheGetCover(originalUrl, {
+        ...normalizedOptions, requestId: request.id, priority: options.priority || 'visible'
+      });
+    }).then(result => {
+      if (settled) return;
+      // A transient failure must not poison the memo for the rest of the session.
+      if (result?.success && result.url) rememberResolvedImageUrl(key, result.url);
+      finish(result?.success && result.url ? result.url : originalUrl);
+    }, () => finish(originalUrl));
   });
-
-  pendingImageUrls.set(key, pending);
-  return pending;
 }
 
 /**
@@ -182,7 +191,7 @@ export function prefetchImageCache(url) {
   if (!originalUrl || !isCacheableImageUrl(originalUrl)) return;
   if (!window.electronAPI?.imageCacheGetCover) return;
   if (resolvedImageUrls.has(originalUrl) || pendingImageUrls.has(originalUrl)) return;
-  resolveCachedImageUrl(originalUrl).catch(() => {});
+  resolveCachedImageUrl(originalUrl, { priority: 'prefetch' }).catch(() => {});
 }
 
 /**

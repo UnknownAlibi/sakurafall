@@ -6,6 +6,7 @@ const { performance } = require('node:perf_hooks');
 const Database = require('better-sqlite3');
 const { CatalogSnapshotService } = require('../server/src/catalogSnapshot');
 const { SubjectIndexService } = require('../src/main/services/SubjectIndexService');
+const parseSnapshot = require('../src/main/utils/parseSnapshot');
 
 /**
  * 空白磁盘库首导入分阶段测量（S1-1）：
@@ -42,7 +43,7 @@ async function measureDiskFirstImport(payloadBody, tableSchemas) {
   memorySampler.unref?.();
 
   const parseStart = performance.now();
-  const snapshot = JSON.parse(payloadBody);
+  const snapshot = await parseSnapshot(payloadBody);
   const parseMs = performance.now() - parseStart;
 
   const importStart = performance.now();

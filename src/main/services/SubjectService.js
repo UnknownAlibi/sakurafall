@@ -10,6 +10,7 @@
  */
 
 const bangumiApi = require('./BangumiApi');
+const SharedRequests = require('../utils/sharedRequests');
 // 备用元数据源：Bangumi 不可达时自动回退
 const anilistProvider = require('./AniListProvider');
 // P0：本地索引服务（fire-and-forget 写入，不阻塞主流程）
@@ -28,6 +29,7 @@ function parseAniListId(value) {
 
 class SubjectService {
   constructor() {
+    this._detailRequests = new SharedRequests();
     // 内存缓存：name → bgm_id 映射（避免重复 subjectSearch）
     this._nameToBgmIdCache = new Map();
     // 内存缓存：bgm_id → SubjectDetail（避免重复 subjectDetail）
@@ -1461,7 +1463,12 @@ class SubjectService {
    * 内存缓存 30 分钟，避免重复请求 API。
    * ID 路由：'anilist:123' / 'anilist_123' 走 AniList，其余走 Bangumi。
    */
-  async getDetail(bgmId) {
+  async getDetail(bgmId, options = {}) {
+    return this._detailRequests.run(String(bgmId), ({ signal }) => this._loadDetail(bgmId, signal), options);
+  }
+
+  async _loadDetail(bgmId, signal) {
+    signal.throwIfAborted();
     // 内存缓存命中
     const cacheKey = String(bgmId);
     const cached = this._detailCache.get(cacheKey);
@@ -1471,7 +1478,8 @@ class SubjectService {
 
     const anilistId = parseAniListId(bgmId);
     if (anilistId !== null) {
-      const detail = await this._getAniListDetail(anilistId);
+      const detail = await this._getAniListDetail(anilistId, { signal });
+      signal.throwIfAborted();
       this._detailCache.set(cacheKey, {
         detail,
         expiry: Date.now() + this._detailCacheTTL
@@ -1479,7 +1487,8 @@ class SubjectService {
       return detail;
     }
 
-    const detail = await bangumiApi.getDetail(bgmId);
+    const detail = await bangumiApi.getDetail(bgmId, { signal });
+    signal.throwIfAborted();
     if (!detail) return null;
     const result = this._toSubjectDetail(detail);
 
@@ -1503,13 +1512,14 @@ class SubjectService {
   /**
    * 获取 AniList 详情（标准化为 SubjectDetail）
    */
-  async _getAniListDetail(anilistId) {
+  async _getAniListDetail(anilistId, options = {}) {
     const cacheKey = `anilist:${anilistId}`;
     const cached = this._detailCache.get(cacheKey);
     if (cached && Date.now() < cached.expiry) {
       return cached.detail;
     }
-    const detail = await anilistProvider.getDetail(anilistId);
+    const detail = await anilistProvider.getDetail(anilistId, options);
+    options.signal?.throwIfAborted();
     if (!detail) return null;
     const result = this._toSubjectDetail(detail);
     this._detailCache.set(cacheKey, {

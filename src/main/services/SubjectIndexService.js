@@ -15,7 +15,8 @@
 
 const bangumiApi = require('./BangumiApi');
 const HttpClient = require('../utils/HttpClient');
-const parseSnapshot = require('../utils/parseSnapshot');
+const openSnapshot = require('../utils/openSnapshot');
+const openCatalogReadSnapshot = require('../utils/catalogReadSnapshot');
 const { subjectYearHints } = require('./SubjectCatalogPolicy');
 
 function resolveSubjectYear(item, airDate = '') {
@@ -256,6 +257,7 @@ class SubjectIndexService {
    */
   querySubjects(filters = {}) {
     if (!this.db) return { data: [], total: 0, page: 1, pageSize: this.DEFAULT_PAGE_SIZE, fromIndex: true };
+    const queryDb = this._catalogReadDb || this.db;
     const {
       keyword = '',
       tag = '',
@@ -332,12 +334,12 @@ class SubjectIndexService {
 
     // 计算总数
     const countSql = `SELECT COUNT(*) as n FROM bangumi_subjects s ${tagJoin} ${where}`;
-    const countRow = this.db.prepare(countSql).get(...tagParams, ...params);
+    const countRow = queryDb.prepare(countSql).get(...tagParams, ...params);
     const total = countRow ? countRow.n : 0;
 
     // 查询数据
     const dataSql = `SELECT s.* FROM bangumi_subjects s ${tagJoin} ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
-    const rows = this.db.prepare(dataSql).all(...tagParams, ...params, safePageSize, offset);
+    const rows = queryDb.prepare(dataSql).all(...tagParams, ...params, safePageSize, offset);
 
     return {
       data: rows.map(row => this._rowToSummary(row)),
@@ -426,21 +428,47 @@ class SubjectIndexService {
   }
 
   async importSnapshot(snapshot, isCurrent = () => true) {
+    if (this._importPromise) {
+      await this._importPromise.catch(() => {});
+      return this.importSnapshot(snapshot, isCurrent);
+    }
+    this._catalogReadDb = openCatalogReadSnapshot(this.db);
+    this._importPromise = this._importSnapshotBatches(snapshot, isCurrent);
+    try { return await this._importPromise; }
+    finally {
+      this._catalogReadDb?.close();
+      this._catalogReadDb = null;
+      this._importPromise = null;
+    }
+  }
+
+  async _importSnapshotBatches(snapshot, isCurrent) {
     if (!this.db) return { imported: 0, skipped: true, reason: 'database_unavailable' };
     if (!snapshot || Number(snapshot.schemaVersion) !== this.SNAPSHOT_SCHEMA_VERSION) {
       throw new Error('目录快照版本不受支持');
     }
-    if (!Array.isArray(snapshot.subjects) || snapshot.subjects.some(item =>
+    const streaming = typeof snapshot.subjects?.[Symbol.asyncIterator] === 'function';
+    if (!streaming && (!Array.isArray(snapshot.subjects) || snapshot.subjects.some(item =>
       !item || !Number.isSafeInteger(Number(item.id)) || Number(item.id) <= 0 ||
-      (item.type !== undefined && Number(item.type) !== 2))) {
+      (item.type !== undefined && Number(item.type) !== 2)))) {
       throw new Error('Invalid catalog snapshot subjects');
     }
     const subjects = snapshot.subjects;
+    if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+    if (subjects.length && this._catalogReadDb) {
+      const revision = Number(this.getSyncStatus().lastSync['catalog-content-revision']?.revision) || 0;
+      // Persist independently of the success cursor: an interrupted import can
+      // change rows too, and must invalidate pagination after restart.
+      this._setSyncState('catalog-content-revision', { revision: revision + 1 });
+    }
     let imported = 0;
     const batchSize = 200;
-    for (let offset = 0; offset < subjects.length; offset += batchSize) {
+    const batches = streaming ? subjects : (function* () {
+      for (let offset = 0; offset < subjects.length; offset += batchSize) yield subjects.slice(offset, offset + batchSize);
+    })();
+    for await (const items of batches) {
       if (!isCurrent()) return { imported, skipped: true, reason: 'config_changed' };
-      const batch = subjects.slice(offset, offset + batchSize).map(item => {
+      const batch = items.map(item => {
         const normalized = typeof bangumiApi._normalizeItem === 'function'
           ? bangumiApi._normalizeItem(item)
           : item;
@@ -487,31 +515,36 @@ class SubjectIndexService {
     const endpoint = `${this._snapshotBaseUrl}/v1/catalog/snapshot${since ? `?since=${since}` : ''}`;
     this._snapshotSyncPromise = this._snapshotHttp.fetch(endpoint, {
       signal: this._snapshotController.signal,
+      responseType: 'buffer',
       timeout: 20_000,
       maxResponseBytes: 80 * 1024 * 1024
-    }).then(text => parseSnapshot(text, { signal: this._snapshotController.signal }))
+    }).then(text => openSnapshot(text, { signal: this._snapshotController.signal, transferBuffer: true }))
       .then(async snapshot => {
-        if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
-        // generatedAt 回退（服务器重建/备份恢复）：旧 since 游标已失效，
-        // 增量响应可能为空甚至倒退版本。此时强制一次全量重同步，
-        // 不把"回退后的空增量"当成"无变化"写进游标。
-        if (since > 0 && (Number(snapshot.generatedAt) || 0) < (Number(status.generatedAt) || 0)) {
+        try {
           if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
-          const fullText = await this._snapshotHttp.fetch(`${this._snapshotBaseUrl}/v1/catalog/snapshot`, {
-            signal: this._snapshotController.signal,
-            timeout: 20_000,
-            maxResponseBytes: 80 * 1024 * 1024
+          // generatedAt 回退（服务器重建/备份恢复）：旧 since 游标已失效，
+          // 增量响应可能为空甚至倒退版本。此时强制一次全量重同步，
+          // 不把"回退后的空增量"当成"无变化"写进游标。
+          if (since > 0 && (Number(snapshot.generatedAt) || 0) < (Number(status.generatedAt) || 0)) {
+            snapshot.close();
+            if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+            const fullText = await this._snapshotHttp.fetch(`${this._snapshotBaseUrl}/v1/catalog/snapshot`, {
+              signal: this._snapshotController.signal,
+              responseType: 'buffer',
+              timeout: 20_000,
+              maxResponseBytes: 80 * 1024 * 1024
+            });
+            snapshot = await openSnapshot(fullText, { signal: this._snapshotController.signal, transferBuffer: true });
+            if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
+          }
+          if ((snapshot.subjects?.length || 0) === 0 && Number(snapshot.total) === 0) {
+            return { imported: 0, skipped: true, reason: 'snapshot_warming' };
+          }
+          return await this.importSnapshot(snapshot, isCurrent).then(result => {
+            nextDelay = this.SNAPSHOT_MIN_INTERVAL;
+            return result;
           });
-          snapshot = await parseSnapshot(fullText, { signal: this._snapshotController.signal });
-          if (!isCurrent()) return { imported: 0, skipped: true, reason: 'config_changed' };
-        }
-        if ((snapshot.subjects?.length || 0) === 0 && Number(snapshot.total) === 0) {
-          return { imported: 0, skipped: true, reason: 'snapshot_warming' };
-        }
-        return this.importSnapshot(snapshot, isCurrent).then(result => {
-          nextDelay = this.SNAPSHOT_MIN_INTERVAL;
-          return result;
-        });
+        } finally { snapshot.close(); }
       })
       .catch(error => {
         if (!isCurrent() && error.name === 'AbortError') {
@@ -574,8 +607,9 @@ class SubjectIndexService {
   getSyncStatus() {
     if (!this.db) return { indexed: 0, lastSync: {} };
     try {
-      const indexed = this.getIndexCount();
-      const rows = this.db.prepare(`SELECT key, value, updated_at FROM bangumi_sync_state`).all();
+      const queryDb = this._catalogReadDb || this.db;
+      const indexed = queryDb.prepare('SELECT COUNT(*) AS n FROM bangumi_subjects').get().n;
+      const rows = queryDb.prepare(`SELECT key, value, updated_at FROM bangumi_sync_state`).all();
       const lastSync = {};
       for (const row of rows) {
         try {
@@ -596,16 +630,18 @@ class SubjectIndexService {
   }
 
   /**
-   * 目录数据版本：与快照 generatedAt 一致（服务器仅在数据变化时推进它）。
+   * 目录数据版本：服务端 generatedAt 加本地写入修订号，中断导入也可识别。
    * 无变化的增量同步不改变版本，不会造成浏览中列表的无谓刷新。
    * 渲染层列表会话绑定首次加载时的版本，翻页发现版本变化则整组刷新，
    * 避免新旧版本的页被悄悄拼接（重复由去重兜底，漏项无法兜底）。
    */
   getCatalogVersion() {
-    const state = this.getSyncStatus().lastSync['catalog-snapshot'];
+    const lastSync = this.getSyncStatus().lastSync;
+    const state = lastSync['catalog-snapshot'];
     if (!state) return null;
     const generatedAt = Math.max(0, Number(state.generatedAt) || 0);
-    return generatedAt > 0 ? String(generatedAt) : null;
+    const revision = Number(lastSync['catalog-content-revision']?.revision) || 0;
+    return generatedAt > 0 ? `${generatedAt}${revision ? `:${revision}` : ''}` : null;
   }
 
   // ── 内部辅助 ────────────────────────────────────────────

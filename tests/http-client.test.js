@@ -44,6 +44,19 @@ test('HttpClient: dedupes identical in-flight GET requests', async () => {
   }
 });
 
+test('HttpClient: binary snapshot responses never share a text response promise', async () => {
+  const server = await createTextServer(10);
+  const client = new HttpClient();
+  try {
+    const [text, buffer] = await Promise.all([
+      client.fetch(server.url), client.fetch(server.url, { responseType: 'buffer' })
+    ]);
+    assert.equal(typeof text, 'string');
+    assert.ok(Buffer.isBuffer(buffer));
+    assert.equal(server.hits(), 2);
+  } finally { await server.close(); }
+});
+
 test('HttpClient: does not dedupe abortable requests', async () => {
   const server = await createTextServer(25);
   const client = new HttpClient({ timeout: 5000 });

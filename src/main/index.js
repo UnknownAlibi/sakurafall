@@ -947,6 +947,9 @@ function createMenu() {
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
     if (isSmokeOffline) {
         session.defaultSession.enableNetworkEmulation({ offline: true });
+        session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (request, callback) => {
+            callback({ cancel: !['localhost', '127.0.0.1', '[::1]'].includes(new URL(request.url).hostname) });
+        });
     }
     // 连接数据库
     try {
@@ -1679,14 +1682,7 @@ secureIpcHandle('clear-cache', async (event) => {
     }
 });
 
-secureIpcHandle('image-cache-get-cover', async (event, url, options) => {
-    try {
-        return await imageCacheService.getCover(url, options);
-    } catch (error) {
-        console.error('[ImageCache] 封面缓存失败:', error);
-        return { success: false, originalUrl: url || '', error: error.message };
-    }
-});
+require('./ipc/imageCache')(secureIpcHandle, imageCacheService);
 
 // 批量预加载已缓存封面到渲染进程内存（毫秒级显示）
 secureIpcHandle('image-cache-batch-lookup', async (event, urls, options) => {
@@ -2046,14 +2042,7 @@ secureIpcHandle('subject-browse', async (event, options = {}) => {
 });
 
 // 获取番剧详情（标准化为 SubjectDetail）
-secureIpcHandle('subject-detail', async (event, bgmId) => {
-    try {
-        return await subjectService.getDetail(bgmId);
-    } catch (error) {
-        console.error('[Subject] 获取详情失败:', error);
-        return null;
-    }
-});
+require('./ipc/subjectDetail')(secureIpcHandle, subjectService);
 
 // 获取番剧分集列表
 secureIpcHandle('subject-episodes', async (event, bgmId, options = {}) => {

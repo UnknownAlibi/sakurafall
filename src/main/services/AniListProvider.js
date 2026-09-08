@@ -122,9 +122,10 @@ class AniListProvider {
   /**
    * 发起 GraphQL 请求
    */
-  async _graphql(query, variables) {
+  async _graphql(query, variables, options = {}) {
     const text = await this.http.fetch(this.apiUrl, {
       method: 'POST',
+      signal: options.signal,
       body: { query, variables }
     });
     const data = JSON.parse(text);
@@ -183,7 +184,8 @@ class AniListProvider {
    * 获取动漫详情
    * @param {number} id - AniList 条目 ID
    */
-  async getDetail(id) {
+  async getDetail(id, options = {}) {
+    options.signal?.throwIfAborted();
     const cacheKey = `anilist:detail:${id}`;
     const cached = this._readCache(cacheKey);
     if (cached) return cached;
@@ -196,7 +198,8 @@ class AniListProvider {
     }`;
 
     try {
-      const data = await this._graphql(query, { id });
+      const data = await this._graphql(query, { id }, options);
+      options.signal?.throwIfAborted();
       const media = data?.data?.Media;
       const detail = this._normalizeDetail(media);
       if (detail && detail.name) {
@@ -204,6 +207,7 @@ class AniListProvider {
       }
       return detail;
     } catch (err) {
+      options.signal?.throwIfAborted();
       console.warn(`[AniListProvider] 获取详情失败(id=${id}):`, err.message);
       if (this.db) {
         const fallback = this.db.getCacheAny(cacheKey);

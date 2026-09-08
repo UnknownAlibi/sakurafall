@@ -3,8 +3,9 @@ const test = require('node:test');
 const Database = require('better-sqlite3');
 const { SubjectIndexService } = require('../src/main/services/SubjectIndexService');
 
-function createIndexDb() {
-  const db = new Database(':memory:');
+function createIndexDb(file = ':memory:') {
+  const db = new Database(file);
+  if (file !== ':memory:') db.pragma('journal_mode = WAL');
   db.exec(`
     CREATE TABLE bangumi_subjects (
       bgm_id INTEGER PRIMARY KEY, name TEXT, name_cn TEXT, aliases TEXT, summary TEXT,
@@ -27,6 +28,60 @@ test('failed snapshot batches do not advance the synchronization cursor', async 
   await assert.rejects(service.importSnapshot({ schemaVersion: 1, subjects: [{ id: 1, type: 2, name: 'test' }] }), /Incomplete/);
 });
 
+test('WAL import pins old pages until completion and invalidates partial imports on restart', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-paging-'));
+  const file = path.join(directory, 'test.db');
+  const db = createIndexDb(file);
+  const service = new SubjectIndexService();
+  service.db = db;
+  const makeSubject = (id, date) => ({ id, type: 2, name: `anime-${id}`, date, tags: [{ name: '恋爱' }] });
+  try {
+    await service.importSnapshot({ schemaVersion: 1, generatedAt: 100, catalogReady: true,
+      subjects: Array.from({ length: 205 }, (_, i) => makeSubject(i + 1, '2023-01-01')) });
+    const filters = { tag: '恋爱', sort: 'latest', pageSize: 50 };
+    const previous = service.querySubjects(filters);
+    const oldPage2 = service.querySubjects({ ...filters, page: 2 });
+    const upsert = service.upsertSubjects.bind(service);
+    let batches = 0;
+    service.upsertSubjects = async items => {
+      const count = await upsert(items);
+      batches++;
+      const during = service.querySubjects(filters);
+      assert.equal(during.catalogVersion, previous.catalogVersion);
+      assert.deepEqual(during.data, previous.data, 'partially imported rows must remain invisible to the list');
+      assert.deepEqual(service.querySubjects({ ...filters, page: 2 }).data, oldPage2.data);
+      return count;
+    };
+    await service.importSnapshot({ schemaVersion: 1, generatedAt: 200, catalogReady: true,
+      subjects: Array.from({ length: 205 }, (_, i) => makeSubject(i + 1, i < 200 ? '1995-01-01' : '2024-01-01')) });
+    assert.equal(batches, 2);
+    assert.notEqual(service.getCatalogVersion(), previous.catalogVersion);
+    assert.equal(service._catalogReadDb, null);
+    const all = [];
+    for (let page = 1; page <= 5; page++) all.push(...service.querySubjects({ ...filters, page }).data);
+    assert.equal(new Set(all.map(item => item.bgmId)).size, 205);
+    assert.ok(all.every((item, index) => !index || all[index - 1].airDate >= item.airDate));
+    const completeVersion = service.getCatalogVersion();
+    batches = 0;
+    service.upsertSubjects = async items => ++batches === 2 ? 0 : upsert(items);
+    await assert.rejects(service.importSnapshot({ schemaVersion: 1, generatedAt: 300,
+      subjects: Array.from({ length: 205 }, (_, i) => makeSubject(i + 1, '2020-01-01')) }), /Incomplete/);
+    assert.equal(service._catalogReadDb, null);
+    assert.equal(service.getSyncStatus().lastSync['catalog-snapshot'].generatedAt, 200);
+    assert.notEqual(service.getCatalogVersion(), completeVersion);
+    const reopened = new SubjectIndexService();
+    reopened.db = new Database(file);
+    try { assert.equal(reopened.getCatalogVersion(), service.getCatalogVersion()); }
+    finally { reopened.db.close(); }
+  } finally {
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('switching to local mode prevents an in-flight snapshot from being imported', async () => {
   const service = new SubjectIndexService();
   service.db = {};
@@ -40,6 +95,34 @@ test('switching to local mode prevents an in-flight snapshot from being imported
   finish(JSON.stringify({ schemaVersion: 1, total: 1, subjects: [{ id: 1 }] }));
   assert.equal((await pending).reason, 'config_changed');
   assert.equal(service._snapshotTimer, null);
+});
+
+test('snapshot sync consumes a compressed binary HTTP response into the index', async () => {
+  const http = require('node:http');
+  const zlib = require('node:zlib');
+  const payload = zlib.gzipSync(JSON.stringify({
+    schemaVersion: 1, generatedAt: 1234, catalogReady: true, padding: 'x'.repeat(300000),
+    subjects: Array.from({ length: 401 }, (_, id) => ({ id: id + 1, type: 2, name: `item-${id}`, date: '2020-01-01' }))
+  }));
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' });
+    res.end(payload);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const service = new SubjectIndexService();
+  service.db = createIndexDb();
+  service._snapshotBaseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const result = await service.syncSnapshot();
+    assert.equal(result.imported, 401);
+    assert.equal(service.hasCatalogSnapshot(), true);
+    assert.equal(service.querySubjects({ sort: 'latest', releasedOnly: true }).total, 401);
+    assert.equal(service._catalogReadDb, null);
+  } finally {
+    service.setSnapshotBaseUrl('');
+    service.db.close();
+    await new Promise(resolve => server.close(resolve));
+  }
 });
 
 test('subject index imports a raw server snapshot in yielding batches', async () => {
@@ -169,20 +252,20 @@ test('query results expose the catalog version and advance with snapshot imports
       schemaVersion: 1, generatedAt: 1000, full: true, total: 1,
       subjects: [{ id: 1, type: 2, name: 'A', name_cn: '甲' }]
     });
-    assert.equal(service.getCatalogVersion(), '1000');
-    assert.equal(service.querySubjects({}).catalogVersion, '1000');
+    assert.equal(service.getCatalogVersion(), '1000:1');
+    assert.equal(service.querySubjects({}).catalogVersion, '1000:1');
 
     // generatedAt 未推进的无变化同步：版本保持不变，不触发无谓的整组刷新
     await service.importSnapshot({
       schemaVersion: 1, generatedAt: 1000, full: false, total: 1, subjects: []
     });
-    assert.equal(service.getCatalogVersion(), '1000');
+    assert.equal(service.getCatalogVersion(), '1000:1');
 
     await service.importSnapshot({
       schemaVersion: 1, generatedAt: 2000, full: false, total: 2,
       subjects: [{ id: 2, type: 2, name: 'B', name_cn: '乙' }]
     });
-    assert.equal(service.getCatalogVersion(), '2000');
+    assert.equal(service.getCatalogVersion(), '2000:2');
     assert.equal(service.querySubjects({}).total, 2);
   } finally {
     service.db = null;
