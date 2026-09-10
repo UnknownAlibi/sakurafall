@@ -244,28 +244,32 @@ class HttpClient {
             const encoding = (res.headers['content-encoding'] || '').toLowerCase();
             const decode = (buf) => options.responseType === 'buffer'
               ? buf : this._decodeCharset(buf, res.headers['content-type'], charset);
+            // returnHeaders: 透出响应头与状态码（如优酷 mtop 需读 Set-Cookie 拿 _m_h5_tk）
+            const wrap = (value) => options.returnHeaders
+              ? { body: value, statusCode: res.statusCode, headers: res.headers }
+              : value;
 
             if (encoding === 'gzip') {
               zlib.gunzip(buffer, { maxOutputLength: maxResponseBytes }, (err, decoded) => {
                 if (err) rejectOnce(err);
-                else resolveOnce(decode(decoded));
+                else resolveOnce(wrap(decode(decoded)));
               });
             } else if (encoding === 'deflate') {
               zlib.inflate(buffer, { maxOutputLength: maxResponseBytes }, (err, decoded) => {
                 if (err) {
                   // 兼容 raw deflate
-                  zlib.inflateRaw(buffer, { maxOutputLength: maxResponseBytes }, (e2, d2) => e2 ? rejectOnce(e2) : resolveOnce(decode(d2)));
+                  zlib.inflateRaw(buffer, { maxOutputLength: maxResponseBytes }, (e2, d2) => e2 ? rejectOnce(e2) : resolveOnce(wrap(decode(d2))));
                 } else {
-                  resolveOnce(decode(decoded));
+                  resolveOnce(wrap(decode(decoded)));
                 }
               });
             } else if (encoding === 'br') {
               zlib.brotliDecompress(buffer, { maxOutputLength: maxResponseBytes }, (err, decoded) => {
                 if (err) rejectOnce(err);
-                else resolveOnce(decode(decoded));
+                else resolveOnce(wrap(decode(decoded)));
               });
             } else {
-              resolveOnce(decode(buffer));
+              resolveOnce(wrap(decode(buffer)));
             }
           } catch (e) {
             rejectOnce(e);

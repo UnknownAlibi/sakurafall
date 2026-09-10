@@ -310,8 +310,6 @@ async function main() {
   const childEnv = { ...process.env };
   delete childEnv.NODE_OPTIONS;
   const launchArgs = [`--remote-debugging-port=${debugPort}`, `--smoke-user-data=${userData}`];
-  const noSandbox = process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1';
-  if (noSandbox) launchArgs.push('--no-sandbox');
   child = spawn(executable, launchArgs, {
     cwd: path.dirname(executable),
     env: childEnv,
@@ -326,8 +324,6 @@ async function main() {
   const report = {
     executable,
     stdoutLog: stdoutPath,
-    noSandbox,
-    gpuSandboxWorkaround: noSandbox ? 'SAKURAFALL_PROBE_NO_SANDBOX=1（宿主 GPU 沙箱不可用）' : '',
     seconds,
     intervalMs,
     interactionMs,

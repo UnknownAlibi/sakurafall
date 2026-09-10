@@ -374,16 +374,8 @@
               >
                 {{ danmakuEnabled ? '关闭弹幕' : '开启弹幕' }}
               </button>
-              <button class="danmaku-option" @click="$emit('danmaku-import-xml'); showDanmakuMenu = false;">
-                导入本地 XML
-              </button>
-              <button class="danmaku-option" @click="$emit('danmaku-refresh'); showDanmakuMenu = false;">
-                重新匹配当前集
-              </button>
-              <button class="danmaku-option" @click="$emit('danmaku-correct-match'); showDanmakuMenu = false;">
-                手动校正匹配
-              </button>
-              <button class="danmaku-option" @click="$emit('open-settings'); showDanmakuMenu = false;">
+              <!-- 重新匹配/导入XML/校正匹配已聚合进弹幕设置悬浮框，此处不再重复入口 -->
+              <button class="danmaku-option" @click="$emit('danmaku-open-settings'); showDanmakuMenu = false;">
                 弹幕设置
               </button>
             </div>
@@ -655,9 +647,7 @@ export default {
     'quality-change',
     'next-episode',
     'toggle-danmaku',
-    'danmaku-import-xml',
-    'danmaku-refresh',
-    'danmaku-correct-match',
+    'danmaku-open-settings',
     'open-settings',
     'toggle-subtitle',
     'subtitle-load-file',

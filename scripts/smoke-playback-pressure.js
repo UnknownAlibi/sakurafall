@@ -13,7 +13,6 @@ async function main() {
   const env = { ...process.env };
   delete env.NODE_OPTIONS;
   const args = [marker, '--remote-debugging-port=9267'];
-  if (process.env.SAKURAFALL_AUDIT_NO_SANDBOX === '1') args.push('--no-sandbox');
   const child = spawn(executable, args, { env, windowsHide: true, stdio: 'ignore' });
   let page;
   try {
@@ -42,7 +41,7 @@ async function main() {
     ]);
     playerPage.close();
     await waitFor(() => page.evaluate('window.pressureEvents.at(-1)===false'), 'pressure released', 10000, 100);
-    console.log(JSON.stringify({ passed: true, events: await page.evaluate('window.pressureEvents'), noSandbox: args.includes('--no-sandbox') }));
+    console.log(JSON.stringify({ passed: true, events: await page.evaluate('window.pressureEvents') }));
   } finally {
     page?.close();
     await stopProcessTree({ rootPid: child.pid, executable, marker });

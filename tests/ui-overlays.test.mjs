@@ -69,12 +69,23 @@ test('discovery collapse controls and continue-watching delete use isolated nati
   const continueWatching = fs.readFileSync(path.join(componentsDir, 'ContinueWatching.vue'), 'utf8');
   const hotAnime = fs.readFileSync(path.join(componentsDir, 'HotAnimeList.vue'), 'utf8');
   const schedule = fs.readFileSync(path.join(componentsDir, 'BangumiSchedule.vue'), 'utf8');
+  const mainCss = fs.readFileSync(path.join(root, 'src/renderer/assets/styles/main.css'), 'utf8');
+  const kawaiiCss = fs.readFileSync(path.join(root, 'src/renderer/assets/styles/kawaii.css'), 'utf8');
 
   for (const source of [continueWatching, hotAnime, schedule]) {
     assert.match(source, /<button[\s\S]*?class="(?:continue-header|section-header)"[\s\S]*?@click="toggleCollapsed"/);
+    assert.match(source, /class="(?:continue-header|section-header)"\s+data-stable-hitbox/);
+    assert.match(source, /class="collapse-toggle">/);
+    assert.doesNotMatch(source, /class="collapse-toggle"[^>]*@click/);
+    assert.match(source, /\.collapse-toggle\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?min-width:\s*64px;[\s\S]*?min-height:\s*34px;/);
     assert.match(source, /class="collapsible-shell" :class="\{ collapsed \}"/);
     assert.match(source, /grid-template-rows:\s*0fr/);
   }
+
+  for (const style of [mainCss, kawaiiCss]) {
+    assert.match(style, /button:not\(:disabled\):not\(\[data-stable-hitbox\]\)/);
+  }
+  assert.match(mainCss, /button\[data-stable-hitbox\]:active\s*\{[\s\S]*?transform:\s*none;/);
 
   assert.match(continueWatching, /class="continue-resume-btn"[\s\S]*?@click="\$emit\('resume', item\)"/);
   assert.match(continueWatching, /class="continue-delete-btn"[\s\S]*?@pointerdown\.stop[\s\S]*?@click\.stop\.prevent="\$emit\('remove', item\)"/);

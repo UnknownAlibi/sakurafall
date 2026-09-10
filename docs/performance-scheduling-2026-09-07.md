@@ -11,7 +11,7 @@
 
 - npm run verify 通过；新增解析、取消、按站点调度与多播放窗口行为测试通过。
 - npm run lint：0 错误，SubjectService 的原有 unused refresh 警告仍在。
-- Windows Electron 打包成功；scripts/smoke-playback-pressure.js 实测开关窗口事件为 [true,false]。本机使用显式 --no-sandbox 测试参数，未更改应用默认启动安全配置。
+- Windows Electron 打包成功；`scripts/smoke-playback-pressure.js` 实测开关窗口事件为 `[true,false]`，并按正式应用的正常沙箱配置启动。
 - scripts/bench-snapshot-parser.js：55,976,766 字节合成 JSON、29,015 条。直接解析总耗时 40.4 ms，采样最长事件循环延迟 50.7 ms；Worker 分批解析总耗时 148.1 ms，最长延迟 26.8 ms。这是合成样本，不等同于真实目录导入或高刷新率滚动验收。
 
 ## 2026-09-08 补充实现与复验
@@ -35,9 +35,9 @@
 - 审计发现原 `--smoke-offline` 的 Chromium 离线模拟未可靠挡住直接封面请求，Node 封面下载也有旁路。现在离线测试对 Chromium 远端请求明确拦截，主进程封面同样遵守标志（仅允许本机测试 HTTP）。最新打包离线复验远端封面加载数为 0，本地 36 组筛选与 2,404 条分页通过；筛选约 110ms、5 秒滚动最大帧间隔 11.2ms。空白封面缓存断网时不可能生成远端封面，不计为缺陷。
 - `scripts/smoke-packaged-snapshot.js` 使用打包 Electron 的 Node 运行模式，实际加载 ASAR 内 Worker 与原生 SQLite，完成本机 gzip HTTP 响应 401 条分批导入；随后模拟服务器 503，目录数量和分页版本保持不变。它验证包内模块链路，不替代完整 GUI 冷启动同步测试。
 - 发布候选安装包正常及离线启动通过，数据库 integrity 为 ok。覆盖安装 `1.3.1 -> 1.3.2` 后版本和启动检查通过；虚构 v8 用户库升级到 v10 后，收藏、播放历史、集数和播放位置均保留，并生成迁移前备份。检查同时发现并修复早期 v9 开发迁移遗漏字段白名单却推进版本号的问题，v10 会幂等修复运行过该开发构建的本地库。
-- 部分性能探针因 Agent 宿主环境限制显式使用 `--no-sandbox`，未修改应用默认安全选项；正式安装包仍需按正常方式启动验收。本轮开发版本已准备升至 1.3.2，本文记录时尚未推送或发布。
+- 所有性能探针与正式安装包均按正常沙箱配置启动；宿主环境无法启动 Electron 时应修复宿主环境，不使用降低安全性的启动参数。本轮开发版本已准备升至 1.3.2，本文记录时尚未推送或发布。
 
-复验入口：先运行 `node scripts/audit-catalog-snapshot.js` 生成隔离索引，再运行 `node scripts/accept-catalog-scheduling.js <打包程序路径>`；在线测试加 `--online --duration=60000`，仅在测试环境确有需要时显式加 `--no-sandbox`。内存对照用 `node scripts/measure-snapshot-import.js`，包内导入用 `node scripts/smoke-packaged-snapshot.js <打包程序路径>`。报告与截图保存在被 Git 忽略的 `artifacts`，脚本仅清理自己启动的进程树。
+复验入口：先运行 `node scripts/audit-catalog-snapshot.js` 生成隔离索引，再运行 `node scripts/accept-catalog-scheduling.js <打包程序路径>`；在线测试加 `--online --duration=60000`。内存对照用 `node scripts/measure-snapshot-import.js`，包内导入用 `node scripts/smoke-packaged-snapshot.js <打包程序路径>`。报告与截图保存在被 Git 忽略的 `artifacts`，脚本仅清理自己启动的进程树。
 
 仍需保留的验收边界：
 

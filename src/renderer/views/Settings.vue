@@ -400,6 +400,25 @@
           </div>
         </div>
 
+        <!-- 同屏密度 -->
+        <div class="setting-item">
+          <div class="setting-label">
+            <label>同屏弹幕密度</label>
+            <p class="setting-desc">{{ localSettings.danmakuDensity || 80 }} 条（20-150）</p>
+          </div>
+          <div class="setting-control">
+            <input
+              type="range"
+              min="20"
+              max="150"
+              step="5"
+              v-model.number="localSettings.danmakuDensity"
+              @change="updateDanmakuDensity"
+              class="setting-range"
+            />
+          </div>
+        </div>
+
         <div class="setting-item danmaku-source-item">
           <div class="setting-label">
             <label>在线弹幕源</label>
@@ -1004,6 +1023,7 @@ export default {
         danmakuOpacity: 1,
         danmakuSpeed: 1,
         danmakuDisplayArea: 0.75,
+        danmakuDensity: 80,
         danmakuProviders: { bilibili: true, acfun: true, dandanplay: true, custom: true },
         danmakuCustomEndpoint: '',
         danmakuCustomToken: '',
@@ -1054,6 +1074,9 @@ export default {
       danmakuProviderOptions: [
         { id: 'bilibili', name: '哔哩哔哩', desc: '免配置，直接匹配番剧分集弹幕' },
         { id: 'acfun', name: 'AcFun', desc: '免配置，直接读取番剧弹幕' },
+        { id: 'tencent', name: '腾讯视频', desc: '免配置，直接匹配分集弹幕' },
+        { id: 'iqiyi', name: '爱奇艺', desc: '免配置，直接匹配分集弹幕' },
+        { id: 'youku', name: '优酷', desc: '免配置，直接匹配分集弹幕' },
         { id: 'dandanplay', name: '弹弹play 聚合', desc: '配置凭证后启用多站聚合池' },
         { id: 'custom', name: '自定义接口', desc: '使用下面配置的自建或兼容服务' }
       ]
@@ -1468,6 +1491,9 @@ export default {
     },
     async updateDanmakuDisplayArea() {
       await this.$store.dispatch('settings/updateDanmakuDisplayArea', this.localSettings.danmakuDisplayArea);
+    },
+    async updateDanmakuDensity() {
+      await this.$store.dispatch('settings/updateDanmakuDensity', this.localSettings.danmakuDensity || 80);
       this.showSaveSuccess();
     },
     async updateDanmakuProviderConfig() {

@@ -27,7 +27,9 @@ export default {
     fontSize: { type: Number, default: 20 },
     opacity: { type: Number, default: 1.0 },
     speed: { type: Number, default: 1.0 },
-    displayAreaRatio: { type: Number, default: 0.75 }
+    displayAreaRatio: { type: Number, default: 0.75 },
+    // 同屏弹幕上限（密度，20-150）
+    maxActive: { type: Number, default: 80 }
   },
   emits: ['loaded', 'error', 'status', 'select-anime'],
   data() {
@@ -64,6 +66,7 @@ export default {
     opacity(val) { if (this.engine) this.engine.setOpacity(val); },
     speed(val) { if (this.engine) this.engine.setSpeed(val); },
     displayAreaRatio(val) { if (this.engine) this.engine.setDisplayAreaRatio(val); },
+    maxActive(val) { if (this.engine) this.engine.setMaxActive(val); },
     // 切换番剧时重新加载
     animeName() {
       this.runtimeOverrides = this.readStoredOverrides();
@@ -86,6 +89,7 @@ export default {
     this.engine.setOpacity(this.opacity);
     this.engine.setSpeed(this.speed);
     this.engine.setDisplayAreaRatio(this.displayAreaRatio);
+    this.engine.setMaxActive(this.maxActive);
     this.engine.setVisible(this.enabled);
     this.engine.setPlaying(this.isPlaying);
     this.engine.start();
@@ -198,6 +202,21 @@ export default {
         this.runtimeOverrides = {
           ...this.runtimeOverrides,
           acfun: { albumId: candidate.albumId || candidate.id, title: candidate.title || '' }
+        };
+      } else if (providerId === 'tencent') {
+        this.runtimeOverrides = {
+          ...this.runtimeOverrides,
+          tencent: { cid: candidate.id, title: candidate.title || '' }
+        };
+      } else if (providerId === 'iqiyi') {
+        this.runtimeOverrides = {
+          ...this.runtimeOverrides,
+          iqiyi: { linkId: candidate.id, title: candidate.title || '' }
+        };
+      } else if (providerId === 'youku') {
+        this.runtimeOverrides = {
+          ...this.runtimeOverrides,
+          youku: { showId: candidate.id, title: candidate.title || '' }
         };
       }
       this.saveStoredOverrides();

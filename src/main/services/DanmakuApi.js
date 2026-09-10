@@ -256,7 +256,7 @@ class DanmakuApi {
       const sources = await this.searchProviders({
         animeName: '葬送的芙莉莲',
         episodeNumber: 1,
-        providerIds: ['bilibili', 'acfun']
+        providerIds: ['bilibili', 'acfun', 'tencent', 'iqiyi', 'youku']
       });
       const online = sources.filter(source => source.status === 'ok');
       if (online.length > 0) {

@@ -220,7 +220,6 @@ async function main() {
 
   const seededDatabase = seedDatabase();
   const args = [`--remote-debugging-port=${debugPort}`, marker];
-  if (process.env.SAKURAFALL_AUDIT_NO_SANDBOX === '1') args.push('--no-sandbox');
   child = spawn(executable, args, {
     cwd: path.dirname(executable),
     windowsHide: true,

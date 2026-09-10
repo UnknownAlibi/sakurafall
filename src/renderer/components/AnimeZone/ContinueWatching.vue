@@ -3,6 +3,7 @@
     <button
       type="button"
       class="continue-header"
+      data-stable-hitbox
       :aria-expanded="String(!collapsed)"
       aria-controls="continue-watching-content"
       @click="toggleCollapsed"
@@ -16,7 +17,10 @@
         </span>
         继续观看
       </span>
-      <span class="collapse-toggle">{{ collapsed ? '展开' : '收起' }} <span class="collapse-arrow" :class="{ expanded: !collapsed }">›</span></span>
+      <span class="collapse-toggle">
+        {{ collapsed ? '展开' : '收起' }}
+        <span class="collapse-arrow" :class="{ expanded: !collapsed }">›</span>
+      </span>
     </button>
     <div class="collapsible-shell" :class="{ collapsed }">
       <div id="continue-watching-content" class="collapsible-body">
@@ -394,12 +398,19 @@ export default {
 
 /* 共用折叠样式 */
 .collapse-toggle {
+  pointer-events: none;
+  min-width: 64px;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px;
   font-size: 12px;
   color: var(--text-tertiary);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
-  transition: color 0.2s;
+  transition: color 0.2s ease;
+  border-radius: 6px;
 }
 
 .collapse-arrow {

@@ -301,7 +301,15 @@ class UpdateChecker {
         this._managed.filePath = result.path;
         this._emitState(onEvent, true);
         // 给 UI 留 2 秒展示“正在安装”，随后静默覆盖安装并自动重启
-        setTimeout(() => this.runInstaller(result.path), 2000);
+        setTimeout(async () => {
+          const installResult = await this.runInstaller(result.path);
+          if (!installResult?.success) {
+            // 安装启动失败必须反馈到 UI（否则会永远停留在“正在安装”状态）
+            this._managed.status = 'error';
+            this._managed.error = installResult?.error || '启动安装程序失败';
+            this._emitState(onEvent, true);
+          }
+        }, 2000);
       } else {
         this._managed.status = 'error';
         this._managed.error = result.error || '下载失败';
@@ -340,7 +348,8 @@ class UpdateChecker {
       }
       // 静默安装（/S 复用注册表中的原安装目录覆盖安装，无需向导操作），
       // start /wait 等安装器退出后再自动启动新版应用，用户全程无需干预
-      const cmd = `start /wait "" "${resolved}" /S & start "" "${process.execPath()}"`;
+      // process.execPath 是字符串属性（指向当前应用可执行文件），不是函数
+      const cmd = `start /wait "" "${resolved}" /S & start "" "${process.execPath}"`;
       const child = spawn('cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], {
         detached: true,
         stdio: 'ignore',

@@ -224,9 +224,6 @@ async function main() {
   const launchArgs = devMode
     ? ['.', `--remote-debugging-port=${debugPort}`, `--smoke-user-data=${userData}`]
     : [`--remote-debugging-port=${debugPort}`, `--smoke-user-data=${userData}`];
-  // 个别机器上 Chromium GPU 沙箱无法初始化（GPU 进程 exit_code=1 崩溃循环）。
-  // 仅当宿主确实起不来时显式开启，并在报告里记录，不能作为默认行为。
-  if (process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1') launchArgs.push('--no-sandbox');
   _child = spawn(executable, launchArgs, {
     cwd: devMode ? workspace : path.dirname(executable),
     env: childEnv,
@@ -241,10 +238,6 @@ async function main() {
   const report = {
     executable,
     stdoutLog: stdoutPath,
-    noSandbox: process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1',
-    gpuSandboxWorkaround: process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1'
-      ? 'SAKURAFALL_PROBE_NO_SANDBOX=1（宿主 GPU 沙箱不可用）'
-      : '',
     phases: [],
     timeline: [],
     processes: []

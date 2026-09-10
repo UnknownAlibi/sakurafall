@@ -19,11 +19,10 @@ async function main() {
   const offline = !process.argv.includes('--online');
   const args = [marker, '--remote-debugging-port=9268'];
   if (offline) args.push('--smoke-offline');
-  if (process.argv.includes('--no-sandbox')) args.push('--no-sandbox');
   const child = spawn(executable, args, { env, windowsHide: true, stdio: 'ignore' });
   let page;
   let server;
-  const report = { passed: false, executable, offline, noSandbox: args.includes('--no-sandbox') };
+  const report = { passed: false, executable, offline };
   const output = path.resolve(`artifacts/catalog-scheduling-${offline ? 'offline' : 'online'}.json`);
   try {
     const target = await waitFor(async () => {

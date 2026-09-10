@@ -37,9 +37,13 @@ const state = {
     danmakuOpacity: 1.0,            // 不透明度 0.1-1.0
     danmakuSpeed: 1.0,              // 速度倍率 0.5-2.0
     danmakuDisplayArea: 0.75,       // 显示区域比例 0.25-1.0
+    danmakuDensity: 80,             // 同屏弹幕密度上限（条），20-150
     danmakuProviders: {
         bilibili: true,
         acfun: true,
+        tencent: true,
+        iqiyi: true,
+        youku: true,
         dandanplay: true,
         custom: true
     },
@@ -143,6 +147,9 @@ const mutations = {
     },
     SET_DANMAKU_DISPLAY_AREA(state, val) {
         state.danmakuDisplayArea = val;
+    },
+    SET_DANMAKU_DENSITY(state, val) {
+        state.danmakuDensity = val;
     },
     SET_DANMAKU_PROVIDERS(state, val) {
         state.danmakuProviders = { ...state.danmakuProviders, ...(val || {}) };
@@ -350,6 +357,10 @@ const actions = {
         commit('SET_DANMAKU_DISPLAY_AREA', val);
         dispatch('saveSettings');
     },
+    updateDanmakuDensity({ commit, dispatch }, val) {
+        commit('SET_DANMAKU_DENSITY', val);
+        dispatch('saveSettings');
+    },
     updateDanmakuProviders({ commit, dispatch }, val) {
         commit('SET_DANMAKU_PROVIDERS', val);
         dispatch('saveSettings');
@@ -441,6 +452,7 @@ const getters = {
     danmakuOpacity: state => state.danmakuOpacity,
     danmakuSpeed: state => state.danmakuSpeed,
     danmakuDisplayArea: state => state.danmakuDisplayArea,
+    danmakuDensity: state => state.danmakuDensity,
     danmakuProviders: state => state.danmakuProviders,
     danmakuCustomEndpoint: state => state.danmakuCustomEndpoint,
     danmakuCustomToken: state => state.danmakuCustomToken,

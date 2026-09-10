@@ -8,7 +8,7 @@
  *   - 字号 / 透明度 / 速度 / 显示区域比例 可调
  *   - 暂停时停止动画，seek 时重置时间轴
  *   - 密度自适应：高密度时按 hash 降采样，避免掉帧
- *   - 文本宽度缓存 + 批量渲染优化
+ *   - 文本预光栅化位图缓存：每帧仅 drawImage，滚动高帧率下依然流畅
  *
  * 使用：
  *   const engine = new DanmakuEngine(canvas);
@@ -21,8 +21,8 @@
 const SCROLL_LIFE_MS = 8000;        // 滚动弹幕单条生命期（ms），实际按速度倍率缩放
 const FIXED_LIFE_MS = 4000;         // 顶/底弹幕持续时长（ms）
 const COLLISION_PADDING = 10;       // 轨道碰撞额外间距
-const MAX_ACTIVE_DANMAKU = 150;     // 同屏最大弹幕数，超过触发降采样
-const DENSITY_SAMPLE_INTERVAL = 500; // 密度统计窗口（ms）
+const DEFAULT_MAX_ACTIVE_DANMAKU = 80; // 默认同屏最大弹幕数（用户可在设置中调整 danmakuDensity）
+const SPAWN_TOKEN_BURST = 3;        // 令牌桶容量（允许的瞬时爆发量）
 
 export default class DanmakuEngine {
   constructor(canvas) {
@@ -52,21 +52,22 @@ export default class DanmakuEngine {
     this.displayAreaRatio = 0.75;    // 显示区域占 canvas 高度的比例（0.25~1）
     this.visible = true;             // 弹幕开关
 
-    // 密度自适应
-    this._densityWindow = [];        // 密度统计窗口 [{ time, count }]
-    this._dropRate = 0;              // 当前丢弃率（0=不丢，1=全丢）
+    // 密度控制：令牌桶限速。稳态同屏数 ≈ maxActive（按生命期换算放行速率），
+    // 且放行在时间上均匀分布，避免"一批全进→空白几秒→再一批"的批次效应
+    this._spawnTokens = SPAWN_TOKEN_BURST; // 当前令牌数
+    this._lastTokenTime = 0;        // 上次补充令牌的视频时间（秒）
+    this.maxActive = DEFAULT_MAX_ACTIVE_DANMAKU; // 同屏弹幕上限（用户可调）
 
     // 文本宽度缓存（key = text+fontSize）
     this._widthCache = new Map();
     this._widthCacheSize = 0;
 
+    // 文本位图缓存（key = fontSize+color+text）：每条弹幕只光栅化一次，滚动帧里 drawImage 复用
+    this._spriteCache = new Map();
+
     // 渲染循环
     this._rafId = null;
     this._devicePixelRatio = window.devicePixelRatio || 1;
-    // 帧率控制：弹幕不需要 60fps，30fps 足够流畅且省 CPU/GPU
-    this._targetFps = 30;
-    this._frameInterval = 1000 / this._targetFps;
-    this._lastRenderTime = 0;
 
     if (this.canvas) {
       this._resizeObserver = new ResizeObserver(() => this.resize());
@@ -86,21 +87,24 @@ export default class DanmakuEngine {
     this.scrollTracks = [];
     this.topTracks = [];
     this.bottomTracks = [];
-    this._densityWindow = [];
-    this._dropRate = 0;
-    // 清空宽度缓存（字号可能变化）
+    // 重置换弹幕的时间轴与放行令牌
+    this._spawnTokens = SPAWN_TOKEN_BURST;
+    this._lastTokenTime = 0;
+    // 清空宽度/位图缓存（字号可能变化）
     this._widthCache.clear();
     this._widthCacheSize = 0;
+    this._spriteCache.clear();
   }
 
   setFontSize(size) {
     this.fontSize = Math.max(12, Math.min(36, parseInt(size, 10) || 20));
-    // 字号变化后需要重置轨道和宽度缓存
+    // 字号变化后需要重置轨道和宽度/位图缓存
     this.scrollTracks = [];
     this.topTracks = [];
     this.bottomTracks = [];
     this._widthCache.clear();
     this._widthCacheSize = 0;
+    this._spriteCache.clear();
   }
 
   setOpacity(opacity) {
@@ -113,6 +117,11 @@ export default class DanmakuEngine {
 
   setDisplayAreaRatio(ratio) {
     this.displayAreaRatio = Math.max(0.25, Math.min(1, parseFloat(ratio) || 0.75));
+  }
+
+  // 同屏弹幕上限（用户可调，20-150）
+  setMaxActive(count) {
+    this.maxActive = Math.max(10, Math.min(200, parseInt(count, 10) || DEFAULT_MAX_ACTIVE_DANMAKU));
   }
 
   setVisible(visible) {
@@ -131,6 +140,9 @@ export default class DanmakuEngine {
     if (!parent) return;
     const rect = parent.getBoundingClientRect();
     const dpr = this._devicePixelRatio;
+    // dpr 变化（跨屏拖动）时位图需要重光栅化
+    if (dpr !== (window.devicePixelRatio || 1)) this._spriteCache.clear();
+    this._devicePixelRatio = window.devicePixelRatio || 1;
     this.canvas.width = Math.floor(rect.width * dpr);
     this.canvas.height = Math.floor(rect.height * dpr);
     this.canvas.style.width = rect.width + 'px';
@@ -201,7 +213,6 @@ export default class DanmakuEngine {
   start() {
     if (this._rafId) return;
     this.lastFrameTime = 0;
-    this._lastRenderTime = 0;
     const loop = (ts) => {
       this._rafId = requestAnimationFrame(loop);
       this._tick(ts);
@@ -232,36 +243,28 @@ export default class DanmakuEngine {
     this.comments = [];
     this.activeScroll = [];
     this.activeFixed = [];
-    this._densityWindow = [];
     this._widthCache.clear();
+    this._spriteCache.clear();
     this.canvas = null;
     this.ctx = null;
   }
 
   // ── 核心逻辑 ──
-  _tick(timestamp) {
+  _tick(_timestamp) {
     if (!this.ctx || !this._cssWidth) return;
     if (!this.visible) {
       this.clear();
       return;
     }
 
-    // 帧率控制：30fps 足够弹幕流畅，降低 GPU/CPU 占用
-    const elapsed = timestamp - this._lastRenderTime;
-    if (elapsed < this._frameInterval) {
-      return;
-    }
-    this._lastRenderTime = timestamp - (elapsed % this._frameInterval);
+    // 不做帧率门控：rAF 本身跟随显示器刷新率；
+    // 以固定 fps 为目标做跳帧会在 60Hz 屏上产生周期性丢帧（节拍抖动），滚动弹幕对此非常敏感
 
-    const delta = this.lastFrameTime === 0 ? this._frameInterval : (timestamp - this.lastFrameTime);
-    this.lastFrameTime = timestamp;
-
-    // 推进活跃弹幕
     if (this.playing) {
+      this._refillSpawnTokens();
       this._spawnNew();
-      this._updateScroll(delta);
+      this._updateScroll();
       this._updateFixed();
-      this._updateDensity();
     }
 
     // 渲染
@@ -270,47 +273,34 @@ export default class DanmakuEngine {
 
   /**
    * 分发当前时间点应出现的弹幕
-   * 含密度自适应：同屏弹幕过多时按 hash 降采样
+   * 密度控制：令牌桶限速，消耗 1 个令牌放行 1 条；无令牌则丢弃
    */
   _spawnNew() {
     const t = this.currentTime;
     while (this.cursor < this.comments.length && this.comments[this.cursor].time <= t) {
       const c = this.comments[this.cursor];
       this.cursor++;
-      // 密度自适应：根据当前活跃弹幕数计算丢弃率
-      const activeCount = this.activeScroll.length + this.activeFixed.length;
-      if (activeCount > MAX_ACTIVE_DANMAKU) {
-        // 超过上限，按弹幕文本 hash 决定是否丢弃（同一弹幕稳定丢弃/保留）
-        const hash = this._quickHash(c.text);
-        const threshold = (activeCount - MAX_ACTIVE_DANMAKU) / activeCount;
-        if (hash < threshold) {
-          continue; // 丢弃该弹幕
-        }
+      if (this._spawnTokens < 1) {
+        continue; // 令牌耗尽，丢弃（后续弹幕按补充节奏持续放行，不会攒批）
       }
+      this._spawnTokens -= 1;
       this._spawnOne(c);
     }
   }
 
   /**
-   * 快速字符串哈希（0~1 浮点数），用于稳定的降采样
+   * 按视频时间补充放行令牌：速率 = maxActive / 平均生命期
+   * 稳态下 同屏数 ≈ 放行速率 × 生命期 ≈ maxActive
    */
-  _quickHash(str) {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) {
-      h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-    }
-    return ((h >>> 0) % 1000) / 1000;
-  }
-
-  /**
-   * 更新密度统计窗口，动态调整丢弃率
-   */
-  _updateDensity() {
-    const now = performance.now();
-    // 清理过期统计（超过 DENSITY_SAMPLE_INTERVAL）
-    this._densityWindow = this._densityWindow.filter(t => now - t < DENSITY_SAMPLE_INTERVAL);
-    // 记录当前帧
-    this._densityWindow.push(now);
+  _refillSpawnTokens() {
+    const t = this.currentTime;
+    const delta = Math.max(0, t - this._lastTokenTime);
+    this._lastTokenTime = t;
+    if (delta === 0) return;
+    // 速度越快生命期越短，放行速率相应提高，保证同屏数仍收敛到 maxActive
+    const lifeSec = (SCROLL_LIFE_MS / 1000) / Math.max(0.25, this.speed);
+    const refillPerSec = this.maxActive / lifeSec;
+    this._spawnTokens = Math.min(SPAWN_TOKEN_BURST, this._spawnTokens + delta * refillPerSec);
   }
 
   _spawnOne(comment) {
@@ -471,38 +461,61 @@ export default class DanmakuEngine {
 
   /**
    * 渲染所有活跃弹幕
-   * 优化：一次性设置 font/globalAlpha，减少 Canvas state 切换
+   * 优化：文本预光栅化成位图（_getSprite），每帧只做 drawImage，
+   * 避免对上百条文本逐帧重复 strokeText/fillText（滚动卡顿的主要来源）
    */
   _render() {
     this.clear();
     this.ctx.globalAlpha = this.opacity;
-    this.ctx.font = `${this.fontSize}px "Microsoft YaHei", "PingFang SC", sans-serif`;
-    this.ctx.textBaseline = 'top';
+    const dpr = this._devicePixelRatio;
 
     // 滚动弹幕
     for (const item of this.activeScroll) {
-      this._drawText(item.comment, item.x, item.y);
+      const s = this._getSprite(item.comment);
+      this.ctx.drawImage(s.canvas, item.x - s.pad, item.y - s.pad, s.canvas.width / dpr, s.canvas.height / dpr);
     }
     // 顶/底弹幕：居中
     for (const item of this.activeFixed) {
-      const width = this._measureWidth(item.comment.text);
-      const x = (this._cssWidth - width) / 2;
-      this._drawText(item.comment, x, item.y);
+      const s = this._getSprite(item.comment);
+      const x = (this._cssWidth - s.width) / 2;
+      this.ctx.drawImage(s.canvas, x - s.pad, item.y - s.pad, s.canvas.width / dpr, s.canvas.height / dpr);
     }
 
     this.ctx.globalAlpha = 1;
   }
 
   /**
-   * 绘制单条弹幕文本（带描边）
+   * 获取弹幕文本的位图缓存：描边+填充只做一次，之后逐帧 drawImage
    */
-  _drawText(comment, x, y) {
-    const color = this._formatColor(comment.color);
-    this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    this.ctx.lineWidth = 2;
-    this.ctx.strokeText(comment.text, x, y);
-    this.ctx.fillStyle = color;
-    this.ctx.fillText(comment.text, x, y);
+  _getSprite(comment) {
+    const key = this.fontSize + '|' + (comment.color || 0) + '|' + comment.text;
+    let sprite = this._spriteCache.get(key);
+    if (!sprite) {
+      // 限制缓存条数，避免长视频内存膨胀
+      if (this._spriteCache.size > 1500) this._spriteCache.clear();
+      const font = `${this.fontSize}px "Microsoft YaHei", "PingFang SC", sans-serif`;
+      const pad = 3; // 描边余量
+      this.ctx.font = font;
+      const textWidth = Math.ceil(this.ctx.measureText(comment.text).width);
+      const w = textWidth + pad * 2;
+      const h = this.fontSize + pad * 2;
+      const dpr = this._devicePixelRatio;
+      const cv = document.createElement('canvas');
+      cv.width = Math.ceil(w * dpr);
+      cv.height = Math.ceil(h * dpr);
+      const c = cv.getContext('2d');
+      c.scale(dpr, dpr);
+      c.font = font;
+      c.textBaseline = 'top';
+      c.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      c.lineWidth = 2;
+      c.strokeText(comment.text, pad, pad);
+      c.fillStyle = this._formatColor(comment.color);
+      c.fillText(comment.text, pad, pad);
+      sprite = { canvas: cv, width: textWidth, pad };
+      this._spriteCache.set(key, sprite);
+    }
+    return sprite;
   }
 
   _formatColor(intColor) {

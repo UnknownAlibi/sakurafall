@@ -298,7 +298,7 @@ a:hover {
 
 /* ===== 全局点击反馈：轻量 transform + 颜色过渡，不使用大面积阴影动画 ===== */
 :where(
-  button:not(:disabled),
+  button:not(:disabled):not([data-stable-hitbox]),
   .button,
   [role="button"],
   .anime-card,
@@ -347,6 +347,12 @@ a:hover {
   .source-header
 ):active {
   transform: translateY(1px) scale(0.985);
+}
+
+/* Full-width disclosure rows must keep their hitbox fixed while pressed. */
+button[data-stable-hitbox]:active {
+  transform: none;
+  opacity: 0.82;
 }
 
 [data-scroll-state="scrolling"] :where(

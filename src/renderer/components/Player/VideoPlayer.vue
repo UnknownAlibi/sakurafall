@@ -30,39 +30,24 @@
       </div>
     </transition>
 
-    <div v-if="danmakuMatchVisible" class="video-overlay danmaku-match-overlay" @click.self="closeDanmakuMatchPanel">
-      <div class="danmaku-match-panel">
-        <header>
-          <div>
-            <h3>校正弹幕匹配</h3>
-            <p>{{ danmakuAnimeName }} · 第 {{ danmakuEpisodeNumber || '?' }} 集</p>
-          </div>
-          <button type="button" @click="closeDanmakuMatchPanel" title="关闭">×</button>
-        </header>
-        <div v-if="danmakuMatchLoading" class="danmaku-match-state">
-          <div class="loading-spinner small"></div><span>正在搜索各平台番剧库...</span>
-        </div>
-        <div v-else-if="!danmakuMatchGroups.some(group => group.candidates?.length)" class="danmaku-match-state">
-          暂未找到可校正的候选，仍可导入本地 XML 或配置自定义接口
-        </div>
-        <div v-else class="danmaku-match-groups">
-          <section v-for="group in danmakuMatchGroups" :key="group.id" v-show="group.candidates?.length">
-            <div class="danmaku-match-source">
-              <strong>{{ group.name }}</strong><span>{{ group.candidates.length }} 个候选</span>
-            </div>
-            <button
-              v-for="candidate in group.candidates"
-              :key="`${group.id}-${candidate.id}`"
-              type="button"
-              class="danmaku-match-candidate"
-              @click="applyDanmakuMatch(group.id, candidate)"
-            >
-              <span>{{ candidate.title }}</span>
-              <small>匹配度 {{ Math.round((candidate.score || 0) * 100) }}%</small>
-            </button>
-          </section>
-        </div>
-      </div>
+    <!-- 弹幕设置（播放页内嵌右下角悬浮框，聚合设置/匹配操作/校正候选，不跳转设置页） -->
+    <div v-if="danmakuSettingsVisible" class="danmaku-float-catcher" @click="danmakuSettingsVisible = false">
+      <DanmakuSettingsPanel
+        class="danmaku-float"
+        :anime-name="danmakuAnimeName"
+        :episode-number="danmakuEpisodeNumber"
+        :match-visible="danmakuMatchVisible"
+        :match-loading="danmakuMatchLoading"
+        :match-groups="danmakuMatchGroups"
+        @click.stop
+        @close="danmakuSettingsVisible = false"
+        @toggle-danmaku="toggleDanmaku"
+        @notice="(text, tone) => showDanmakuNotice(text, tone)"
+        @refresh="refreshDanmaku"
+        @import-xml="onDanmakuImportXml"
+        @show-match="toggleDanmakuMatchSection"
+        @apply-match="applyDanmakuMatch"
+      />
     </div>
 
     <!-- 自动恢复/换源中 -->
@@ -122,8 +107,8 @@
       </span>
     </div>
 
-    <div v-if="sourcePanelVisible" class="video-overlay source-panel-overlay" @click.self="closeSourcePanel">
-      <div class="source-panel">
+    <div v-if="sourcePanelVisible" class="danmaku-float-catcher" @click="closeSourcePanel">
+      <div class="source-panel danmaku-float" @click.stop>
         <div class="source-panel-header">
           <div>
             <h3>SakuraRoute 智能线路</h3>
@@ -185,8 +170,8 @@
     </transition>
 
     <!-- 字幕在线搜索面板 -->
-    <div v-if="subtitleSearchVisible" class="video-overlay subtitle-search-overlay" @click.self="closeSubtitleSearchPanel">
-      <div class="subtitle-search-panel">
+    <div v-if="subtitleSearchVisible" class="danmaku-float-catcher" @click="closeSubtitleSearchPanel">
+      <div class="subtitle-search-panel danmaku-float" @click.stop>
         <div class="subtitle-search-header">
           <div>
             <h3>在线搜索字幕</h3>
@@ -307,6 +292,7 @@
       :opacity="danmakuOpacity"
       :speed="danmakuSpeed"
       :display-area-ratio="danmakuDisplayAreaRatio"
+      :max-active="danmakuDensity"
       @loaded="onDanmakuLoaded"
       @error="onDanmakuError"
       @status="onDanmakuStatus"
@@ -377,9 +363,7 @@
       @picture-in-picture-toggle="togglePictureInPicture"
       @next-episode="$emit('next-episode')"
       @toggle-danmaku="toggleDanmaku"
-      @danmaku-import-xml="onDanmakuImportXml"
-      @danmaku-refresh="refreshDanmaku"
-      @danmaku-correct-match="openDanmakuMatchPanel"
+      @danmaku-open-settings="danmakuSettingsVisible = true"
       @open-settings="$emit('open-settings')"
       @toggle-subtitle="toggleSubtitle"
       @subtitle-load-file="loadSubtitleFile"
@@ -459,6 +443,7 @@
 import { mapGetters, mapActions } from 'vuex';
 import ControlBar from './ControlBar.vue';
 import DanmakuLayer from './DanmakuLayer.vue';
+import DanmakuSettingsPanel from './DanmakuSettingsPanel.vue';
 import SubtitleLayer from './SubtitleLayer.vue';
 import Anime4KCanvas from './Anime4KCanvas.vue';
 import WatchTogetherPanel from './WatchTogetherPanel.vue';
@@ -518,7 +503,7 @@ function loadHlsClass() {
 
 export default {
   name: 'VideoPlayer',
-  components: { ControlBar, DanmakuLayer, SubtitleLayer, Anime4KCanvas, CastDialog, WatchTogetherPanel, ViewingNotebookPanel, EpisodeDnaPanel },
+  components: { ControlBar, DanmakuLayer, DanmakuSettingsPanel, SubtitleLayer, Anime4KCanvas, CastDialog, WatchTogetherPanel, ViewingNotebookPanel, EpisodeDnaPanel },
   mixins: [playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats],
   emits: ['video-ended', 'next-episode', 'open-enhanced-player', 'open-settings'],
   props: {
@@ -613,6 +598,7 @@ export default {
       danmakuRuntimeState: 'idle',
       danmakuSourceStatuses: [],
       danmakuMatchVisible: false,
+      danmakuSettingsVisible: false,
       danmakuMatchLoading: false,
       danmakuMatchGroups: [],
       sourcePanelVisible: false,
@@ -692,7 +678,7 @@ export default {
     ...mapGetters('settings', [
       'autoPlay', 'rememberPlaybackRate', 'videoQuality', 'seekStepSeconds',
       // 弹幕设置
-      'enableDanmaku', 'danmakuFontSize', 'danmakuOpacity', 'danmakuSpeed', 'danmakuDisplayArea', 'danmakuProviders',
+      'enableDanmaku', 'danmakuFontSize', 'danmakuOpacity', 'danmakuSpeed', 'danmakuDisplayArea', 'danmakuDensity', 'danmakuProviders',
       // 字幕设置
       'enableSubtitle', 'subtitleFontSize', 'subtitleOpacity', 'subtitleBottomOffset', 'openSubtitlesApiKey'
     ]),
@@ -797,7 +783,7 @@ export default {
     },
     enabledDanmakuProviderIds() {
       const configured = this.danmakuProviders || {};
-      return ['bilibili', 'acfun', 'dandanplay', 'custom'].filter(id => configured[id] !== false);
+      return ['bilibili', 'acfun', 'tencent', 'iqiyi', 'youku', 'dandanplay', 'custom'].filter(id => configured[id] !== false);
     },
     // wtVideoInfoForRoom 见 mixins/watchTogether.js
     // ===== Phase 5: 失败分类 =====
@@ -2677,7 +2663,7 @@ export default {
         ].filter(Boolean),
         bgmId: anime.bgmId || anime.bgm_id || anime.subjectId || anime.id || '',
         episodeNumber: this.danmakuEpisodeNumber,
-        providerIds: ['bilibili', 'acfun']
+        providerIds: this.enabledDanmakuProviderIds
       };
     },
 
@@ -2688,8 +2674,17 @@ export default {
       await this.$refs.danmakuLayer.loadDanmaku(true);
     },
 
-    async openDanmakuMatchPanel() {
+    // 面板内校正按钮：展开加载候选，再点收起
+    async toggleDanmakuMatchSection() {
+      if (this.danmakuMatchVisible) {
+        this.danmakuMatchVisible = false;
+        return;
+      }
       this.danmakuMatchVisible = true;
+      await this.loadDanmakuMatchCandidates();
+    },
+
+    async loadDanmakuMatchCandidates() {
       this.danmakuMatchLoading = true;
       this.danmakuMatchGroups = [];
       try {
@@ -2703,12 +2698,9 @@ export default {
       }
     },
 
-    closeDanmakuMatchPanel() {
-      this.danmakuMatchVisible = false;
-    },
-
     async applyDanmakuMatch(providerId, candidate) {
-      this.closeDanmakuMatchPanel();
+      this.danmakuSettingsVisible = false;
+      this.danmakuMatchVisible = false;
       this.danmakuRuntimeState = 'loading';
       this.showDanmakuNotice(`正在使用 ${candidate.title} 重新加载…`, 'loading', 0);
       await this.$refs.danmakuLayer?.loadWithOverride?.(providerId, candidate);

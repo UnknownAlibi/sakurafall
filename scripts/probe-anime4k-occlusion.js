@@ -189,11 +189,6 @@ async function main() {
   const childEnv = { ...process.env };
   delete childEnv.NODE_OPTIONS;
   const args = [`--remote-debugging-port=${debugPort}`, `--smoke-user-data=${userData}`];
-  // 个别机器上 Chromium 的 GPU 沙箱无法初始化（GPU 进程启动即 exit_code=1 并
-  // 被判定为不可用）。此时只有 --no-sandbox 能起来，属于宿主环境问题，必须
-  // 显式开启并在报告里记录，不能作为默认行为。
-  const noSandbox = process.env.SAKURAFALL_PROBE_NO_SANDBOX === '1';
-  if (noSandbox) args.push('--no-sandbox');
   child = spawn(executable, args, {
     cwd: path.dirname(executable),
     env: childEnv,
@@ -209,8 +204,6 @@ async function main() {
     executable,
     stdoutLog: stdoutPath,
     variantSeconds,
-    noSandbox,
-    gpuSandboxWorkaround: noSandbox ? 'SAKURAFALL_PROBE_NO_SANDBOX=1（宿主 GPU 沙箱不可用）' : '',
     results: []
   };
   try {

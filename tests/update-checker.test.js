@@ -152,3 +152,37 @@ test('startManagedUpdate: 下载失败进入 error 状态', async () => {
     checker.downloadInstaller = originalDownload;
   }
 });
+
+test('runInstaller: 正确使用 process.execPath 字符串构造安装命令', async () => {
+  // 回归：旧代码误把 process.execPath 当函数调用（它是字符串属性），
+  // TypeError 被 catch 吞掉后 app.quit 永不执行，UI 永远停留在“正在安装”
+  const childProcess = require('child_process');
+  const realSpawn = childProcess.spawn;
+  const spawned = [];
+  childProcess.spawn = (cmd, args, opts) => {
+    spawned.push({ cmd, args, opts });
+    return { unref() {} };
+  };
+  const modulePath = require.resolve('../src/main/services/UpdateChecker');
+  delete require.cache[modulePath];
+  const { UpdateChecker: FreshChecker } = require(modulePath);
+
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const fakeInstaller = path.join(os.tmpdir(), `sakurafall-test-${process.pid}-${Date.now()}.exe`);
+  try {
+    fs.writeFileSync(fakeInstaller, 'dummy');
+    const checker = new FreshChecker();
+    const result = await checker.runInstaller(fakeInstaller);
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(spawned.length, 1);
+    const cmdLine = spawned[0].args.join(' ');
+    assert.ok(cmdLine.includes(process.execPath), '安装命令应包含 process.execPath 指向的可执行文件路径');
+  } finally {
+    childProcess.spawn = realSpawn;
+    delete require.cache[modulePath];
+    require(modulePath);
+    try { fs.rmSync(fakeInstaller, { force: true }); } catch (e) { /* ignore */ }
+  }
+});

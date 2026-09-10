@@ -125,7 +125,7 @@
 
 /* 覆盖全局按压：更明显的"捏扁"果冻感（两种演出档） */
 :is([data-ui-effects="anime"], [data-ui-effects="balanced"]) :where(
-  button:not(:disabled),
+  button:not(:disabled):not([data-stable-hitbox]),
   .button,
   [role="button"],
   .tab-btn,
