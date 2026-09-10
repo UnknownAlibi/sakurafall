@@ -1,6 +1,6 @@
 {
   "version": "1.4.0",
   "downloadUrl": "https://github.com/UnknownAlibi/sakurafall/releases/download/v1.4.0/SakuraFall-Setup-1.4.0.exe",
-  "releaseNotes": "1. 新增腾讯视频/爱奇艺/优酷弹幕源（零配置默认启用，多源合并去重） 2. 弹幕滚动流畅度大幅优化，密度可调且均匀分布 3. 播放页弹幕设置改为悬浮面板不遮挡画面 4. 修复更新安装卡死问题 5. 修复区块收起按钮点击死区",
+  "releaseNotes": "",
   "releaseDate": "2026-09-10"
 }
