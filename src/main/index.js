@@ -93,6 +93,7 @@ const { registerBtIpc } = require('./ipc/bt');
 const { registerDanmakuIpc } = require('./ipc/danmaku');
 const { registerLibraryIpc } = require('./ipc/library');
 const { registerPlaybackHealthIpc } = require('./ipc/playbackHealth');
+const { registerUpdateIpc } = require('./ipc/update');
 const playerSvc = require('./services/LazyPlayerServices');
 const videoStreamProxy = require('./services/VideoStreamProxyService');
 
@@ -112,7 +113,8 @@ const runtimeDiagnostics = new RuntimeDiagnosticsService({ baseDir: path.join(ap
 // BT 资源搜索（蜜柑/dmhy 公开索引站），与插件源共用代理策略
 const btHttpClient = new HttpClient({ timeout: 12000 });
 const btSearchService = new BtSearchService({ httpClient: btHttpClient });
-const { btStreamService } = registerBtIpc({ ipcMain, btSearchService, customizationPackService, dialog, BrowserWindow });
+// btStreamService 由 registerBtIpc 在下方 IPC 注册区创建（需要 secureIpcHandle，避免绕过来源校验）
+let btStreamService = null;
 
 // ===== GPU 稳定性防线 =====
 // 日志实测：部分 Windows 机器上 GPU 进程每 ~5 秒被 kill 一次无限循环，
@@ -979,6 +981,17 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
         videoStreamProxy.registerVideoStreamProxy();
         cmsApiService.setHealthStorePath(path.join(app.getPath('userData'), 'source-health.json'));
         await animeDb.connect();
+        // 数据库版本高于本应用支持的 schema：拒绝启动并明确提示，
+        // 不要带着未知 schema 继续跑（旧代码会静默继续，可能写坏数据）。
+        const fatalSchemaError = animeDb.getFatalSchemaError?.();
+        if (fatalSchemaError) {
+            dialog.showErrorBox(
+                '数据库版本过新',
+                `${fatalSchemaError.message}\n\n建议安装最新版本后再打开。`
+            );
+            app.quit();
+            return;
+        }
         // 将数据库实例注入各数据源服务以启用接口缓存（复用同一张 cms_cache 表）
         cmsApiService.setDatabase(animeDb);
         bangumiApi.setDatabase(animeDb);
@@ -1093,19 +1106,8 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
 
     createWindow();
 
-    // 启动后静默检查更新（仅打包生效，开发模式跳过）
-    if (!isDev) {
-        setTimeout(async () => {
-            try {
-                const result = await updateChecker.checkForUpdates({ silent: true });
-                if (result.hasUpdate && mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('update-available', result);
-                }
-            } catch (e) {
-                // 静默检查失败不影响使用
-            }
-        }, 5000);
-    }
+    // 启动后静默检查更新（打包版生效；SAKURAFALL_UPDATE_CHECK_DEV=1 可在开发模式验证）
+    updateIpc.scheduleStartupUpdateCheck({ isDev });
 });
 
 // 应用退出时关闭数据库连接
@@ -2390,34 +2392,25 @@ secureIpcHandle('cms-cache-clear', async (event, options = {}) => {
     }
 });
 
-// ====== 应用更新检查 ======
-
-secureIpcHandle('update-check', async () => updateChecker.checkForUpdates({ silent: false }));
-secureIpcHandle('update-get-version', () => updateChecker.getCurrentVersion());
-secureIpcHandle('update-get-url', () => updateChecker.getUpdateUrl());
-secureIpcHandle('update-set-url', (event, url) => updateChecker.setUpdateUrl(url));
-
-// 打开下载链接（系统浏览器，作为应用内更新的兜底）
-secureIpcHandle('update-open-download', async (event, url) => {
-    if (!url) return { success: false, error: '下载链接为空' };
-    try {
-        await shell.openExternal(updateChecker.normalizeDownloadUrl(url));
-        return { success: true };
-    } catch (error) {
-        console.error('[Update] 打开下载链接失败:', error);
-        return { success: false, error: error.message };
-    }
+// ====== 应用更新 ======
+// 检查 / 更新源配置 / 两步式应用内更新（下载托管 + 用户确认后安装）
+const updateIpc = registerUpdateIpc({
+    handle: secureIpcHandle,
+    updateChecker,
+    shell,
+    BrowserWindow
 });
 
-// 一键更新：下载由主进程托管（切换页面不中断），完成后自动静默安装并重启；
-// 进度状态广播到所有窗口，渲染进程随时可经 update-get-state 恢复显示
-secureIpcHandle('update-download', (event, url) => updateChecker.startManagedUpdate(url, state => {
-    BrowserWindow.getAllWindows().forEach(w => {
-        try { w.webContents.send('update-download-progress', state); } catch (e) { /* destroyed */ }
-    });
-}));
-
-secureIpcHandle('update-get-state', () => updateChecker.getUpdateState());
+// ====== BT 资源搜索 / 边播边下 / 本地媒体库 ======
+// 必须在这里注册：secureIpcHandle 依赖下方初始化好的 registerIpcHandler，
+// 放到文件顶部会在 TDZ 内调用而抛错。所有通道统一走可信来源校验。
+btStreamService = registerBtIpc({
+    handle: secureIpcHandle,
+    btSearchService,
+    customizationPackService,
+    dialog,
+    BrowserWindow
+}).btStreamService;
 
 registerLibraryIpc({ handle: secureIpcHandle, animeDb, dialog, BrowserWindow });
 

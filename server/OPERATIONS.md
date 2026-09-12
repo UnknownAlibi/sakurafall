@@ -28,6 +28,24 @@ The script uploads a timestamped release, atomically updates the active
 symlink, restarts systemd, and verifies the public health endpoint. It does not
 change runtime data, TLS files, or the environment file.
 
+## Client update distribution
+
+Clients check `GET /updates/latest.json` on this server first (GitHub raw is
+the fallback). The one-command client release (`npm run release`) therefore
+also syncs the installer and a server-local `latest.json` (whose `downloadUrl`
+points at `GET /downloads/<installer>` on this server) via SSH alias
+`sakurafall` into `/var/lib/sakurafall/releases`, then verifies both over the
+public endpoint. A failed sync only warns — GitHub remains a usable source,
+and the manual catch-up is:
+
+```powershell
+scp dist-app/SakuraFall-Setup-<version>.exe sakurafall:/var/lib/sakurafall/releases/
+# plus a latest.json whose downloadUrl is https://47.109.87.3:8443/downloads/SakuraFall-Setup-<version>.exe
+```
+
+Old installers in `/var/lib/sakurafall/releases` can be pruned once no
+`minRequiredVersion` still needs them.
+
 ## Routine checks
 
 ```bash

@@ -160,6 +160,7 @@ src/renderer/dist/
 
 # 本地工具/临时目录
 .workbuddy/
+.trae/
 tmp/
 .codex-logs/
 .codex-tmp/

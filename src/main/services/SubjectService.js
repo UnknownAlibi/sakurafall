@@ -710,13 +710,13 @@ class SubjectService {
     };
   }
 
-  async _getReleasedBrowseCollection({ keyword = '', userTags = [], officialMetaTags = [], year = null, refresh = false, minItems = 24, sortHint = '' }) {
+  async _getReleasedBrowseCollection({ keyword = '', userTags = [], officialMetaTags = [], year = null, minItems = 24, sortHint = '' }) {
     const todayKey = this._todayDateKey();
     const cacheKey = `bangumi:browse-collection:v11:${todayKey}:${userTags.join(',') || 'all'}:${officialMetaTags.join(',') || 'all-platforms'}:${year || 'all-years'}:${keyword || ''}`;
     const targetCount = Math.max(1, Number(minItems) || 24);
-    // 集合缓存永续：refresh 只跳过页面缓存，不丢弃已扫描的集合。
-    // 丢弃集合会让一次刷新把几百条的积累退化成一轮扫描，并且整轮
-    // 重扫会放大镜像限流风险，把集合误判成“已耗尽”。
+    // 集合缓存永续：刷新只跳过 browse() 的页级缓存（见 browse() 里的 refresh），
+    // 不影响已扫描的集合。丢弃集合会让一次刷新把几百条的积累退化成一轮扫描，
+    // 而整轮重扫会放大镜像限流风险，把集合误判成“已耗尽”。
     // date 排序的“足够”不是条目总数，而是近期条目数：老经典番再多
     // 也顶不上“最新上映”的语义。年份筛选本身就是有限集合，直接按
     // 总条目数判定。
@@ -1311,7 +1311,6 @@ class SubjectService {
           userTags,
           officialMetaTags,
           year: safeYear,
-          refresh,
           minItems: offset + safeLimit,
           // date 排序需要近期分段优先扫描；rank/heat 需要知道用哪个顺序
           sortHint: normalizedSort

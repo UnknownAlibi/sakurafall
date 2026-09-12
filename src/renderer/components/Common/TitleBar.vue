@@ -15,6 +15,8 @@
     </div>
     
     <div class="title-bar-right">
+      <!-- 应用更新徽标：全局入口，不依赖任何页面 -->
+      <UpdateCenter />
       <!-- 主题切换按钮 -->
       <button class="title-btn theme-btn" @click="toggleTheme" :title="themeTooltip">
         <!-- 太阳图标（亮色模式下显示，点击切到深色） -->
@@ -61,10 +63,11 @@
 <script>
 import { mapGetters, mapActions } from 'vuex';
 import BrandMark from './BrandMark.vue';
+import UpdateCenter from './UpdateCenter.vue';
 
 export default {
   name: 'TitleBar',
-  components: { BrandMark },
+  components: { BrandMark, UpdateCenter },
   data() {
     return {
       isMaximized: false,
@@ -171,8 +174,9 @@ export default {
   align-items: center;
   padding-left: 12px;
   gap: 8px;
-  /* 右侧按钮区域宽度: 46*4 = 184px，左侧需要等宽才能让标题视觉居中 */
-  width: 184px;
+  /* 右侧按钮区宽度: 46*5 = 230px（更新徽标 + 主题 + 最小化 + 最大化 + 关闭），
+     左侧需要等宽才能让标题视觉居中 */
+  width: 230px;
   flex-shrink: 0;
 }
 
@@ -188,7 +192,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  width: 184px;
+  width: 230px;
   flex-shrink: 0;
 }
 
@@ -301,11 +305,11 @@ export default {
   }
 
   .title-bar-left {
-    width: 160px;
+    width: 200px;
   }
 
   .title-bar-right {
-    width: 160px;
+    width: 200px;
   }
 }
 </style>

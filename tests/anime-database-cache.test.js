@@ -111,7 +111,14 @@ class MockDatabase {
     this._cacheStore = [];
   }
   exec() { /* 忽略 CREATE TABLE/INDEX */ }
-  pragma() { /* 忽略 */ }
+  pragma(sql) {
+    const text = String(sql || '').trim();
+    MockDatabase.pragmaCalls.push(text);
+    // 只读形式 user_version（'user_version = N' 是写入，不应命中）
+    if (/^user_version$/.test(text)) return MockDatabase.userVersion;
+    if (/^journal_mode/.test(text)) return 'wal';
+    return undefined;
+  }
   prepare(sql) {
     return new MockStatement(this._cacheStore, sql);
   }
@@ -120,6 +127,9 @@ class MockDatabase {
   }
   close() {}
 }
+// 供 WAL checkpoint / 降级保护用例调整与观测
+MockDatabase.userVersion = 0;
+MockDatabase.pragmaCalls = [];
 
 // ── 加载 AnimeDatabase ────────────────────────────────
 const AnimeDatabase = require('../src/main/services/AnimeDatabase');
@@ -276,4 +286,50 @@ test('declared schema version matches the highest migration', () => {
   assert.strictEqual(declared, Math.max(...migrations));
   const bangumiAllowlist = source.match(/bangumi_subjects:\s*\[([^\]]+)\]/)?.[1] || '';
   assert.match(bangumiAllowlist, /['"]detail_updated_at['"]/);
+});
+
+// ── 降级保护 / WAL checkpoint ─────────────────────────
+
+test('connect: 数据库 user_version 高于应用 schema 时拒绝启动', async () => {
+  const os = require('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sakurafall-schema-'));
+  const db = new AnimeDatabase();
+  db.dbPath = path.join(tmpDir, 'anime.db');
+  MockDatabase.userVersion = 9999;
+  try {
+    const ok = await db.connect();
+    assert.strictEqual(ok, false, '数据库过新时必须拒绝连接');
+    assert.ok(db.getFatalSchemaError(), '应记录致命错误供启动流程提示');
+    assert.match(db.getFatalSchemaError().message, /高于当前应用支持的/);
+    assert.strictEqual(db.db, null, '拒绝后不应保留数据库连接');
+  } finally {
+    MockDatabase.userVersion = 0;
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+  }
+});
+
+test('connect/close: 启动 WAL 周期 checkpoint，关闭时 TRUNCATE 并清理定时器', async () => {
+  const os = require('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sakurafall-wal-'));
+  const db = new AnimeDatabase();
+  db.dbPath = path.join(tmpDir, 'anime.db');
+  MockDatabase.userVersion = 0;
+  try {
+    // 只验证 connect 的「连接后置动作」：建表/迁移依赖真实 schema，
+    // 在 mock 上必然失败，因此这里把建表步骤替换为空实现，隔离出定时器与 pragma 行为。
+    db._createTables = () => { /* 由真实 schema 覆盖，见上 */ };
+    const ok = await db.connect();
+    assert.strictEqual(ok, true, '正常版本应能连接');
+    assert.ok(db._walCheckpointTimer, 'connect 后应启动 WAL checkpoint 定时器');
+
+    MockDatabase.pragmaCalls.length = 0;
+    db.close();
+    assert.ok(
+      MockDatabase.pragmaCalls.includes('wal_checkpoint(TRUNCATE)'),
+      '关闭时应执行 TRUNCATE checkpoint 回收 wal 文件'
+    );
+    assert.strictEqual(db._walCheckpointTimer, null, '关闭后应清理定时器');
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+  }
 });

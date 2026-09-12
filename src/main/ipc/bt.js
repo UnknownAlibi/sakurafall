@@ -1,5 +1,7 @@
 // BT 搜索 / 边播边下 / 本地媒体库 IPC 通道注册
 // 独立模块：主进程 index.js 已到体量预算上限，新增通道统一走本文件注册。
+// 安全约束：一律使用注入的 handle（主进程传 secureIpcHandle），不要直接用 ipcMain.handle，
+// 否则通道会绕过「可信渲染页来源」校验。
 
 const { app } = require('electron');
 const { BtStreamService } = require('../services/bt/BtStreamService');
@@ -33,10 +35,10 @@ function buildLocalMediaPack(roots) {
   };
 }
 
-function registerMediaLibraryIpc({ ipcMain, customizationPackService, dialog, BrowserWindow }) {
-  if (!ipcMain || !customizationPackService || !dialog || !BrowserWindow) return;
+function registerMediaLibraryIpc({ handle, customizationPackService, dialog, BrowserWindow }) {
+  if (!handle || !customizationPackService || !dialog || !BrowserWindow) return;
 
-  ipcMain.handle('media-library-add-local', async (event) => {
+  handle('media-library-add-local', async (event) => {
     try {
       const win = BrowserWindow.fromWebContents(event.sender);
       const picked = await dialog.showOpenDialog(win, {
@@ -64,8 +66,9 @@ function registerMediaLibraryIpc({ ipcMain, customizationPackService, dialog, Br
   });
 }
 
-function registerBtStreamIpc({ ipcMain, streamService }) {
-  ipcMain.handle('bt-stream-prepare', async (_event, magnet) => {
+function registerBtStreamIpc({ handle, streamService }) {
+  if (!handle || !streamService) return;
+  handle('bt-stream-prepare', async (_event, magnet) => {
     try {
       const info = await streamService.prepare(String(magnet || ''));
       return { success: true, ...info };
@@ -74,7 +77,7 @@ function registerBtStreamIpc({ ipcMain, streamService }) {
     }
   });
 
-  ipcMain.handle('bt-stream-cache-info', () => {
+  handle('bt-stream-cache-info', () => {
     try {
       return { success: true, info: streamService.getCacheInfo() };
     } catch (error) {
@@ -82,7 +85,7 @@ function registerBtStreamIpc({ ipcMain, streamService }) {
     }
   });
 
-  ipcMain.handle('bt-stream-clear-cache', async () => {
+  handle('bt-stream-clear-cache', async () => {
     try {
       return await streamService.clearCache();
     } catch (error) {
@@ -90,7 +93,7 @@ function registerBtStreamIpc({ ipcMain, streamService }) {
     }
   });
 
-  ipcMain.handle('bt-stream-open', async (_event, magnet, filePath) => {
+  handle('bt-stream-open', async (_event, magnet, filePath) => {
     try {
       const stream = await streamService.open(String(magnet || ''), String(filePath || ''));
       return { success: true, ...stream };
@@ -99,7 +102,7 @@ function registerBtStreamIpc({ ipcMain, streamService }) {
     }
   });
 
-  ipcMain.handle('bt-stream-status', (_event, magnet) => {
+  handle('bt-stream-status', (_event, magnet) => {
     try {
       return { success: true, status: streamService.status(String(magnet || '')) };
     } catch (error) {
@@ -107,7 +110,7 @@ function registerBtStreamIpc({ ipcMain, streamService }) {
     }
   });
 
-  ipcMain.handle('bt-stream-stop', async (_event, magnet) => {
+  handle('bt-stream-stop', async (_event, magnet) => {
     try {
       return await streamService.stop(String(magnet || ''));
     } catch (error) {
@@ -116,10 +119,10 @@ function registerBtStreamIpc({ ipcMain, streamService }) {
   });
 }
 
-function registerBtIpc({ ipcMain, btSearchService, customizationPackService, dialog, BrowserWindow }) {
-  if (!ipcMain || !btSearchService) return { btStreamService: null };
+function registerBtIpc({ handle, btSearchService, customizationPackService, dialog, BrowserWindow }) {
+  if (!handle || !btSearchService) return { btStreamService: null };
 
-  ipcMain.handle('bt-search', async (_event, keyword, options) => {
+  handle('bt-search', async (_event, keyword, options) => {
     const query = String(keyword || '').trim();
     if (!query || query.length < 2) {
       return { items: [], errors: [{ provider: 'input', providerName: '输入', message: '关键词至少 2 个字符' }] };
@@ -141,8 +144,8 @@ function registerBtIpc({ ipcMain, btSearchService, customizationPackService, dia
 
   // 提前实例化并返回：主进程 applyNetworkConfig 需要调用 setProxy 把代理同步给 BT tracker
   const btStreamService = new BtStreamService({ app });
-  registerBtStreamIpc({ ipcMain, streamService: btStreamService });
-  registerMediaLibraryIpc({ ipcMain, customizationPackService, dialog, BrowserWindow });
+  registerBtStreamIpc({ handle, streamService: btStreamService });
+  registerMediaLibraryIpc({ handle, customizationPackService, dialog, BrowserWindow });
   return { btStreamService };
 }
 

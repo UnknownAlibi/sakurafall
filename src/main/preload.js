@@ -251,7 +251,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 弹幕（多源聚合 + 本地 XML）API
     danmakuSetCredentials: (appId, appSecret) => ipcRenderer.invoke('danmaku-set-credentials', appId, appSecret),
-    danmakuConfigureProviders: (config) => ipcRenderer.invoke('danmaku-configure-providers', config),
+    // 必须过 toIpcSafeValue：调用方经常直接传 Vue 响应式对象（store.state / localSettings），
+    // Proxy 无法结构化克隆，会抛 "An object could not be cloned." 并中断调用方的后续逻辑
+    danmakuConfigureProviders: (config) => ipcRenderer.invoke('danmaku-configure-providers', toIpcSafeValue(config)),
     danmakuListProviders: () => ipcRenderer.invoke('danmaku-list-providers'),
     danmakuResolve: (context) => ipcRenderer.invoke('danmaku-resolve', context),
     danmakuSearchProviders: (context) => ipcRenderer.invoke('danmaku-search-providers', context),
@@ -330,8 +332,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateGetUrl: () => ipcRenderer.invoke('update-get-url'),
     updateSetUrl: (url) => ipcRenderer.invoke('update-set-url', url),
     updateOpenDownload: (url) => ipcRenderer.invoke('update-open-download', url),
-    // 一键更新：主进程托管下载（切页不中断）→ 完成后自动静默安装并重启
-    updateDownload: (url) => ipcRenderer.invoke('update-download', url),
+    // 更新两步走：下载由主进程托管（切页不中断）→ 下载完成后由用户点「立即重启安装」
+    updateDownload: (payload) => ipcRenderer.invoke('update-download', payload),
+    updateInstall: () => ipcRenderer.invoke('update-install'),
     updateGetState: () => ipcRenderer.invoke('update-get-state'),
     onUpdateDownloadProgress: (callback) => {
         const handler = (_, state) => callback(state);

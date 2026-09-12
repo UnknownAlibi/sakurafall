@@ -956,9 +956,7 @@
             </div>
           </div>
         </div>
-
-        <!-- 应用更新（检查更新/应用内下载安装/更新源配置） -->
-        <UpdateSettings />
+        <!-- 应用更新已完全独立：入口与更新源配置都在标题栏的全局更新卡片里 -->
       </div>
     </div>
 
@@ -972,7 +970,6 @@
 
 <script>
 import { mapGetters, mapActions } from 'vuex';
-import UpdateSettings from '../components/Settings/UpdateSettings.vue';
 import previewMoonwheel from '../assets/generated/theme-preview-sakurafall-default.webp';
 import previewNightStage from '../assets/generated/theme-preview-night-stage.webp';
 import previewMangaInk from '../assets/generated/theme-preview-manga-ink.webp';
@@ -991,9 +988,6 @@ const THEME_PREVIEWS = Object.freeze({
 
 export default {
   name: 'Settings',
-  components: {
-    UpdateSettings
-  },
   data() {
     return {
       localSettings: {

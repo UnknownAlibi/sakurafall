@@ -50,8 +50,15 @@ service may import a concrete site adapter or contain a playback-source domain.
 Budgets are versioned in `src/shared/performance-budgets.json` and validated by
 `tests/performance-budget.test.mjs`. The catalog grid uses bounded virtualization, stable card
 dimensions, cached thumbnails, passive scroll listeners, and scroll-only frame sampling.
-Feature work that exceeds a budget must either reduce its hot-path cost or update the budget
-with an explicit reason.
+Feature work that exceeds a runtime budget (`startup` / `scroll` / `operations`) must either
+reduce its hot-path cost or update the budget with an explicit reason.
+
+`sourceLimits.ratchet` is different: it is a **shrink-only** guard locking the byte and line size
+of the largest source files. Exceeding one means the file has taken on too many responsibilities —
+extract them (`src/main/ipc/*.js` for main-process channels, composable / mixin / store modules for
+renderer logic) instead of raising the budget. Size measurements are line-ending normalized, so the
+gate behaves identically on LF and CRLF checkouts. `sourceLimits.topNFilesGuarded` additionally
+fails the build when a file grows into the largest-N ranking without being added to the ratchet.
 
 ## Compatibility policy
 

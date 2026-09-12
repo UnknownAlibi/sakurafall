@@ -6,6 +6,7 @@ import notification from './modules/notification.js';
 import favorite from './modules/favorite.js';
 import download from './modules/download.js';
 import reminder from './modules/reminder.js';
+import update from './modules/update.js';
 
 export default createStore({
   modules: {
@@ -15,6 +16,7 @@ export default createStore({
     notification,
     favorite,
     download,
-    reminder
+    reminder,
+    update
   }
 });

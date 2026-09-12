@@ -25,6 +25,37 @@ class AnimeDatabase {
         this._writeQueueTimer = null;
         this._writeQueueFlushInterval = 2000; // 2 秒 flush 一次
         this._writeQueueMaxSize = 50; // 队列上限，超过立即 flush
+        // WAL 定期 checkpoint：WAL 只在达到阈值（默认 1000 页）时才自动回写，
+        // 长期低频写入的场景下 wal 文件会一直胀着；PASSIVE 不阻塞读写，开销可忽略。
+        this._walCheckpointTimer = null;
+        this._walCheckpointInterval = 5 * 60 * 1000;
+        // 数据库 user_version 高于当前应用支持的 schema 时置为致命错误，拒绝继续使用
+        this._fatalSchemaError = null;
+    }
+
+    /**
+     * WAL checkpoint。PASSIVE 不阻塞读写；TRUNCATE 用于关闭时回收 wal 文件。
+     * 失败只告警：checkpoint 属于维护动作，不应该影响正常读写。
+     */
+    _checkpointWal(mode = 'PASSIVE') {
+        if (!this.db) return;
+        try {
+            this.db.pragma(`wal_checkpoint(${mode})`);
+        } catch (error) {
+            console.warn(`[DB] wal_checkpoint(${mode}) 失败:`, error.message);
+        }
+    }
+
+    _scheduleWalCheckpoint() {
+        if (this._walCheckpointTimer) return;
+        this._walCheckpointTimer = setInterval(() => this._checkpointWal('PASSIVE'), this._walCheckpointInterval);
+        // 不阻止进程退出
+        if (this._walCheckpointTimer.unref) this._walCheckpointTimer.unref();
+    }
+
+    /** 数据库版本高于应用支持版本时的致命错误（供启动流程提示后退出） */
+    getFatalSchemaError() {
+        return this._fatalSchemaError || null;
     }
 
     /**
@@ -121,6 +152,20 @@ class AnimeDatabase {
             const databaseExisted = fs.existsSync(this.dbPath) && fs.statSync(this.dbPath).size > 0;
             this.db = new Database(this.dbPath);
 
+            // 降级保护：数据库由更新版本的应用写过（user_version 更高）时拒绝启动。
+            // 旧版应用会按自己的 schema 增删表列，可能造成不可逆的数据损坏。
+            const openedVersion = this._getUserVersion();
+            if (openedVersion > SCHEMA_VERSION) {
+                this._fatalSchemaError = new Error(
+                    `数据库版本 v${openedVersion} 高于当前应用支持的 v${SCHEMA_VERSION}，`
+                    + '请升级到新版本后再打开（继续使用旧版可能损坏数据）'
+                );
+                console.error('[DB]', this._fatalSchemaError.message);
+                try { this.db.close(); } catch (e) { /* ignore */ }
+                this.db = null;
+                return false;
+            }
+
             if (databaseExisted) this._backupBeforeMigration();
 
             // 启用 WAL 模式提升并发性能（失败则回退到普通模式）
@@ -138,6 +183,8 @@ class AnimeDatabase {
             this._createTables();
             // 启动写队列定时 flush
             this._scheduleLastUsedFlush();
+            // 启动 WAL 定期 checkpoint
+            this._scheduleWalCheckpoint();
             return true;
         } catch (error) {
             console.error('[DB] 数据库连接失败:', error);
@@ -1539,9 +1586,15 @@ class AnimeDatabase {
             clearInterval(this._lastUsedFlushTimer);
             this._lastUsedFlushTimer = null;
         }
+        if (this._walCheckpointTimer) {
+            clearInterval(this._walCheckpointTimer);
+            this._walCheckpointTimer = null;
+        }
         this._flushLastUsed();
         this._flushWriteQueue();
         if (this.db) {
+            // 退出前把 WAL 回写并截断，避免 wal 文件长期残留占用磁盘
+            this._checkpointWal('TRUNCATE');
             this.db.close();
             console.log('数据库已关闭');
         }

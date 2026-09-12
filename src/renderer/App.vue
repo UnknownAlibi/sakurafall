@@ -379,19 +379,26 @@ export default {
       // 启动轻量性能标记（dev 模式输出首屏耗时与 long task）
       startPerfMarks();
       // 启动时同步弹幕凭证和多源配置到主进程。
+      // 单独 try/catch：这一步失败绝不能连带跳过下面的下载进度监听与更新提醒绑定
+      // （曾因 danmakuConfigureProviders 传入响应式 Proxy 触发克隆异常，
+      //   导致 396-414 行的绑定整段被跳过，提醒与下载进度长期静默失效）
       const danmakuSettings = this.$store.state.settings;
-      if (window.electronAPI?.danmakuSetCredentials) {
-        await window.electronAPI.danmakuSetCredentials(
-          danmakuSettings.dandanplayAppId || '',
-          danmakuSettings.dandanplayAppSecret || ''
-        );
-      }
-      if (window.electronAPI?.danmakuConfigureProviders) {
-        await window.electronAPI.danmakuConfigureProviders({
-          providers: danmakuSettings.danmakuProviders || {},
-          customEndpoint: danmakuSettings.danmakuCustomEndpoint || '',
-          customToken: danmakuSettings.danmakuCustomToken || ''
-        });
+      try {
+        if (window.electronAPI?.danmakuSetCredentials) {
+          await window.electronAPI.danmakuSetCredentials(
+            danmakuSettings.dandanplayAppId || '',
+            danmakuSettings.dandanplayAppSecret || ''
+          );
+        }
+        if (window.electronAPI?.danmakuConfigureProviders) {
+          await window.electronAPI.danmakuConfigureProviders({
+            providers: danmakuSettings.danmakuProviders || {},
+            customEndpoint: danmakuSettings.danmakuCustomEndpoint || '',
+            customToken: danmakuSettings.danmakuCustomToken || ''
+          });
+        }
+      } catch (error) {
+        console.warn('[Bootstrap] 弹幕配置同步失败（不影响其它启动流程）:', error?.message || error);
       }
       if (!this.isPlayerWindow) {
         // 绑定下载进度监听（主进程推送 on-download-progress 事件）

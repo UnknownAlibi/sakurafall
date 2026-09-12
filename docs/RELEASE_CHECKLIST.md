@@ -20,7 +20,8 @@
 Run from a clean terminal with the development Electron process closed:
 
 ```powershell
-npm ci
+# 仓库以 yarn.lock 为唯一锁文件（package-lock.json 不入库），不能用 npm ci
+yarn install --frozen-lockfile
 npm run lint
 npm run verify:release
 ```

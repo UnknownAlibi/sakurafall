@@ -588,8 +588,7 @@ test('SubjectService loads only one request round for a cold tag-filtered first 
   };
 
   const result = await service._getReleasedBrowseCollection({
-    metaTags: ['奇幻'],
-    refresh: true
+    metaTags: ['奇幻']
   });
 
   // total=10000 触发截断检测：3 个排序页 + 5 个年份分段探测（limit=1）
@@ -612,8 +611,7 @@ test('SubjectService incrementally expands a tag collection only when a later pa
 
   const first = await service._getReleasedBrowseCollection({
     userTags: ['fantasy'],
-    minItems: 24,
-    refresh: true
+    minItems: 24
   });
   const second = await service._getReleasedBrowseCollection({
     userTags: ['fantasy'],

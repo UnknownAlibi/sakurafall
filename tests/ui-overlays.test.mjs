@@ -121,15 +121,54 @@ test('continue-watching removal updates immediately and rolls back on IPC failur
   }
 });
 
-test('application updater owns its layout and state after settings extraction', () => {
+test('application updater is fully global: mounted in title bar, absent from settings', () => {
   const settings = fs.readFileSync(path.join(root, 'src/renderer/views/Settings.vue'), 'utf8');
-  const updater = fs.readFileSync(path.join(root, 'src/renderer/components/Settings/UpdateSettings.vue'), 'utf8');
-  assert.match(settings, /<UpdateSettings\s*\/>/);
+  const titleBar = fs.readFileSync(path.join(root, 'src/renderer/components/Common/TitleBar.vue'), 'utf8');
+  const updater = fs.readFileSync(path.join(root, 'src/renderer/components/Common/UpdateCenter.vue'), 'utf8');
+  const card = fs.readFileSync(path.join(root, 'src/renderer/components/Common/UpdateCard.vue'), 'utf8');
+
+  // 全局入口：标题栏常驻徽标 + 下拉卡片，不再依赖设置页
+  assert.match(titleBar, /<UpdateCenter\s*\/>/);
+  assert.doesNotMatch(settings, /<UpdateSettings\s*\/>/);
   assert.doesNotMatch(settings, /async checkForUpdates\s*\(/);
-  assert.match(updater, /class="update-button update-button-primary"/);
-  assert.match(updater, /\.update-toolbar\s*[,{]/);
-  assert.match(updater, /\.update-source-input\s*\{/);
+  // 设置页不再承载任何更新 UI（含更新源输入框）
+  assert.doesNotMatch(settings, /update-source-url/);
+
+  // 卡片异步加载：常驻徽标不得把卡片体积带进主 chunk（体积预算会顶破）
+  assert.match(updater, /defineAsyncComponent\(\s*\(\)\s*=>\s*import\('\.\/UpdateCard\.vue'\)\s*\)/);
+  assert.match(updater, /mapGetters\(\s*'update'/);
+
+  // 更新源配置内嵌在卡片里，更新功能自成一体
+  assert.match(card, /updateSetUrl/);
+  assert.match(card, /update-source-input/);
+  // 状态与监听来自全局 store，而不是组件局部 data
+  assert.match(card, /mapState\(\s*'update'/);
+  // 不再有跳转设置页的入口
+  assert.doesNotMatch(updater + card, /goSettings/);
   assert.match(updater, /@keyframes update-spin/);
+});
+
+test('IPC 边界：响应式对象必须先转成可克隆值', () => {
+  const preload = fs.readFileSync(path.join(root, 'src/main/preload.js'), 'utf8');
+  const app = fs.readFileSync(path.join(root, 'src/renderer/App.vue'), 'utf8');
+
+  // 回归：渲染层会直接把 store.state / localSettings 里的响应式 Proxy 传进来，
+  // 未包装时 structuredClone 抛 "An object could not be cloned."，调用方后续逻辑整段中断
+  assert.match(
+    preload,
+    /danmakuConfigureProviders:\s*\(config\)\s*=>\s*ipcRenderer\.invoke\('danmaku-configure-providers',\s*toIpcSafeValue\(config\)\)/,
+    'danmakuConfigureProviders 必须经 toIpcSafeValue 包装'
+  );
+
+  // 启动流程的连带伤害回归：弹幕同步失败不得跳过随后的提醒/下载监听绑定
+  const syncStart = app.indexOf('danmakuConfigureProviders');
+  const bindingStart = app.indexOf('download/bindProgressListener');
+  assert.ok(syncStart > 0 && bindingStart > syncStart, '启动流程顺序：弹幕同步在提醒/下载绑定之前');
+  assert.match(
+    app.slice(syncStart, bindingStart),
+    /catch\s*\(/,
+    '弹幕同步必须就地捕获异常，否则会连带跳过下载进度与更新提醒的监听绑定'
+  );
 });
 
 test('Bangumi stale refresh warms cache without replacing the visible filter result', () => {

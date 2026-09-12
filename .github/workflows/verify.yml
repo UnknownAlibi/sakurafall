@@ -1,0 +1,60 @@
+# 项目门禁：跑的就是本地那套 `npm run verify`（测试 + 构建 + 体积预算 + lint）。
+# 背景：docs/CODE_REVIEW_2026-08.md 把「无 CI」列为遗留项 —— 353 例测试与
+# 体积棘轮此前只在本地手动跑，红了也没人知道。本工作流把它变成强制的。
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上新的推送取消上一次未完成的运行，避免排队堆积
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: 桌面端（lint + 测试 + 构建 + 体积预算）
+    # 用 Windows：产品目标平台即 Windows，本地与 CI 结果才能一致
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+
+      # 仓库以 yarn.lock 为唯一锁文件（见 .gitignore 中的说明）。
+      # 跳过 postinstall：electron-builder install-app-deps 会把 better-sqlite3
+      # 重编译成 Electron ABI，CI 里既不需要（测试已 mock 原生模块）又很耗时。
+      # 若将来有测试真的需要原生模块，去掉 --ignore-scripts 即可。
+      - name: 安装依赖
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
+
+      # 与本地完全一致的组合：
+      # test → features → video-proxy → playback-lifecycle → build:renderer → 体积/性能预算
+      - name: 完整校验（npm run verify）
+        run: npm run verify
+
+  server:
+    name: 服务端单测
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # server 子项目零依赖（package.json 无 dependencies），无需安装步骤
+      - name: 服务端测试
+        run: npm test
+        working-directory: server

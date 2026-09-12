@@ -20,6 +20,10 @@
 - IPC 数据必须可序列化，不得传递 Electron 对象、函数或循环引用。
 - 列表、封面和滚动热路径的改动必须符合 `src/shared/performance-budgets.json`。
 - 不得通过删除封面、时间表或核心功能来规避性能问题。
+- **巨人文件棘轮（只许变小）**：`performance-budgets.json` 的 `sourceLimits.ratchet` 锁定了体积最大的源文件。
+  往这些文件加代码前必须先抽离职责（主进程 IPC → `src/main/ipc/*.js`；渲染层逻辑 → composable / mixin / store 模块），
+  **不要抬高预算**——预算是护栏，抬了就失去意义。加守一个文件只需改 JSON（不用改测试）；
+  若某个文件长进体积前 `topNFilesGuarded` 名而未被守护，`tests/performance-budget.test.mjs` 会直接报红并在信息里点名。
 
 ## 扩展贡献
 

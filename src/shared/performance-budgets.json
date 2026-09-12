@@ -24,13 +24,68 @@
     "hlsVendorJsBytes": 614400
   },
   "sourceLimits": {
-    "animeZoneMaxLines": 2200,
-    "animeZoneMaxBytes": 80000,
-    "videoPlayerMaxLines": 3611,
-    "videoPlayerMaxBytes": 125657,
-    "settingsMaxLines": 3197,
-    "settingsMaxBytes": 98000,
-    "mainIndexMaxLines": 2998,
-    "mainIndexMaxBytes": 116945
+    "ratchet": [
+      {
+        "path": "src/renderer/components/AnimeZone/AnimeDetail.vue",
+        "maxLines": 3415,
+        "maxBytes": 108000
+      },
+      {
+        "path": "src/renderer/views/Settings.vue",
+        "maxLines": 3154,
+        "maxBytes": 96500
+      },
+      {
+        "path": "src/renderer/components/Player/VideoPlayer.vue",
+        "maxLines": 3087,
+        "maxBytes": 123500
+      },
+      {
+        "path": "src/main/index.js",
+        "maxLines": 2905,
+        "maxBytes": 114500
+      },
+      {
+        "path": "src/renderer/views/AnimeZone.vue",
+        "maxLines": 1926,
+        "maxBytes": 72500
+      },
+      {
+        "path": "src/renderer/components/Player/ControlBar.vue",
+        "maxLines": 1862,
+        "maxBytes": 56000
+      },
+      {
+        "path": "src/renderer/views/SourceManager.vue",
+        "maxLines": 1852,
+        "maxBytes": 59000
+      },
+      {
+        "path": "src/main/services/SubjectService.js",
+        "maxLines": 1817,
+        "maxBytes": 72000
+      },
+      {
+        "path": "src/main/services/CmsApiService.js",
+        "maxLines": 1712,
+        "maxBytes": 63000
+      },
+      {
+        "path": "src/main/services/AnimeDatabase.js",
+        "maxLines": 1635,
+        "maxBytes": 66500
+      },
+      {
+        "path": "src/main/services/danmaku/DanmakuProviderRegistry.js",
+        "maxLines": 1454,
+        "maxBytes": 57500
+      },
+      {
+        "path": "src/renderer/views/BtHub.vue",
+        "maxLines": 1318,
+        "maxBytes": 37500
+      }
+    ],
+    "topNFilesGuarded": 10
   }
 }
