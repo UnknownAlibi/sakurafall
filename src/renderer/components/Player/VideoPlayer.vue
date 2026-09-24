@@ -1,7 +1,7 @@
 <template>
   <div
     class="video-player-container"
-    :class="{ 'controls-idle': !controlsVisible && (isPlaying || isFullscreen) && !loading && !error && !buffering }"
+    :class="{ 'controls-idle': !controlsVisible && (isPlaying || isFullscreen) && !loading && !error && !buffering, 'is-window-fullscreen': isWindowFullscreen }"
     @mousemove="onMouseMove"
     @mouseleave="onMouseLeave"
     @click="onContainerClick"
@@ -481,6 +481,7 @@ import playerPlatformIntegration from '../../mixins/playerPlatformIntegration.js
 import watchTogetherMixin from '../../mixins/watchTogether.js';
 import playerPlaybackLifecycle from '../../mixins/playerPlaybackLifecycle.js';
 import playerPlaybackStats from '../../mixins/playerPlaybackStats.js';
+import windowFullscreenMixin from '../../mixins/windowFullscreen.js';
 import { isSuspiciousSniffedMediaEnd } from '../../utils/episodePlaybackPolicy.js';
 
 // Automatic fallback is allowed only after serialized recovery attempts for
@@ -504,7 +505,7 @@ function loadHlsClass() {
 export default {
   name: 'VideoPlayer',
   components: { ControlBar, DanmakuLayer, DanmakuSettingsPanel, SubtitleLayer, Anime4KCanvas, CastDialog, WatchTogetherPanel, ViewingNotebookPanel, EpisodeDnaPanel },
-  mixins: [playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats],
+  mixins: [playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats, windowFullscreenMixin],
   emits: ['video-ended', 'next-episode', 'open-enhanced-player', 'open-settings'],
   props: {
     // 是否有剧集列表（控制下一集按钮显隐），由父视图传入
@@ -561,6 +562,8 @@ export default {
       playbackStartupWatchdog: null,
       nativeFallbackConfirmationPending: false,
       maxHlsRecoveryAttempts: 3,
+      // 异常暂停自动恢复上限：超过即放弃，避免与媒体元素互抢导致按钮闪烁
+      maxUnexpectedPauseRecoveryAttempts: 3,
       maxFallbackSourceAttempts: 5,
       triedFallbackSourceIds: [],
       fallbackRequestToken: 0,
@@ -1864,7 +1867,11 @@ export default {
       }
     },
 
-    toggleFullscreen() {
+    async toggleFullscreen() {
+      if (window.electronAPI?.windowToggleFullscreen) {
+        await this.toggleWindowFullscreen();
+        return;
+      }
       const container = this.$el;
       if (container) {
         if (document.fullscreenElement) {
@@ -2110,17 +2117,29 @@ export default {
       if (unexpected && this.playbackSession) {
         this.playbackSession.unexpectedPauseCount += 1;
         if (this.unexpectedPauseRecoveryTimer) clearTimeout(this.unexpectedPauseRecoveryTimer);
-        const generation = this.mediaLoadGeneration;
-        this.unexpectedPauseRecoveryTimer = setTimeout(() => {
-          this.unexpectedPauseRecoveryTimer = null;
-          if (generation === this.mediaLoadGeneration && this.playbackIntent && this.$refs.videoElement?.paused) {
-            this.requestPlayback('unexpected-pause-recovery');
-          }
-        }, 120);
+        if (this.playbackSession.unexpectedPauseCount <= this.maxUnexpectedPauseRecoveryAttempts) {
+          const generation = this.mediaLoadGeneration;
+          this.unexpectedPauseRecoveryTimer = setTimeout(() => {
+            this.unexpectedPauseRecoveryTimer = null;
+            if (generation === this.mediaLoadGeneration && this.playbackIntent && this.$refs.videoElement?.paused) {
+              this.requestPlayback('unexpected-pause-recovery');
+            }
+          }, 120);
+        } else {
+          // 连续异常暂停已达到上限：放弃自动恢复，把控制权交还用户，
+          // 否则会在 120ms 周期内不停 play/pause 互相抢占。
+          this.playbackIntent = false;
+          this.showCenterPlay = true;
+        }
       }
-      this.setPlaying(false);
+      // 内部暂停（缓冲/seek/解码器重启）不代表用户想暂停：保留播放态 UI 等
+      // onPlay 恢复，避免按钮来回闪烁。
+      const internalPause = this.playbackIntent && !video?.ended && !this.casting;
+      if (!internalPause) {
+        this.setPlaying(false);
+        this.revealControls(false);
+      }
       this.stopPlaybackStats();
-      this.revealControls(false);
       // 暂停时立即保存一次进度，避免切换或关闭时丢失最后几秒
       this.savePlayProgress();
     },
@@ -2602,8 +2621,9 @@ export default {
           }
           break;
         case 'Escape':
-          if (document.fullscreenElement) {
-            document.exitFullscreen();
+          // 主进程全屏不会被 Esc 自动退出，需自己收尾
+          if (this.isFullscreen) {
+            this.toggleFullscreen();
           }
           break;
       }
@@ -2981,6 +3001,9 @@ export default {
     };
     document.addEventListener('fullscreenchange', this._fullscreenHandler);
 
+    // 主进程窗口全屏同步见 mixins/windowFullscreen.js
+    this.bindWindowFullscreenSync();
+
     // 双击全屏（具名 handler：先取消待执行的单击暂停，再切全屏）
     this._onDblClick = () => {
       clearTimeout(this._clickToggleTimer);
@@ -3002,6 +3025,7 @@ export default {
   beforeUnmount() {
     document.removeEventListener('keydown', this.handleKeyPress);
     document.removeEventListener('fullscreenchange', this._fullscreenHandler);
+    this.unbindWindowFullscreenSync();
     this.$el?.removeEventListener('dblclick', this._onDblClick);
     clearTimeout(this._clickToggleTimer);
     this._clickToggleTimer = null;

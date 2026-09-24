@@ -1,7 +1,13 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog, session, shell, nativeImage, protocol, clipboard } = require('electron');
 const processStartedAt = Date.now();
 
+// 窗口全屏管理（GPU 合成兼容开关 + 全屏 IPC + 状态同步）抽离至独立模块
+const { applyFullscreenCompatFlags, registerWindowFullscreenIpc, bindFullscreenStateSync } = require('./window-fullscreen');
+// 窗口状态持久化（尺寸/位置/最大化）抽离至独立模块
+const { loadWindowState, applyWindowState, bindWindowStatePersistence } = require('./window-state');
+
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+applyFullscreenCompatFlags();
 
 protocol.registerSchemesAsPrivileged([{
     scheme: 'sakurafall-cache',
@@ -606,88 +612,7 @@ async function applyNetworkConfig(config = {}) {
     }
 }
 
-// ===== Phase 9: 窗口状态持久化（尺寸/位置/最大化） =====
-const windowStateSaveTimers = new Map();
-
-function getWindowStateFile() {
-    return path.join(app.getPath('userData'), 'window-state.json');
-}
-
-function loadWindowState() {
-    try {
-        const file = getWindowStateFile();
-        if (fs.existsSync(file)) {
-            return JSON.parse(fs.readFileSync(file, 'utf8'));
-        }
-    } catch (e) {
-        console.warn('[WindowState] 读取失败:', e.message);
-    }
-    return {};
-}
-
-function saveWindowState(key, win) {
-    if (windowStateSaveTimers.has(key)) clearTimeout(windowStateSaveTimers.get(key));
-    windowStateSaveTimers.set(key, setTimeout(() => {
-        windowStateSaveTimers.delete(key);
-        try {
-            if (win.isDestroyed()) return;
-            const data = loadWindowState();
-            const bounds = win.getBounds();
-            data[key] = {
-                width: bounds.width,
-                height: bounds.height,
-                x: bounds.x,
-                y: bounds.y,
-                isMaximized: win.isMaximized()
-            };
-            fs.writeFileSync(getWindowStateFile(), JSON.stringify(data, null, 2), 'utf8');
-        } catch (e) {
-            console.warn('[WindowState] 保存失败:', e.message);
-        }
-    }, 500));
-}
-
-/**
- * 应用持久化的窗口状态（尺寸/位置/最大化）
- * @param {BrowserWindow} win
- * @param {string} key - 'mainWindow' | 'playerWindow'
- * @param {object} defaults - { minWidth, minHeight }
- */
-function applyWindowState(win, key, defaults = {}) {
-    const state = loadWindowState()[key];
-    if (!state || !Number.isFinite(state.width) || !Number.isFinite(state.height)) {
-        return false;
-    }
-    const bounds = {
-        width: Math.max(defaults.minWidth || 400, state.width),
-        height: Math.max(defaults.minHeight || 300, state.height)
-    };
-    if (Number.isFinite(state.x) && Number.isFinite(state.y)) {
-        bounds.x = state.x;
-        bounds.y = state.y;
-    }
-    try {
-        win.setBounds(bounds);
-    } catch (e) { /* 多显示器场景下 x/y 可能无效，忽略 */ }
-    if (state.isMaximized) {
-        win.maximize();
-    }
-    return true;
-}
-
-/**
- * 绑定窗口尺寸/位置/最大化变更的持久化（防抖 500ms）
- */
-function bindWindowStatePersistence(win, key) {
-    const handler = () => {
-        if (win.isDestroyed()) return;
-        saveWindowState(key, win);
-    };
-    win.on('resize', handler);
-    win.on('move', handler);
-    win.on('maximize', handler);
-    win.on('unmaximize', handler);
-}
+// ===== Phase 9: 窗口状态持久化 → 已抽离至 window-state.js =====
 
 function createWindow() {
     const appIcon = loadAppIcon();
@@ -712,6 +637,7 @@ function createWindow() {
     if (appIcon) mainWindow.setIcon(appIcon);
     protectWebContents(mainWindow.webContents);
     attachWindowDiagnostics(mainWindow, 'main');
+    bindFullscreenStateSync(mainWindow);
     configureSmokeTest(mainWindow);
 
     // 加载应用
@@ -815,6 +741,10 @@ function createPlayerWindow(videoData) {
         minWidth: 480,
         minHeight: 360,
         show: false,
+        // 播放窗口永远是黑底：窗口尺寸变化（进出全屏、拖动缩放）时，尚未重绘的
+        // 区域会直接显示窗口底色，默认白色会闪出一片白（用户看到的"全屏下面
+        // 一片空白"就是它）。
+        backgroundColor: '#000000',
         icon: appIcon || appIconPath,
         title: videoData?.title || '播放器',
         webPreferences: {
@@ -832,6 +762,7 @@ function createPlayerWindow(videoData) {
     if (appIcon) win.setIcon(appIcon);
     protectWebContents(win.webContents);
     attachWindowDiagnostics(win, 'player');
+    bindFullscreenStateSync(win);
 
     // 按 webContents.id 缓存视频数据，该窗口加载后通过 IPC 拉取
     // 注意：closed 事件触发时 webContents 已被销毁，所以必须提前缓存 id
@@ -1185,6 +1116,9 @@ secureIpcHandle('is-maximized', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     return win ? win.isMaximized() : false;
 });
+
+// 窗口全屏 IPC（切换/查询）见 window-fullscreen.js
+registerWindowFullscreenIpc(secureIpcHandle);
 
 // 独立播放窗口：打开
 secureIpcHandle('background-playback-pressure', () => playerWindows.size > 0);

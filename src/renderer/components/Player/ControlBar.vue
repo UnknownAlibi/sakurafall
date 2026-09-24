@@ -2,6 +2,7 @@
   <div
     class="control-bar"
     :class="{ visible }"
+    :style="{ opacity: visible ? 1 : 0, pointerEvents: visible ? 'auto' : 'none' }"
     @mouseenter="$emit('controls-hover', true)"
     @mouseleave="$emit('controls-hover', false)"
     @pointerup="releasePointerFocus"

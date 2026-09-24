@@ -287,7 +287,7 @@ test('player pointer focus and fullscreen idle behavior stay independent', () =>
   assert.match(player, /'controls-idle': !controlsVisible && \(isPlaying \|\| isFullscreen\)/);
   assert.match(player, /this\.controlsHovered && !this\.isFullscreen/);
   assert.match(player, /this\.\$refs\.controlBar\?\.hasOpenInteraction\?\.\(\)/);
-  assert.match(player, /mixins: \[playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats\]/);
+  assert.match(player, /mixins: \[playerPlatformIntegration, watchTogetherMixin, playerPlaybackLifecycle, playerPlaybackStats, windowFullscreenMixin\]/);
   assert.match(platform, /isFullscreen\(fullscreen\)[\s\S]*?this\.revealControls\(true\)/);
   assert.match(platform, /data-player-cursor-hidden/);
   assert.match(platform, /createPlayerMediaSession[\s\S]*?next-episode/);

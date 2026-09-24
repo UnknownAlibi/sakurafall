@@ -12,6 +12,7 @@
   height: 100%;
   object-fit: contain;
   display: block;
+  background: #000;
 }
 
 /* ===== 覆盖层（加载/错误） ===== */
@@ -721,6 +722,24 @@
   18% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   72% { opacity: 1; }
   100% { opacity: 0; transform: translate(-50%, -50%) scale(1.02); }
+}
+
+/* ===== 主进程窗口全屏：播放器容器铺满窗口 =====
+   全屏由主进程 win.setFullScreen 切换（见 window-toggle-fullscreen），这里用
+   与 :fullscreen UA 样式等价的方式让容器铺满窗口：position:fixed 脱离文档流，
+   盖住标题栏/选集侧栏等应用外壳。不走 Chromium top layer，因此不会出现
+   "点全屏先闪一下" 以及窗口尺寸与渲染视口不同步的空白区。 */
+.video-player-container.is-window-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  /* 高于标题栏/导航轨（无 z-index），低于全局通知(10000)与确认弹窗(12000) */
+  z-index: 1000;
+  background: #000;
 }
 
 /* ===== 播放中控制栏隐藏时，鼠标光标一并隐藏（沉浸观影） ===== */

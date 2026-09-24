@@ -67,6 +67,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('window-state-changed', handler);
         return () => ipcRenderer.removeListener('window-state-changed', handler);
     },
+    // 窗口全屏（播放器全屏走主进程，避免 HTML5 requestFullscreen 在无边框窗口上
+    // 出现窗口尺寸与渲染视口不同步导致的闪白/黑边）
+    windowToggleFullscreen: () => ipcRenderer.invoke('window-toggle-fullscreen'),
+    windowIsFullscreen: () => ipcRenderer.invoke('window-is-fullscreen'),
+    onWindowFullscreenChanged: (callback) => {
+        const handler = (_, isFullscreen) => callback(Boolean(isFullscreen));
+        ipcRenderer.on('window-fullscreen-changed', handler);
+        return () => ipcRenderer.removeListener('window-fullscreen-changed', handler);
+    },
     getBackgroundPlaybackPressure: () => ipcRenderer.invoke('background-playback-pressure'),
     onBackgroundPlaybackPressure: callback => {
         const handler = (_event, active) => callback(Boolean(active));
