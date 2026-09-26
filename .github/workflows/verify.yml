@@ -58,3 +58,29 @@ jobs:
       - name: 服务端测试
         run: npm test
         working-directory: server
+
+  release-gate:
+    name: 发布门禁（打包 + 安装包冒烟）
+    # 干净 runner 上跑完整发布门禁：本机装有 SakuraFall 时安装包冒烟测试需要
+    # 走"临时移走注册表/快捷方式"的保护路径，在 CI 上则是全新环境，天然安全，
+    # 同时能独立验证安装包（含静默安装、在线/离线启动、卸载）。
+    # 只在 main 推送与手动触发时跑：完整打包 + 三次冒烟较重，不必压在每次 PR 上。
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+
+      # electron-builder 打包时会自行完成原生依赖的 Electron ABI 重编译
+      # （日志中的 installing native dependencies），因此这里仍可跳过 postinstall。
+      - name: 安装依赖
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      # 与本地 npx 发布相同的组合：verify → build → packaged 冒烟（在线/离线）→ 安装包冒烟
+      - name: 发布门禁（npm run verify:release）
+        run: npm run verify:release

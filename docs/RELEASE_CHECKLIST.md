@@ -66,6 +66,7 @@ npm run verify:release
 - Publish installer SHA-256 and file size alongside the release.
 - Update the hosted `latest.json` using `docs/latest.example.json`.
 - Use HTTPS for both update metadata and download URL.
+- Confirm the server TLS certificate is current. `npm run release` verifies the server update source and reports a certificate error with renewal instructions; the renewal task must be installed once per development machine (`server/deploy/install-renewal-task.ps1`), otherwise the short-lived IP certificate silently expires and the server update source stops working.
 - Archive the release test output and known limitations.
 
 ## 7. Rollback

@@ -236,6 +236,14 @@ async function main() {
     } catch (e) {
       console.warn(`[release] 服务器同步失败（GitHub 更新源仍可用）: ${e.message}`);
       console.warn(`        可稍后手动执行: scp dist-app/${path.basename(installer)} ${SERVER_SSH_ALIAS}:${SERVER_RELEASE_DIR}/`);
+      // 服务器使用短期 Let's Encrypt IP 证书，过期后公网验证与客户端更新源会一起失效
+      // （实测症状：curl 报 SEC_E_CERT_EXPIRED / schannel 错误，而安装包其实已 scp 成功）。
+      if (/CERT|schannel|SSL|TLS|证书/i.test(e.message)) {
+        console.warn('        疑似服务器 HTTPS 证书过期，请先续期再重试发布:');
+        console.warn('          powershell -ExecutionPolicy Bypass -File server/deploy/renew-ip-certificate.ps1');
+        console.warn('        若本机续期任务未安装（证书会反复过期），先执行:');
+        console.warn('          powershell -ExecutionPolicy Bypass -File server/deploy/install-renewal-task.ps1');
+      }
     }
   }
 
