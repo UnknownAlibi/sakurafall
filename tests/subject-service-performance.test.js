@@ -370,6 +370,48 @@ test('SubjectService attaches cached episode progress to the first catalog rende
   assert.equal(summary._airedEpisodeSnapshotExpired, false);
 });
 
+test('SubjectService prefetches aired-eps snapshots in one batch instead of per-item queries', () => {
+  const service = new SubjectService();
+  const batches = [];
+  let singleKeyQueries = 0;
+  service.db = {
+    getCacheAny() { singleKeyQueries += 1; return null; },
+    getCacheAnyMany(keys) {
+      batches.push(keys);
+      return new Map([['bangumi:aired-eps:v2:2', { content: { count: 5, planned: 12 }, expired: false }]]);
+    }
+  };
+
+  const summaries = service._toSubjectSummaries([
+    createSubject(1),
+    createSubject(2),
+    { source: 'anilist', id: 9, name: 'AniList entry' }
+  ]);
+
+  assert.equal(batches.length, 1, '整页只做一次批量读取');
+  // AniList 条目没有 bgm_id，不参与预取
+  assert.deepEqual(batches[0], ['bangumi:aired-eps:v2:1', 'bangumi:aired-eps:v2:2']);
+  assert.equal(singleKeyQueries, 0, '列表路径不应退化成逐条同步查询');
+  assert.equal(summaries[0].aired_episode_count, 0);
+  assert.equal(summaries[1].aired_episode_count, 5);
+  assert.equal(summaries[1].planned_episode_count, 12);
+});
+
+test('SubjectService falls back to per-item snapshot queries when the database cannot batch', () => {
+  const service = new SubjectService();
+  let singleKeyQueries = 0;
+  service.db = {
+    getCacheAny(key) {
+      singleKeyQueries += 1;
+      return key.endsWith(':42') ? { content: { count: 7, planned: 12 }, expired: false } : null;
+    }
+  };
+
+  const summary = service._toSubjectSummary(createSubject(42));
+  assert.equal(singleKeyQueries, 1);
+  assert.equal(summary.aired_episode_count, 7);
+});
+
 test('SubjectService sorts one released tag collection by date and real score', async () => {
   const service = new SubjectService();
   const originalRequest = bangumiApi.request;

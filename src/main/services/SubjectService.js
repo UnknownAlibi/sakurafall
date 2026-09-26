@@ -19,6 +19,8 @@ const {
   isSubjectCatalogEligible,
   subjectReleaseState
 } = require('./SubjectCatalogPolicy');
+// 列表页 aired-eps 快照批量预取（替代逐条同步查询）
+const { airedEpisodeSnapshotKey, prefetchAiredEpisodeSnapshots } = require('./subjectEpisodeSnapshot');
 
 // AniList ID 标识：'anilist:123' / 'anilist_123'
 function parseAniListId(value) {
@@ -94,14 +96,14 @@ class SubjectService {
         });
       });
       all.sort((a, b) => (b.rating || 0) - (a.rating || 0) || (a.rank || 999) - (b.rank || 999));
-      const items = all.slice(0, limit).map(item => this._toSubjectSummary(item));
+      const items = this._toSubjectSummaries(all.slice(0, limit));
       this._indexUpsert(items);
       return items;
     } catch (err) {
       // Bangumi 不可达：回退 AniList 热门榜
       console.warn('[SubjectService] 获取热门番剧失败，回退 AniList:', err.message);
       const fallback = await anilistProvider.getTrending(limit);
-      return (fallback || []).map(item => this._toSubjectSummary(item));
+      return this._toSubjectSummaries(fallback || []);
     }
   }
 
@@ -111,9 +113,11 @@ class SubjectService {
    */
   async getCalendar() {
     const schedule = await bangumiApi.getSchedule();
+    // 整个时间表一次性预取快照，避免逐条同步查询
+    const snapshots = prefetchAiredEpisodeSnapshots(this.db, schedule.flatMap(day => day.items || []));
     const result = schedule.map(day => ({
       weekday: day.weekday,
-      items: (day.items || []).map(item => this._toSubjectSummary(item))
+      items: (day.items || []).map(item => this._toSubjectSummary(item, snapshots))
     }));
     // 写入本地索引（fire-and-forget）
     const allItems = result.flatMap(day => day.items || []);
@@ -130,7 +134,7 @@ class SubjectService {
     if (!result.error && (result.data || []).length > 0) {
       const normalized = {
         ...result,
-        data: (result.data || []).map(item => this._toSubjectSummary(item))
+        data: this._toSubjectSummaries(result.data || [])
       };
       this._indexUpsert(normalized.data);
       return normalized;
@@ -143,7 +147,7 @@ class SubjectService {
     return {
       ...fallback,
       _fallbackSource: 'anilist',
-      data: (fallback.data || []).map(item => this._toSubjectSummary(item))
+      data: this._toSubjectSummaries(fallback.data || [])
     };
   }
 
@@ -167,7 +171,7 @@ class SubjectService {
     if (bangumiOk) {
       normalized = {
         ...result,
-        data: (result.data || []).map(item => this._toSubjectSummary(item))
+        data: this._toSubjectSummaries(result.data || [])
       };
       // 写入本地索引（fire-and-forget）
       this._indexUpsert(normalized.data);
@@ -178,7 +182,7 @@ class SubjectService {
       normalized = {
         ...fallback,
         _fallbackSource: 'anilist',
-        data: (fallback.data || []).map(item => this._toSubjectSummary(item))
+        data: this._toSubjectSummaries(fallback.data || [])
       };
       // AniList 条目 bgm_id 为空，不入 Bangumi 本地索引
     }
@@ -1598,17 +1602,29 @@ class SubjectService {
 
   // ── 标准化 ────────────────────────────────────────────────
 
+  // 列表页统一入口：先批量预取 aired-eps 快照，再一次标准化整页
+  // （一次 IN 查询替代逐条同步查询，避免 N+1 阻塞主进程）
+  _toSubjectSummaries(items = []) {
+    const snapshots = prefetchAiredEpisodeSnapshots(this.db, items);
+    return items.map(item => this._toSubjectSummary(item, snapshots));
+  }
+
   /**
    * 将 BangumiApi 的列表项标准化为 SubjectSummary
    * 符合 docs/desktop-modernization-plan.md 5.1 节
+   * @param {object} item - 原始列表项
+   * @param {Map|null} snapshots - 批量预取的 aired-eps 快照（列表路径）；
+   *   单条路径传 null/缺省时回退为逐条查询
    */
-  _toSubjectSummary(item) {
+  _toSubjectSummary(item, snapshots = null) {
     if (!item) return null;
     if (item.source === 'anilist' || item.anilistId || item.anilist_id) {
       return this._toAniListSummary(item);
     }
     const bgmId = item.bgm_id || item.id;
-    const episodeSnapshotRow = this.db?.getCacheAny?.(`bangumi:aired-eps:v2:${bgmId}`) || null;
+    const episodeSnapshotRow = snapshots
+      ? snapshots.get(airedEpisodeSnapshotKey(bgmId)) ?? null
+      : this.db?.getCacheAny?.(airedEpisodeSnapshotKey(bgmId)) || null;
     const episodeSnapshot = episodeSnapshotRow?.content || null;
     const plannedEpisodeCount = item.planned_episode_count || item.plannedEpisodeCount ||
       item.total_episode_count || item.totalEpisodeCount || item.episode_count ||

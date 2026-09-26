@@ -8,6 +8,7 @@ const {
     normalizeHistoryTitle,
     toPositiveInteger
 } = require('../utils/playHistoryIdentity');
+const { createViewingNotesTable, createEpisodeSegmentsTable } = require('./dbSchemaHelpers');
 
 const SCHEMA_VERSION = 10;
 
@@ -258,6 +259,8 @@ class AnimeDatabase {
         this.db.exec(cacheSql);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cms_cache_expires ON cms_cache(expires_at)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cms_cache_source ON cms_cache(source_id, kind)`);
+        // 容量淘汰按 last_used 排序，缺索引会退化成临时排序
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cms_cache_last_used ON cms_cache(last_used)`);
         console.log('CMS 缓存表就绪');
 
         // ── Bangumi 本地索引（P0：本地索引为主，网络同步为辅）──
@@ -308,6 +311,9 @@ class AnimeDatabase {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_rank ON bangumi_subjects(rank)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_year ON bangumi_subjects(year)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_type ON bangumi_subjects(type)`);
+        // 索引页按 platform（TV/OVA/剧场版）与 air_weekday（时间表）过滤
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_platform ON bangumi_subjects(platform)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_air_weekday ON bangumi_subjects(air_weekday)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_tag_tag ON bangumi_subject_tags(tag)`);
         this._runMigrations();
         console.log('Bangumi 索引表就绪');
@@ -469,53 +475,13 @@ class AnimeDatabase {
         }
     }
 
+    // 建表 DDL 已抽离至 dbSchemaHelpers.js（本文件受棘轮预算约束）
     _createViewingNotesTable() {
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS viewing_notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                episode_key TEXT NOT NULL,
-                work_key TEXT DEFAULT '',
-                bgm_id INTEGER DEFAULT NULL,
-                anime_name TEXT DEFAULT '',
-                episode_number INTEGER DEFAULT NULL,
-                episode_title TEXT DEFAULT '',
-                position REAL NOT NULL DEFAULT 0,
-                duration REAL NOT NULL DEFAULT 0,
-                note TEXT DEFAULT '',
-                category TEXT DEFAULT '',
-                source_id TEXT DEFAULT '',
-                created_at INTEGER NOT NULL
-            )
-        `);
-        this.db.exec('CREATE INDEX IF NOT EXISTS idx_viewing_notes_episode ON viewing_notes(episode_key, position)');
-        this.db.exec('CREATE INDEX IF NOT EXISTS idx_viewing_notes_created ON viewing_notes(created_at DESC)');
+        createViewingNotesTable(this.db);
     }
 
     _createEpisodeSegmentsTable() {
-        // Episode DNA P1：用户确认过的片头/片尾/广告段/关键剧情时间段
-        // kind ∈ intro(片头) / outro(片尾) / ad(广告) / highlight(关键剧情)
-        // origin ∈ user(手动标记) / dna(分析候选被确认)
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS episode_segments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                episode_key TEXT NOT NULL,
-                work_key TEXT DEFAULT '',
-                bgm_id INTEGER DEFAULT NULL,
-                anime_name TEXT DEFAULT '',
-                episode_number INTEGER DEFAULT NULL,
-                episode_title TEXT DEFAULT '',
-                kind TEXT NOT NULL,
-                start REAL NOT NULL DEFAULT 0,
-                end REAL NOT NULL DEFAULT 0,
-                confirmed INTEGER NOT NULL DEFAULT 0,
-                origin TEXT DEFAULT 'user',
-                note TEXT DEFAULT '',
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-        `);
-        this.db.exec('CREATE INDEX IF NOT EXISTS idx_episode_segments_episode ON episode_segments(episode_key, kind)');
-        this.db.exec('CREATE INDEX IF NOT EXISTS idx_episode_segments_work ON episode_segments(work_key, kind, confirmed)');
+        createEpisodeSegmentsTable(this.db);
     }
 
     _normalizeSegmentKind(value) {
@@ -702,6 +668,34 @@ class AnimeDatabase {
         } catch (e) {
             return null;
         }
+    }
+
+    /**
+     * 批量读取缓存（忽略过期检查），用于列表页预取，避免逐条查询退化成 N+1
+     * @param {string[]} keys
+     * @returns {Map<string, {content: any, expired: boolean}>} 只包含命中的键
+     */
+    getCacheAnyMany(keys = []) {
+        const hits = new Map();
+        if (!this.db || !keys.length) return hits;
+        const now = Date.now();
+        const unique = [...new Set(keys.filter(Boolean))];
+        // SQLite 变量数上限 999，分片查询留足余量
+        for (let i = 0; i < unique.length; i += 200) {
+            const chunk = unique.slice(i, i + 200);
+            const rows = this.db.prepare(
+                `SELECT cache_key, content, expires_at FROM cms_cache WHERE cache_key IN (${chunk.map(() => '?').join(',')})`
+            ).all(...chunk);
+            for (const row of rows) {
+                try {
+                    hits.set(row.cache_key, {
+                        content: JSON.parse(row.content),
+                        expired: row.expires_at <= now
+                    });
+                } catch (e) { /* 脏数据按未命中处理，与 getCacheAny 一致 */ }
+            }
+        }
+        return hits;
     }
 
     /**

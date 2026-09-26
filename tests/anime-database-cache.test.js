@@ -48,6 +48,13 @@ class MockStatement {
   }
 
   all(...params) {
+    // getCacheAnyMany：按 IN (?, ?, ...) 批量取
+    if (/SELECT cache_key, content, expires_at FROM cms_cache WHERE cache_key IN/.test(this.sql)) {
+      const keys = new Set(params);
+      return this.store
+        .filter(row => keys.has(row.cache_key))
+        .map(row => ({ cache_key: row.cache_key, content: row.content, expires_at: row.expires_at }));
+    }
     return [];
   }
 
@@ -259,6 +266,19 @@ test('clearCache: 无参数清空全部', () => {
   assert.strictEqual(deleted, 2);
   assert.strictEqual(db.getCache('k1'), null);
   assert.strictEqual(db.getCache('k2'), null);
+});
+
+test('getCacheAnyMany: 批量读取忽略过期，只返回命中的键', () => {
+  const db = createDb();
+  db.setCache('k1', 'src1', 'list', { a: 1 }, 60000);
+  db.setCache('k2', 'src1', 'list', { b: 2 }, 0); // 已过期，getCacheAny 语义下仍返回
+
+  const hits = db.getCacheAnyMany(['k1', 'k2', 'missing', 'k1']);
+  assert.deepStrictEqual(hits.get('k1'), { content: { a: 1 }, expired: false });
+  assert.strictEqual(hits.get('k2').content.b, 2);
+  assert.strictEqual(hits.get('k2').expired, true);
+  assert.strictEqual(hits.has('missing'), false);
+  assert.strictEqual(db.getCacheAnyMany([]).size, 0);
 });
 
 test('getCache: 内容损坏（非法 JSON）时返回 null 并删除脏数据', () => {
