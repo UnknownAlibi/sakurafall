@@ -49,3 +49,22 @@ test('BT 相关通道注入的是 secureIpcHandle 而非裸 ipcMain', () => {
   assert.match(call[0], /handle:\s*secureIpcHandle/, 'registerBtIpc 必须注入 secureIpcHandle');
   assert.doesNotMatch(call[0], /\bipcMain\b/, '不应再注入裸 ipcMain');
 });
+
+test('IPC 通道名唯一：拆分过程中不得重复注册或漏删旧块', () => {
+  const files = [
+    'src/main/index.js',
+    ...fs.readdirSync(IPC_DIR).filter(name => name.endsWith('.js')).map(name => `src/main/ipc/${name}`)
+  ];
+  const owners = new Map();
+  const duplicates = [];
+  for (const rel of files) {
+    const source = fs.readFileSync(path.join(root, rel), 'utf8');
+    for (const match of source.matchAll(/(?:secureIpcHandle|handle)\(\s*'([^']+)'/g)) {
+      const channel = match[1];
+      if (owners.has(channel)) duplicates.push(`${channel}（${owners.get(channel)} + ${rel}）`);
+      else owners.set(channel, rel);
+    }
+  }
+  assert.ok(owners.size >= 150, `识别到的通道数偏少（${owners.size}），拆分时可能漏注册`);
+  assert.deepStrictEqual(duplicates, [], '存在重复注册的 IPC 通道');
+});
