@@ -1,8 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { reactive, isReactive } from 'vue';
 import animeStore from '../src/renderer/store/modules/anime.js';
 import animeCatalogVirtualization from '../src/renderer/mixins/animeCatalogVirtualization.js';
 import animeInfiniteScroll from '../src/renderer/mixins/animeInfiniteScroll.js';
+
+test('anime list items stay raw so cards skip deep reactivity proxies', () => {
+  // 真实 Vuex state 是 reactive 的：条目必须保持原始对象（markRaw），
+  // 变量本身（数组、page 等）依然响应式
+  const state = reactive({ animeList: [], currentPage: 1, totalPages: 0, bangumiCatalogVersion: null });
+  animeStore.mutations.SET_ANIME_LIST(state, {
+    data: [{ id: '1', source: 'bangumi', tags: ['日常'] }],
+    page: 1,
+    totalPages: 3
+  });
+  assert.equal(isReactive(state.animeList), true, '列表数组本身仍应是响应式的');
+  assert.equal(isReactive(state.animeList[0]), false, '首屏条目不应被深层代理');
+  assert.equal(isReactive(state.animeList[0].tags), false, '条目内嵌数组同样不代理');
+
+  animeStore.mutations.APPEND_ANIME_LIST(state, {
+    data: [{ id: '2', source: 'bangumi' }],
+    page: 2,
+    totalPages: 3
+  });
+  assert.equal(isReactive(state.animeList[1]), false, '翻页追加的条目不应被深层代理');
+
+  animeStore.mutations.UPDATE_ANIME_IN_LIST(state, { id: '1', updates: { name: '改名' } });
+  assert.equal(isReactive(state.animeList[0]), false);
+  assert.equal(state.animeList[0].name, '改名');
+
+  animeStore.mutations.UPDATE_ANIME_LIST_BATCH(state, [{ id: '2', updates: { cover: 'https://x/2.jpg' } }]);
+  assert.equal(isReactive(state.animeList[1]), false);
+  assert.equal(state.animeList[1].cover, 'https://x/2.jpg');
+});
 
 test('APPEND_ANIME_LIST appends unique cards and advances the loaded page', () => {
   const state = {

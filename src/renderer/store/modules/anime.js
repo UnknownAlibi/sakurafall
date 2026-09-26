@@ -1,4 +1,11 @@
+import { markRaw } from 'vue';
 import { batchPreloadImageCache } from '../../utils/imageCache.js';
+
+// 列表项的字段更新一律通过「整项替换」（splice）触发重渲染，条目本身不需要深层响应式。
+// markRaw 让卡片拿到的是原始对象，避免为每张卡片建立深层代理（列表越长、字段越多收益越明显）。
+const rawItems = data => (Array.isArray(data)
+    ? data.map(item => (item && typeof item === 'object' ? markRaw(item) : item))
+    : []);
 
 export default {
     namespaced: true,
@@ -73,7 +80,7 @@ export default {
 
     mutations: {
         SET_ANIME_LIST(state, { data, total: _total, page, totalPages, catalogVersion = null }) {
-            state.animeList = data;
+            state.animeList = rawItems(data);
             state.currentPage = page;
             state.totalPages = totalPages;
             // 仅快照支撑的结果带 catalogVersion；网络/降级路径为 null（会话不绑定版本）
@@ -85,7 +92,7 @@ export default {
                 state.animeList.map(item => `${item?.source || 'anime'}:${item?.id || ''}`)
             );
             const appended = [];
-            for (const item of data || []) {
+            for (const item of rawItems(data)) {
                 const key = `${item?.source || 'anime'}:${item?.id || ''}`;
                 if (!item || existingKeys.has(key)) continue;
                 existingKeys.add(key);
@@ -104,7 +111,7 @@ export default {
             const idx = state.animeList.findIndex(a => a.id === id);
             if (idx !== -1) {
                 // 使用 splice 确保 Vue 3 响应式系统正确检测数组变化
-                state.animeList.splice(idx, 1, { ...state.animeList[idx], ...updates });
+                state.animeList.splice(idx, 1, markRaw({ ...state.animeList[idx], ...updates }));
             }
         },
 
@@ -123,7 +130,7 @@ export default {
             state.animeList.forEach((item, index) => {
                 const updates = updatesById.get(item.id);
                 if (updates) {
-                    state.animeList.splice(index, 1, { ...item, ...updates });
+                    state.animeList.splice(index, 1, markRaw({ ...item, ...updates }));
                 }
             });
         },
