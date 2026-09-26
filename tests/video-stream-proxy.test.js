@@ -1,10 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('http');
+const net = require('net');
 const {
   buildProxyUrl,
   parseProxyUrl,
   isHlsTarget,
-  rewriteHlsManifest
+  rewriteHlsManifest,
+  setProxy,
+  proxyRemoteStream
 } = require('../src/main/services/VideoStreamProxyService');
 
 test('HLS proxy URLs carry an explicit media marker', () => {
@@ -55,4 +59,71 @@ test('segments under an hls directory stay binary media streams', () => {
 
   assert.equal(isHlsTarget(segment), false);
   assert.doesNotMatch(proxied, /[?&]media=hls(?:&|$)/);
+});
+
+test('视频流线路走代理时上游请求经代理转发，清空代理后回到直连', async () => {
+  // 目标服务器（模拟视频直链）
+  let targetHits = 0;
+  const target = http.createServer((req, res) => {
+    targetHits += 1;
+    res.writeHead(200, { 'content-type': 'video/mp4' });
+    res.end('video-bytes');
+  });
+  await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+  const targetPort = target.address().port;
+
+  // 本地代理：只统计 CONNECT 隧道，隧道内字节原样转发
+  const tunnels = [];
+  const proxy = http.createServer((req, res) => {
+    res.writeHead(405);
+    res.end();
+  });
+  proxy.on('connect', (req, clientSocket, head) => {
+    tunnels.push(String(req.url));
+    const [host, port] = String(req.url).split(':');
+    const upstream = net.connect(Number(port) || 80, host, () => {
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+    upstream.on('error', () => clientSocket.destroy());
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  const proxyPort = proxy.address().port;
+
+  try {
+    // 默认直连：不产生代理隧道
+    const direct = await proxyRemoteStream(
+      { method: 'GET', headers: {} },
+      { target: `http://127.0.0.1:${targetPort}/a.mp4` }
+    );
+    assert.equal(direct.status, 200);
+    assert.equal(await direct.text(), 'video-bytes');
+    assert.deepEqual(tunnels, []);
+
+    // 走代理：请求经 CONNECT 隧道到达目标
+    setProxy(`http://127.0.0.1:${proxyPort}`);
+    const proxied = await proxyRemoteStream(
+      { method: 'GET', headers: {} },
+      { target: `http://127.0.0.1:${targetPort}/b.mp4` }
+    );
+    assert.equal(proxied.status, 200);
+    assert.equal(await proxied.text(), 'video-bytes');
+    assert.deepEqual(tunnels, [`127.0.0.1:${targetPort}`]);
+
+    // 清空代理（线路切回直连）后不再新建隧道
+    setProxy('');
+    const restored = await proxyRemoteStream(
+      { method: 'GET', headers: {} },
+      { target: `http://127.0.0.1:${targetPort}/c.mp4` }
+    );
+    assert.equal(restored.status, 200);
+    assert.equal(tunnels.length, 1);
+    assert.equal(targetHits, 3);
+  } finally {
+    setProxy('');
+    await new Promise(resolve => proxy.close(resolve));
+    await new Promise(resolve => target.close(resolve));
+  }
 });

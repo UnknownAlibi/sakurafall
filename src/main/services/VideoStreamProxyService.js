@@ -18,6 +18,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const HttpsProxyAgent = require('https-proxy-agent');
 
 const PROXY_HOST = 'proxy';
 const MAX_PROXY_URL_BYTES = 8 * 1024; // base64 后的上限，实际 URL 远小于此
@@ -119,6 +120,19 @@ function registerVideoStreamProxy() {
 let assetResolver = null; // (url) => filePath | ''
 function setAssetResolver(resolver) {
   assetResolver = typeof resolver === 'function' ? resolver : null;
+}
+
+// ---- 出口线路：视频流线路策略为「走代理」时，主进程直链流转发也走代理 ----
+let activeProxyUrl = '';
+let activeProxyAgent = null;
+function setProxy(proxyUrl) {
+  const next = String(proxyUrl || '').trim();
+  if (next === activeProxyUrl) return;
+  if (activeProxyAgent && activeProxyAgent.destroy) {
+    try { activeProxyAgent.destroy(); } catch (_e) { /* ignore */ }
+  }
+  activeProxyUrl = next;
+  activeProxyAgent = next ? new HttpsProxyAgent(next) : null;
 }
 
 function handleAssetRequest(request) {
@@ -235,9 +249,12 @@ function proxyRemoteStream(request, { target, referer, mediaType = '' }, redirec
 
   const upstreamUrl = new URL(target);
   const client = upstreamUrl.protocol === 'https:' ? https : http;
+  // 视频流线路 = 走代理时注入代理 agent；默认（直连）为 null，行为与之前一致
+  const requestOptions = { method, headers };
+  if (activeProxyAgent) requestOptions.agent = activeProxyAgent;
 
   return new Promise((resolve) => {
-    const upstream = client.request(upstreamUrl, { method, headers }, (res) => {
+    const upstream = client.request(upstreamUrl, requestOptions, (res) => {
       const status = res.statusCode || 502;
 
       // 跟随上游重定向（与 HttpClient 解析侧行为保持一致），Range 等头原样带到新地址
@@ -324,7 +341,9 @@ module.exports = {
   buildProxyUrl,
   registerVideoStreamProxy,
   setAssetResolver,
+  setProxy,
   parseProxyUrl,
+  proxyRemoteStream,
   isHlsTarget,
   rewriteHlsManifest,
   PROXY_HOST

@@ -19,6 +19,14 @@ const { spawn } = require('child_process');
 const HttpClient = require('../utils/HttpClient');
 const { UPDATE_MANIFEST_URL } = require('../config/serviceEndpoints');
 const GITHUB_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/UnknownAlibi/sakurafall/main/latest.json';
+// GitHub 托管的更新请求（清单回退 / Release 安装包）在境内不可靠，走用户代理
+const GITHUB_HOSTS = new Set([
+  'raw.githubusercontent.com',
+  'github.com',
+  'objects.githubusercontent.com',
+  'github-releases.githubusercontent.com',
+  'codeload.github.com'
+]);
 
 function safeLog(...args) {
   try { console.log(...args); } catch (e) { /* EPIPE ignored */ }
@@ -30,6 +38,9 @@ function safeError(...args) {
 class UpdateChecker {
   constructor() {
     this.http = new HttpClient({ timeout: 10000 });
+    // 代理仅在请求 GitHub 主机时启用（见 _clientFor），国内服务端更新源保持直连
+    this._proxyUrl = '';
+    this._githubHttp = null;
     // 默认更新源：主仓库 main 分支的 latest.json（发布流程见 scripts/release.js）
     this.defaultUpdateUrl = UPDATE_MANIFEST_URL || GITHUB_UPDATE_MANIFEST_URL;
     this.fallbackUpdateUrls = [GITHUB_UPDATE_MANIFEST_URL];
@@ -53,6 +64,32 @@ class UpdateChecker {
       ? `${normalized}/updates/latest.json`
       : GITHUB_UPDATE_MANIFEST_URL;
     this.fallbackUpdateUrls = normalized ? [GITHUB_UPDATE_MANIFEST_URL] : [];
+  }
+
+  /**
+   * 设置用户代理（设置 → 网络设置 → 代理地址）
+   * 只作用于 GitHub 托管的请求；云服务端 / 自建更新源属境内直连
+   */
+  setProxy(proxyUrl) {
+    this._proxyUrl = String(proxyUrl || '').trim();
+    if (this._githubHttp) this._githubHttp.setProxy(this._proxyUrl);
+  }
+
+  // 按主机选择 HttpClient：GitHub 走代理客户端，其余直连
+  _clientFor(url) {
+    if (!this._proxyUrl) return this.http;
+    let host = '';
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch (e) {
+      return this.http;
+    }
+    if (!GITHUB_HOSTS.has(host)) return this.http;
+    if (!this._githubHttp) {
+      this._githubHttp = new HttpClient({ timeout: 10000 });
+      this._githubHttp.setProxy(this._proxyUrl);
+    }
+    return this._githubHttp;
   }
 
   _isLocalHttpHost(hostname) {
@@ -196,7 +233,7 @@ class UpdateChecker {
     for (const updateUrl of candidates) {
       try {
         safeLog('[UpdateChecker] 检查更新:', updateUrl);
-        const text = await this.http.fetch(updateUrl, {
+        const text = await this._clientFor(updateUrl).fetch(updateUrl, {
           timeout: updateUrl === candidates[0] && candidates.length > 1 ? 2500 : 10000
         });
         const data = JSON.parse(text);
@@ -320,7 +357,7 @@ class UpdateChecker {
           percent: total ? Math.min(100, Math.floor((received / total) * 100)) : 0
         });
       };
-      const result = await this.http.downloadToFile(safeUrl, filePath, {}, report);
+      const result = await this._clientFor(safeUrl).downloadToFile(safeUrl, filePath, {}, report);
       safeLog('[UpdateChecker] 安装包下载完成:', filePath, `${result.received} bytes`);
 
       // 完整性校验：manifest 带 sha256 时强制比对，不通过就删掉已下载文件

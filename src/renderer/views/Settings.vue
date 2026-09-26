@@ -759,7 +759,7 @@
           <div class="setting-label">
             <label>代理地址</label>
             <p class="setting-desc">
-              番组计划接口和封面默认走此代理；BT 边播边下的节点发现也走此代理；视频流线路由下方开关单独控制。<br/>
+              番组计划接口和封面默认走此代理；BT 节点发现、在线字幕（OpenSubtitles）与更新源的境外回退也走此代理；视频流线路由下方开关单独控制。<br/>
               填代理地址如 http://127.0.0.1:7890，留空则直连。<br/>
               <strong>注意：v2rayN TUN 模式会接管所有流量，本设置对 TUN 模式无效。</strong>
               若开 TUN 后视频无法播放，请关闭 TUN，保留本地代理端口即可。

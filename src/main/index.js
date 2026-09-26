@@ -573,6 +573,10 @@ async function applyNetworkConfig(config = {}) {
     imageCacheService.setProxy?.(proxy);
     // 以图搜番（trace.moe）走与 Bangumi 相同的代理
     traceMoeApi.setProxy?.(proxy);
+    // 在线字幕（OpenSubtitles）与更新源的 GitHub 回退同为境外请求，共用此代理；
+    // 国内服务端更新源保持直连（见 UpdateChecker._clientFor）
+    playerSvc.applyProxy?.(proxy);
+    updateChecker.setProxy?.(proxy);
 
     // Phase 7: 同步给 NetworkPolicyService（用于诊断与策略查询）
     networkPolicyService.setProxy(proxy);
@@ -583,6 +587,9 @@ async function applyNetworkConfig(config = {}) {
     // 视频流线路策略：'proxy' 时渲染进程（hls.js 视频分片）也走应用代理；
     // 'direct'/'system' 保持直连（system 与 Bangumi 专用代理无法在同一个 PAC 内混合表达）
     const videoPolicy = networkPolicyService.getPolicy('video');
+    // 主进程直链流转发（mp4 / 直链 HLS 经 sakurafall-media://proxy）同样遵循该策略，
+    // 否则「走代理」只对渲染进程的 hls.js 分片生效，被墙的直链依旧打不开
+    videoStreamProxy.setProxy(videoPolicy === 'proxy' ? proxy : '');
 
     // Phase 4: 插件源走与 Bangumi 相同的代理（插件源多为境外站点）
     pluginHttpClient.setProxy(proxy);

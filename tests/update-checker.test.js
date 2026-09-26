@@ -101,6 +101,57 @@ test('checkForUpdates: 服务端离线时自动回退 GitHub 清单', async () =
   assert.strictEqual(result.sourceUrl, 'https://github.example.com/latest.json');
 });
 
+test('setProxy: 仅 GitHub 托管的更新请求走代理，自建更新源保持直连', () => {
+  const checker = new UpdateChecker();
+  // 未配置代理时一律使用直连客户端
+  assert.strictEqual(checker._clientFor(GITHUB_UPDATE_MANIFEST_URL), checker.http);
+
+  checker.setProxy('http://127.0.0.1:7890');
+  assert.strictEqual(checker._clientFor('https://service.example.com/updates/latest.json'), checker.http);
+  assert.strictEqual(checker.http.proxy, '');
+
+  const githubClient = checker._clientFor(GITHUB_UPDATE_MANIFEST_URL);
+  assert.notStrictEqual(githubClient, checker.http);
+  assert.strictEqual(githubClient.proxy, 'http://127.0.0.1:7890');
+
+  // 代理变更复用同一客户端并同步新地址
+  checker.setProxy('http://127.0.0.1:10808');
+  assert.strictEqual(checker._clientFor(GITHUB_UPDATE_MANIFEST_URL), githubClient);
+  assert.strictEqual(githubClient.proxy, 'http://127.0.0.1:10808');
+
+  // 清空代理后回到直连客户端
+  checker.setProxy('');
+  assert.strictEqual(checker._clientFor(GITHUB_UPDATE_MANIFEST_URL), checker.http);
+});
+
+test('checkForUpdates: 已配置代理时 GitHub 清单回退走代理客户端', async () => {
+  const checker = new UpdateChecker();
+  checker.defaultUpdateUrl = 'https://service.example.com/updates/latest.json';
+  checker.fallbackUpdateUrls = [GITHUB_UPDATE_MANIFEST_URL];
+  checker._config = {};
+  checker.getCurrentVersion = () => '1.0.0';
+  const calls = [];
+  checker.http.fetch = async url => {
+    calls.push(`direct:${url}`);
+    throw new Error('service offline');
+  };
+  checker.setProxy('http://127.0.0.1:7890');
+  checker._githubHttp = {
+    fetch: async url => {
+      calls.push(`proxy:${url}`);
+      return JSON.stringify({ version: '1.1.0' });
+    }
+  };
+
+  const result = await checker.checkForUpdates({ silent: true });
+  assert.deepStrictEqual(calls, [
+    'direct:https://service.example.com/updates/latest.json',
+    `proxy:${GITHUB_UPDATE_MANIFEST_URL}`
+  ]);
+  assert.strictEqual(result.hasUpdate, true);
+  assert.strictEqual(result.fallbackUsed, true);
+});
+
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
