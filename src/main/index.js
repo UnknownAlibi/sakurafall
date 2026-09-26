@@ -101,6 +101,7 @@ const { registerCustomizationPackIpc } = require('./ipc/customizationPacks');
 const { registerDanmakuIpc } = require('./ipc/danmaku');
 const { registerLibraryIpc } = require('./ipc/library');
 const { registerMetadataIpc } = require('./ipc/metadata');
+const { registerNetworkIpc } = require('./ipc/network');
 const { registerPlaybackHealthIpc } = require('./ipc/playbackHealth');
 const { registerSourceProviderIpc } = require('./ipc/sourceProviders');
 const { registerUpdateIpc } = require('./ipc/update');
@@ -1378,57 +1379,8 @@ secureIpcHandle('enhanced-player-presets', async () => {
     };
 });
 
-// ===== Phase 7: 网络与 TUN 分流策略 =====
-secureIpcHandle('network-policy-get', async () => {
-    return {
-        policies: networkPolicyService.policies,
-        proxyUrl: networkPolicyService.proxyUrl,
-        serviceIds: Object.values(networkPolicyService.constructor.SERVICE_IDS),
-        policyModes: Object.values(networkPolicyService.constructor.POLICY_MODES),
-        domainSuggestions: networkPolicyService.getDomainSuggestions()
-    };
-});
-
-secureIpcHandle('network-policy-update', async (event, policies = {}) => {
-    networkPolicyService.setPolicies(policies);
-    return { success: true, policies: networkPolicyService.policies };
-});
-
-secureIpcHandle('network-test-proxy-port', async () => {
-    return networkPolicyService.testProxyPort();
-});
-
-secureIpcHandle('network-test-bangumi', async () => {
-    return networkPolicyService.testBangumi();
-});
-
-secureIpcHandle('network-test-playback-source', async () => {
-    return networkPolicyService.testPlaybackSource();
-});
-
-secureIpcHandle('network-test-danmaku', async () => {
-    return networkPolicyService.testDanmaku();
-});
-
-secureIpcHandle('network-test-trace-moe', async () => {
-    return networkPolicyService.testTraceMoe();
-});
-
-secureIpcHandle('network-test-m3u8', async (event, url, referer = '') => {
-    return networkPolicyService.testM3u8(url, referer);
-});
-
-secureIpcHandle('network-detect-tun', async () => {
-    return networkPolicyService.detectTunMode();
-});
-
-secureIpcHandle('network-run-diagnostics', async () => {
-    return networkPolicyService.runFullDiagnostics();
-});
-
-secureIpcHandle('network-domain-suggestions', async () => {
-    return networkPolicyService.getDomainSuggestions();
-});
+// ===== Phase 7: 网络与 TUN 分流策略（已抽离至 ipc/network.js）=====
+registerNetworkIpc({ handle: secureIpcHandle, networkPolicyService });
 
 // ===== Phase 4: 插件式源规则系统 IPC（已抽离至 ipc/sourceProviders.js）=====
 // 与 cms-* 通道并存：CMS 源走 cms-*，XPath 规则源走 plugin-*
