@@ -311,11 +311,13 @@ class AnimeDatabase {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_rank ON bangumi_subjects(rank)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_year ON bangumi_subjects(year)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_type ON bangumi_subjects(type)`);
-        // 索引页按 platform（TV/OVA/剧场版）与 air_weekday（时间表）过滤
-        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_platform ON bangumi_subjects(platform)`);
-        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_air_weekday ON bangumi_subjects(air_weekday)`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_tag_tag ON bangumi_subject_tags(tag)`);
         this._runMigrations();
+        // 索引页按 platform（TV/OVA/剧场版）与 air_weekday（时间表）过滤。
+        // 必须在迁移之后建：platform 列由 v3 迁移补上，老库建表时没有该列，
+        // 提前建索引会抛 "no such column" 并让整段迁移被跳过（user_version 停在旧版）。
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_platform ON bangumi_subjects(platform)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_bgm_subject_air_weekday ON bangumi_subjects(air_weekday)`);
         console.log('Bangumi 索引表就绪');
     }
 
