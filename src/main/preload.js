@@ -271,6 +271,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     danmakuGetComments: (episodeId) => ipcRenderer.invoke('danmaku-get-comments', episodeId),
     danmakuParseXml: (filePath) => ipcRenderer.invoke('danmaku-parse-xml', filePath),
     danmakuTest: () => ipcRenderer.invoke('danmaku-test'),
+    // 弹幕时间轴对齐（按 剧集+播放源+弹幕源 记忆）
+    danmakuAlignmentGet: (payload) => ipcRenderer.invoke('danmaku-alignment-get', toIpcSafeValue(payload || {})),
+    danmakuAlignmentSave: (payload) => ipcRenderer.invoke('danmaku-alignment-save', toIpcSafeValue(payload || {})),
+    danmakuAlignmentRemove: (payload) => ipcRenderer.invoke('danmaku-alignment-remove', toIpcSafeValue(payload || {})),
+    danmakuAlignmentWorkSuggestion: (payload) => ipcRenderer.invoke('danmaku-alignment-work-suggestion', toIpcSafeValue(payload || {})),
 
     // Compatibility catalog backed by whichever installed source pack declares fallback-catalog.
     playbackSourceGetCategories: () => ipcRenderer.invoke('playback-source-categories'),

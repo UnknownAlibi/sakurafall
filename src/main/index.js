@@ -65,6 +65,7 @@ const subjectService = require('./services/SubjectService');
 const subjectIndexService = require('./services/SubjectIndexService');
 const cmsApiService = require('./services/CmsApiService');
 const danmakuApi = require('./services/DanmakuApi');
+const danmakuAlignmentStore = require('./services/DanmakuAlignmentStore');
 const imageCacheService = require('./services/ImageCacheService');
 imageCacheService.setImageProcessor((buffer, options = {}) => {
     const image = nativeImage.createFromBuffer(buffer);
@@ -942,6 +943,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
         // P0: 本地 Bangumi 索引服务（本地查询为主，网络同步为辅）
         subjectIndexService.setDatabase(animeDb);
         danmakuApi.setDatabase(animeDb);
+        danmakuAlignmentStore.setDatabase(animeDb);
         playbackResolverService.setDatabase(animeDb);
         playbackResolverService.setCmsApiService(cmsApiService);
         playbackResolverService.setSourceProviderRegistry(sourceProviderRegistry);
@@ -1554,7 +1556,7 @@ registerCustomizationPackIpc({
 // 获取番剧详情（标准化为 SubjectDetail）
 require('./ipc/subjectDetail')(secureIpcHandle, subjectService);
 
-registerDanmakuIpc({ handle: secureIpcHandle, danmakuApi });
+registerDanmakuIpc({ handle: secureIpcHandle, danmakuApi, alignmentStore: danmakuAlignmentStore });
 
 // Generic fallback catalog selected by a role declared in an installed source pack.
 function getFallbackPlaybackProvider() {

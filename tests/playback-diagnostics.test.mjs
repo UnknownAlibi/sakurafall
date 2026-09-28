@@ -12,6 +12,8 @@ const playerWindowSource = await readSource('../src/renderer/views/PlayerWindow.
 const animeDetailModalSource = await readSource('../src/renderer/mixins/animeDetailModal.js');
 const playerSources = `${videoPlayerSource}\n${playbackLifecycleSource}`;
 const fallbackPolicySource = await readSource('../src/renderer/utils/playbackFallbackPolicy.js');
+// HLS 识别与画质标签已抽离到独立工具（VideoPlayer 受体积棘轮约束）
+const hlsStreamPresentationSource = await readSource('../src/renderer/utils/hlsStreamPresentation.js');
 const { evaluatePlaybackEvidence, hasPlaybackStartupActivity, shouldAutoFallback } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(fallbackPolicySource)}`
 );
@@ -81,7 +83,9 @@ test('proxied HLS streams use hls.js and do not start duplicate fallback cycles'
   const hlsInitializer = videoPlayerSource.split('async initHLSPlayer(')[1]?.split('\n    initNativePlayer(')[0] || '';
   const fallbackMethod = videoPlayerSource.split('async autoFallbackToOtherSource(')[1]?.split('\n    async runAutoFallbackCycle(')[0] || '';
 
-  assert.match(videoPlayerSource, /media=hls/);
+  assert.match(videoPlayerSource, /isHlsStream\(url\)/);
+  // 代理标记 media=hls 的识别规则必须仍存在（现位于 hlsStreamPresentation.js）
+  assert.match(hlsStreamPresentationSource, /media=hls/);
   assert.match(hlsInitializer, /Hls\.isSupported\(\)/);
   assert.doesNotMatch(hlsInitializer.split('let Hls;')[0] || '', /canPlayType/);
   assert.match(fallbackMethod, /this\.fallbackCycleGeneration === generation/);

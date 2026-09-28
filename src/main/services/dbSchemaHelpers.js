@@ -59,4 +59,30 @@ function createEpisodeSegmentsTable(db) {
   db.exec('CREATE INDEX IF NOT EXISTS idx_episode_segments_work ON episode_segments(work_key, kind, confirmed)');
 }
 
-module.exports = { createViewingNotesTable, createEpisodeSegmentsTable };
+/**
+ * 弹幕时间轴对齐表（按 剧集 + 播放源 + 弹幕源 记忆校准结果）
+ * offset：全局微调（秒）；cuts/inserts：JSON 数组，语义见 renderer/utils/danmakuAlignment.js
+ * @param {import('better-sqlite3').Database} db
+ */
+function createDanmakuAlignmentsTable(db) {
+  db.exec(`
+            CREATE TABLE IF NOT EXISTS danmaku_alignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_key TEXT NOT NULL,
+                work_key TEXT DEFAULT '',
+                bgm_id INTEGER DEFAULT NULL,
+                episode_number INTEGER DEFAULT NULL,
+                source_id TEXT DEFAULT '',
+                provider_id TEXT DEFAULT '',
+                offset REAL NOT NULL DEFAULT 0,
+                cuts TEXT NOT NULL DEFAULT '[]',
+                inserts TEXT NOT NULL DEFAULT '[]',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(episode_key, source_id, provider_id)
+            )
+        `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_danmaku_alignments_work ON danmaku_alignments(work_key, source_id)');
+}
+
+module.exports = { createViewingNotesTable, createEpisodeSegmentsTable, createDanmakuAlignmentsTable };

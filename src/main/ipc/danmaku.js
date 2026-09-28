@@ -1,4 +1,18 @@
-function registerDanmakuIpc({ handle, danmakuApi }) {
+function registerDanmakuIpc({ handle, danmakuApi, alignmentStore }) {
+  // ===== 弹幕时间轴对齐（按 剧集+播放源+弹幕源 记忆校准） =====
+  handle('danmaku-alignment-get', async (_event, payload = {}) => (
+    alignmentStore ? alignmentStore.get(payload || {}) : null
+  ));
+  handle('danmaku-alignment-save', async (_event, payload = {}) => (
+    alignmentStore ? alignmentStore.save(payload || {}) : { ok: false, error: '对齐存储未就绪' }
+  ));
+  handle('danmaku-alignment-remove', async (_event, payload = {}) => (
+    alignmentStore ? alignmentStore.remove(payload || {}) : { ok: false, error: '对齐存储未就绪' }
+  ));
+  handle('danmaku-alignment-work-suggestion', async (_event, payload = {}) => (
+    alignmentStore ? alignmentStore.getWorkSuggestion(payload || {}) : null
+  ));
+
   handle('danmaku-set-credentials', async (_event, appId, appSecret) => {
     try {
       danmakuApi.setCredentials(appId, appSecret);

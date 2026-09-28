@@ -8,7 +8,7 @@ const {
     normalizeHistoryTitle,
     toPositiveInteger
 } = require('../utils/playHistoryIdentity');
-const { createViewingNotesTable, createEpisodeSegmentsTable } = require('./dbSchemaHelpers');
+const { createViewingNotesTable, createEpisodeSegmentsTable, createDanmakuAlignmentsTable } = require('./dbSchemaHelpers');
 
 const SCHEMA_VERSION = 10;
 
@@ -243,6 +243,8 @@ class AnimeDatabase {
         console.log('播放历史表就绪');
 
         this._createViewingNotesTable();
+        // 弹幕时间轴对齐（按 剧集+播放源+弹幕源 记忆校准）
+        createDanmakuAlignmentsTable(this.db);
 
         // CMS 接口缓存表（列表/详情）
         const cacheSql = `

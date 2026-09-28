@@ -64,6 +64,38 @@
       </div>
       <div class="danmaku-settings-row is-block">
         <div class="danmaku-settings-label">
+          <span>时间轴对齐</span>
+          <small>{{ alignmentSummary }}</small>
+        </div>
+        <div class="danmaku-align-shift">
+          <button type="button" class="danmaku-settings-action" title="弹幕提前 5 秒" @click="shiftOffset(-5)">−5s</button>
+          <button type="button" class="danmaku-settings-action" title="弹幕提前 1 秒" @click="shiftOffset(-1)">−1s</button>
+          <strong class="danmaku-align-value">{{ alignment.offset > 0 ? '+' : '' }}{{ alignment.offset }}s</strong>
+          <button type="button" class="danmaku-settings-action" title="弹幕延后 1 秒" @click="shiftOffset(1)">+1s</button>
+          <button type="button" class="danmaku-settings-action" title="弹幕延后 5 秒" @click="shiftOffset(5)">+5s</button>
+        </div>
+        <div class="danmaku-settings-actions">
+          <button
+            type="button"
+            class="danmaku-settings-action"
+            :disabled="!hasDetections"
+            :title="hasDetections ? '按检测到的片头/插入段推导锚点' : '播放后自动采集，暂无可推导的检测结果'"
+            @click="deriveAlignment"
+          >自动对齐</button>
+          <button v-if="suggestion" type="button" class="danmaku-settings-action" @click="applySuggestion">
+            沿用同源历史 {{ suggestion.offset > 0 ? '+' : '' }}{{ suggestion.offset }}s
+          </button>
+          <button type="button" class="danmaku-settings-action" @click="resetAlignment">归零</button>
+        </div>
+        <ul v-if="alignmentNotes.length" class="danmaku-align-notes">
+          <li v-for="(note, index) in alignmentNotes" :key="index">{{ note }}</li>
+        </ul>
+        <p class="danmaku-align-hint">
+          源删了片头/片尾或中间插了广告时，用「−/+」把弹幕对齐画面（正数=弹幕延后）；校准按「本集 + 当前播放源」记住。
+        </p>
+      </div>
+      <div class="danmaku-settings-row is-block">
+        <div class="danmaku-settings-label">
           <span>在线弹幕源</span>
           <small>并行匹配合并结果；关闭后需重新匹配</small>
         </div>
@@ -122,6 +154,7 @@
 
 <script>
 import { mapGetters } from 'vuex';
+import danmakuAlignmentModule from '../../store/modules/danmakuAlignment.js';
 
 /**
  * 弹幕设置面板（播放页内嵌右下角悬浮框，聚合设置/匹配操作/手动校正候选）
@@ -131,6 +164,12 @@ import { mapGetters } from 'vuex';
  */
 export default {
   name: 'DanmakuSettingsPanel',
+  // 与 DanmakuLayer 一致：弹幕关闭时对齐模块可能尚未注册，这里兜底
+  beforeCreate() {
+    if (this.$store && !this.$store.state.danmakuAlignment) {
+      this.$store.registerModule('danmakuAlignment', danmakuAlignmentModule);
+    }
+  },
   props: {
     animeName: { type: String, default: '' },
     episodeNumber: { type: Number, default: 0 },
@@ -164,9 +203,36 @@ export default {
       'danmakuDisplayArea',
       'danmakuDensity',
       'danmakuProviders'
-    ])
+    ]),
+    ...mapGetters('danmakuAlignment', {
+      alignment: 'alignment',
+      alignmentSummary: 'summary',
+      hasDetections: 'hasDetections',
+      alignmentNotes: 'notes',
+      suggestion: 'suggestion'
+    })
   },
   methods: {
+    // 时间轴微调：正数=弹幕延后
+    shiftOffset(delta) {
+      this.$store.dispatch('danmakuAlignment/shiftOffset', delta);
+    },
+
+    // 按已采集的检测结果（片头候选 / HLS 广告段）推导分段锚点
+    deriveAlignment() {
+      this.$store.dispatch('danmakuAlignment/deriveFromDetections');
+      this.$emit('notice', '已按检测结果推导对齐，可继续用「−/+」微调', 'info');
+    },
+
+    applySuggestion() {
+      this.$store.dispatch('danmakuAlignment/applySuggestion');
+      this.$emit('notice', '已沿用同源历史偏移', 'info');
+    },
+
+    resetAlignment() {
+      this.$store.dispatch('danmakuAlignment/reset');
+    },
+
     // 滑杆实时写入 store（action 自带防抖保存）
     updateSetting(action, value) {
       this.$store.dispatch(`settings/${action}`, value);
@@ -347,6 +413,38 @@ export default {
 
 .danmaku-settings-action:hover { border-color: rgba(255, 137, 177, 0.4); background: rgba(255, 137, 177, 0.1); }
 .danmaku-settings-action.active { border-color: rgba(255, 137, 177, 0.55); background: rgba(255, 137, 177, 0.16); color: #fff; }
+.danmaku-settings-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.danmaku-settings-action:disabled:hover { border-color: rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.05); }
+
+/* 时间轴对齐 */
+.danmaku-align-shift {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.danmaku-align-value {
+  min-width: 56px;
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.danmaku-align-notes {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.danmaku-align-hint {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.5);
+}
 
 /* 内嵌校正候选列表 */
 .danmaku-settings-match {

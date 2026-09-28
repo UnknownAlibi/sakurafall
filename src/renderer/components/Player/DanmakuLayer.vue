@@ -3,10 +3,20 @@
 </template>
 
 <script>
+import { mapGetters } from 'vuex';
 import DanmakuEngine from './DanmakuEngine.js';
+import { remapDanmakuComments } from '../../utils/danmakuAlignment.js';
+import { normalizeIdentityText } from '../../utils/episodeIdentity.js';
+import danmakuAlignmentModule from '../../store/modules/danmakuAlignment.js';
 
 export default {
   name: 'DanmakuLayer',
+  // 按需注册对齐模块：只有打开了播放器才需要它，避免进主包预算
+  beforeCreate() {
+    if (this.$store && !this.$store.state.danmakuAlignment) {
+      this.$store.registerModule('danmakuAlignment', danmakuAlignmentModule);
+    }
+  },
   props: {
     // 是否启用弹幕
     enabled: { type: Boolean, default: false },
@@ -21,6 +31,12 @@ export default {
     animeMetadata: { type: Object, default: () => ({}) },
     providerIds: { type: Array, default: () => [] },
     sourceOverrides: { type: Object, default: () => ({}) },
+    // 时间轴对齐的归属：剧集身份 + 播放源（同一集换源各自校准）
+    episodeKey: { type: String, default: '' },
+    sourceId: { type: String, default: '' },
+    // 当前源上的自动检测结果（父组件采集）：片头候选 + 插入区间（如 HLS 广告段）
+    videoIntro: { type: Object, default: null },
+    adRanges: { type: Array, default: () => [] },
     // 弹弹play episodeId（外部指定，可选，保留旧 prop 名以兼容现有调用）
     danmakuAnimeId: { type: [String, Number], default: '' },
     // 弹幕设置
@@ -39,9 +55,29 @@ export default {
       loading: false,
       loadToken: 0,
       runtimeOverrides: {},
+      // 原始（未对齐）弹幕：对齐配置变化时基于它重新映射，避免二次偏移
+      rawComments: [],
       // dandanplay 搜索候选（用户未指定 animeId 时用于手动选择）
       searchCandidates: []
     };
+  },
+  computed: {
+    ...mapGetters('danmakuAlignment', ['alignment']),
+    // 与 episodeIdentity 的约定保持一致：Bangumi 作品用 bgm:<id>，否则用归一化标题
+    resolvedBgmId() {
+      const metadata = this.animeMetadata || {};
+      return Number(metadata.bgmId || metadata.bgm_id || metadata.subjectId || metadata.id) || null;
+    },
+    resolvedWorkKey() {
+      if (this.resolvedBgmId) return `bgm:${this.resolvedBgmId}`;
+      const title = normalizeIdentityText(this.animeName);
+      return title ? `title:${title}` : '';
+    },
+    // 按当前校准把弹幕时间映射到视频时间轴（被删/广告区间的弹幕直接丢弃）
+    alignedComments() {
+      const duration = Number(this.animeMetadata?.duration) || 0;
+      return remapDanmakuComments(this.rawComments, this.alignment, { videoDuration: duration });
+    }
   },
   watch: {
     enabled(val) {
@@ -80,10 +116,35 @@ export default {
     danmakuAnimeId() {
       this.loaded = false;
       if (this.enabled) this.loadDanmaku();
+    },
+    // 校准变化（手动偏移 / 分段锚点）立即重映射，无需重新拉取弹幕
+    alignment: {
+      deep: true,
+      handler() {
+        this.applyComments();
+      }
+    },
+    // 换集或换源：读取该组合已保存的校准
+    episodeKey() {
+      this.syncAlignmentContext();
+    },
+    sourceId() {
+      this.syncAlignmentContext();
+    },
+    // 自动检测结果到达：交给对齐模块推导初值（用户可在设置面板里一键应用）
+    videoIntro() {
+      this.ingestDetections();
+    },
+    adRanges: {
+      deep: true,
+      handler() {
+        this.ingestDetections();
+      }
     }
   },
   mounted() {
     this.runtimeOverrides = this.readStoredOverrides();
+    this.syncAlignmentContext();
     this.engine = new DanmakuEngine(this.$refs.canvas);
     this.engine.setFontSize(this.fontSize);
     this.engine.setOpacity(this.opacity);
@@ -106,6 +167,33 @@ export default {
     }
   },
   methods: {
+    /** 把「剧集身份 + 播放源」交给对齐模块，读取已保存的校准 */
+    syncAlignmentContext() {
+      this.$store.dispatch('danmakuAlignment/loadFor', {
+        episodeKey: this.episodeKey,
+        workKey: this.resolvedWorkKey,
+        bgmId: this.resolvedBgmId,
+        episodeNumber: this.episodeNumber,
+        sourceId: this.sourceId
+      });
+    },
+
+    /** 记录当前源的检测结果，供「自动对齐」推导锚点（不自动改变用户已有校准） */
+    ingestDetections() {
+      this.$store.commit('danmakuAlignment/SET_DETECTIONS', {
+        videoIntro: this.videoIntro || null,
+        adRanges: Array.isArray(this.adRanges) ? this.adRanges : [],
+        canonicalIntroLength: 0
+      });
+    },
+
+    /** 用当前校准重映射弹幕并写入引擎（原始列表保留在 rawComments） */
+    applyComments() {
+      if (!this.engine) return;
+      this.engine.setComments(this.alignedComments);
+      this.engine.setTime(this.currentTime);
+    },
+
     matchStorageKey() {
       const metadata = this.animeMetadata || {};
       const identity = metadata.bgmId || metadata.bgm_id || metadata.subjectId || metadata.id || this.animeName;
@@ -173,11 +261,12 @@ export default {
 
         if (token !== this.loadToken) return;
         if (comments && comments.length > 0) {
-          this.engine.setComments(comments);
-          this.engine.setTime(this.currentTime);
+          this.rawComments = comments;
+          this.applyComments();
           this.loaded = true;
-          this.$emit('loaded', { count: comments.length, match, sources: result?.sources || [], cached: result?.cached === true });
+          this.$emit('loaded', { count: this.alignedComments.length, match, sources: result?.sources || [], cached: result?.cached === true });
         } else {
+          this.rawComments = [];
           this.engine.setComments([]);
           this.loaded = true;
           this.$emit('loaded', { count: 0, match, sources: result?.sources || [], error: result?.error || '' });
@@ -234,9 +323,10 @@ export default {
       try {
         const comments = await window.electronAPI.danmakuGetComments(animeId);
         if (token !== this.loadToken || !this.engine) return;
-        this.engine.setComments(comments || []);
+        this.rawComments = comments || [];
+        this.applyComments();
         this.loaded = true;
-        this.$emit('loaded', { count: (comments || []).length });
+        this.$emit('loaded', { count: this.rawComments.length });
       } catch (e) {
         if (token !== this.loadToken) return;
         this.$emit('error', e.message);
@@ -255,14 +345,14 @@ export default {
       try {
         const localComments = await window.electronAPI.danmakuParseXml(filePath);
         if (token !== this.loadToken || !this.engine) return;
-        const comments = [
-          ...(this.engine.comments || []),
+        this.rawComments = [
+          ...this.rawComments,
           ...(localComments || []).map(comment => ({ ...comment, source: 'local' }))
         ].sort((a, b) => a.time - b.time);
-        this.engine.setComments(comments);
+        this.applyComments();
         this.loaded = true;
         this.$emit('loaded', {
-          count: comments.length,
+          count: this.alignedComments.length,
           source: 'local',
           sources: [{ id: 'local', name: '本地 XML', status: 'ok', count: (localComments || []).length }]
         });
@@ -279,6 +369,7 @@ export default {
      */
     clearDanmaku() {
       if (this.engine) {
+        this.rawComments = [];
         this.engine.setComments([]);
         this.loaded = false;
       }

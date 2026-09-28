@@ -293,6 +293,10 @@
       :speed="danmakuSpeed"
       :display-area-ratio="danmakuDisplayAreaRatio"
       :max-active="danmakuDensity"
+      :episode-key="currentEpisodeIdentity?.key || ''"
+      :source-id="getCurrentSourceId()"
+      :video-intro="dnaCandidates[0] || null"
+      :ad-ranges="detectedAdRanges"
       @loaded="onDanmakuLoaded"
       @error="onDanmakuError"
       @status="onDanmakuStatus"
@@ -477,6 +481,7 @@ import { formatCandidateQuality, formatMatchType, candidateHealthClass, candidat
   formatCandidateStartup, formatCandidateRatio, candidateHealthTitle } from '../../utils/sourceCandidatePresentation.js';
 import { formatAnime4kPreset, formatAnime4kRuntimeTitle } from '../../utils/anime4kPresentation.js';
 import { applyRuntimeHlsBufferPolicy, toHlsBufferConfig } from '../../utils/hlsBufferPolicy.js';
+import { isHlsStream, formatQualityLabel } from '../../utils/hlsStreamPresentation.js';
 import playerPlatformIntegration from '../../mixins/playerPlatformIntegration.js';
 import watchTogetherMixin from '../../mixins/watchTogether.js';
 import playerPlaybackLifecycle from '../../mixins/playerPlaybackLifecycle.js';
@@ -905,7 +910,7 @@ export default {
 
       this.trackTimer(setTimeout(() => {
         if (generation !== this.mediaLoadGeneration || this.currentVideo?.url !== url) return;
-        if (this.isHLSStream(url)) {
+        if (isHlsStream(url)) {
           this.initHLSPlayer(url, generation);
         } else {
           this.initNativePlayer(url, generation);
@@ -989,12 +994,6 @@ export default {
       this.bufferProgress = 0;
     },
 
-    isHLSStream(url) {
-      const value = String(url || '');
-      return /\.m3u8(?:[?#]|$)|[?&](?:format|type|ext)=m3u8(?:&|$)/i.test(value)
-        || /[?&]media=hls(?:&|$)/i.test(value);
-    },
-
     applyHlsBufferPolicy(overrides = {}) {
       return applyRuntimeHlsBufferPolicy(this, overrides);
     },
@@ -1052,7 +1051,7 @@ export default {
           const levels = hlsInstance.levels || [];
           this.qualityLevels = levels.map((lv, i) => ({
             index: i,
-            label: this._formatQualityLabel(lv, i, levels.length),
+            label: formatQualityLabel(lv, i),
             height: lv.height,
             bitrate: lv.bitrate,
             frameRate: lv.frameRate || 0
@@ -1152,21 +1151,6 @@ export default {
       };
       this._nativeCanPlayHandler = onCanPlay;
       video.addEventListener('canplay', onCanPlay);
-    },
-
-    /**
-     * 格式化画质标签：优先用高度（如 1080p），无高度时用序号
-     */
-    _formatQualityLabel(level, index, _total) {
-      if (level.height) {
-        return `${level.height}p`;
-      }
-      if (level.bitrate) {
-        // 无高度时用码率估算
-        const kbps = Math.round(level.bitrate / 1000);
-        return `${kbps}kbps`;
-      }
-      return `画质${index + 1}`;
     },
 
     /**
