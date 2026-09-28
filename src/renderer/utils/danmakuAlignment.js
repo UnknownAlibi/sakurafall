@@ -116,10 +116,11 @@ export function remapDanmakuComments(comments, alignment, options = {}) {
  * 依据检测结果推导一份对齐配置
  *
  * @param {object} input
- *   - videoIntro: { start, end } | null   当前播放源检测到的片头（秒）；null=未检测到片头
- *   - canonicalIntroLength: number        弹幕所属版本的正片起点（片头长度，秒）
- *   - adRanges: Array<{ start, end }>     当前视频里的插入区间（如 HLS 广告段），视频时间
- *   - base: object                        已有配置（其 offset 会被保留）
+ *   - danmakuContentStart: number|null   弹幕侧推断的「正片起点」（秒），见 danmakuAnchors.js
+ *   - videoIntro: { start, end } | null  当前播放源检测到的片头（秒）；null=未检测到片头
+ *   - canonicalIntroLength: number       已知的标准片头长度（无弹幕侧锚点时的兜底）
+ *   - adRanges: Array<{ start, end }>    当前视频里的插入区间（如 HLS 广告段），视频时间
+ *   - base: object                       已有配置
  * @returns {{ alignment: object, notes: string[] }} notes 为给用户看的中文说明
  */
 export function deriveAlignmentFromDetections(input = {}) {
@@ -127,27 +128,39 @@ export function deriveAlignmentFromDetections(input = {}) {
   const notes = [];
   const cuts = [];
   const inserts = [];
+  let offset = base.offset;
 
-  const canonicalIntro = Math.max(0, toFiniteNumber(input.canonicalIntroLength, 0));
+  const hasDanmakuAnchor = input.danmakuContentStart !== null && input.danmakuContentStart !== undefined;
+  const danmakuContentStart = hasDanmakuAnchor ? Math.max(0, toFiniteNumber(input.danmakuContentStart, 0)) : 0;
   const intro = input.videoIntro ? clampRange(input.videoIntro) : null;
   const videoIntroLength = intro ? intro.end - intro.start : 0;
   const introStart = intro ? intro.start : 0;
 
-  if (canonicalIntro > 0) {
+  if (hasDanmakuAnchor) {
+    // 有弹幕侧正片起点：与视频侧正片起点直接比较，整体偏移一次算准（用户不需要逐条判断）
+    const videoContentStart = intro ? intro.end : 0;
+    offset = Math.round((videoContentStart - danmakuContentStart) * 10) / 10;
+    const direction = offset >= 0 ? '后移' : '前移';
+    if (intro) {
+      notes.push(`弹幕版正片起点 ${formatClock(danmakuContentStart)} ↔ 本视频片头结束 ${formatClock(videoContentStart)}：弹幕整体${direction} ${Math.abs(offset)} 秒`);
+    } else {
+      notes.push(`弹幕版正片起点 ${formatClock(danmakuContentStart)}，本视频未检测到片头：按正片从 00:00 开始计算，弹幕整体${direction} ${Math.abs(offset)} 秒`);
+    }
+  } else if (input.canonicalIntroLength) {
+    const canonicalIntro = Math.max(0, toFiniteNumber(input.canonicalIntroLength, 0));
     const delta = Math.round((videoIntroLength - canonicalIntro) * 10) / 10;
     if (delta <= -1) {
       // 本视频片头更短（含被整段删掉的情况）：删掉标准时间轴上对应的前段
       cuts.push({ start: introStart, end: introStart + Math.abs(delta) });
       notes.push(`片头比标准版短 ${Math.abs(delta)} 秒，已把弹幕整体前移`);
     } else if (delta >= 1) {
-      // 本视频片头更长（或标准版删了片头）：前段插入
       inserts.push({ start: introStart, end: introStart + delta });
       notes.push(`片头比标准版长 ${delta} 秒，已把弹幕整体后移`);
     } else {
       notes.push('片头与标准版一致，无需头部对齐');
     }
-  } else if (!intro) {
-    notes.push('未检测到片头，且缺少标准片头长度参考，暂未做头部对齐');
+  } else {
+    notes.push('未识别到弹幕侧的「正片开始」标记；可在正片开始时点「这里就是正片开始」，或用下方弹幕对照校准');
   }
 
   const ads = normalizeRanges(input.adRanges);
@@ -159,7 +172,7 @@ export function deriveAlignmentFromDetections(input = {}) {
   }
 
   return {
-    alignment: normalizeAlignment({ offset: base.offset, cuts, inserts }),
+    alignment: normalizeAlignment({ offset, cuts, inserts }),
     notes
   };
 }
@@ -192,7 +205,7 @@ export function describeAlignment(alignment) {
   return parts.length ? parts.join('；') : '未校准';
 }
 
-function formatClock(seconds) {
+export function formatClock(seconds) {
   const total = Math.max(0, Math.round(toFiniteNumber(seconds, 0)));
   const mm = String(Math.floor(total / 60)).padStart(2, '0');
   const ss = String(total % 60).padStart(2, '0');

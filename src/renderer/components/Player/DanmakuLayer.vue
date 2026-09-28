@@ -6,6 +6,7 @@
 import { mapGetters } from 'vuex';
 import DanmakuEngine from './DanmakuEngine.js';
 import { remapDanmakuComments } from '../../utils/danmakuAlignment.js';
+import { pickReferenceComments } from '../../utils/danmakuAnchors.js';
 import { normalizeIdentityText } from '../../utils/episodeIdentity.js';
 import danmakuAlignmentModule from '../../store/modules/danmakuAlignment.js';
 
@@ -92,11 +93,14 @@ export default {
       if (this.engine) {
         this.engine.setTime(val);
       }
+      // 暂停时 seek：刷新「弹幕对照校准」的候选列表（播放中不计算，避免频繁 commit）
+      if (!this.isPlaying) this.scheduleReferenceWindow();
     },
     isPlaying(val) {
       if (this.engine) {
         this.engine.setPlaying(val);
       }
+      this.scheduleReferenceWindow();
     },
     fontSize(val) { if (this.engine) this.engine.setFontSize(val); },
     opacity(val) { if (this.engine) this.engine.setOpacity(val); },
@@ -161,6 +165,10 @@ export default {
   },
   beforeUnmount() {
     this.loadToken += 1;
+    if (this._refWindowTimer) {
+      clearTimeout(this._refWindowTimer);
+      this._refWindowTimer = null;
+    }
     if (this.engine) {
       this.engine.destroy();
       this.engine = null;
@@ -185,6 +193,28 @@ export default {
         adRanges: Array.isArray(this.adRanges) ? this.adRanges : [],
         canonicalIntroLength: 0
       });
+    },
+
+    /** 从弹幕文本推断「弹幕版正片起点」锚点，供自动对齐与一键打点使用 */
+    publishDanmakuAnchors() {
+      this.$store.dispatch('danmakuAlignment/ingestDanmakuComments', this.rawComments);
+    },
+
+    /**
+     * 暂停时准备「弹幕对照校准」候选列表：
+     * 取「按当前校准推算出的弹幕期望位置」附近的弹幕，用户点一条即可反推偏移。
+     */
+    scheduleReferenceWindow() {
+      if (this.isPlaying || !this.rawComments.length) return;
+      if (this._refWindowTimer) clearTimeout(this._refWindowTimer);
+      this._refWindowTimer = setTimeout(() => {
+        this._refWindowTimer = null;
+        if (this.isPlaying) return;
+        const videoTime = Number(this.currentTime) || 0;
+        const expectedCanonical = videoTime - Number(this.alignment?.offset || 0);
+        const items = pickReferenceComments(this.rawComments, expectedCanonical, { radius: 150, limit: 40 });
+        this.$store.commit('danmakuAlignment/SET_REFERENCE_WINDOW', { videoTime, items });
+      }, 400);
     },
 
     /** 用当前校准重映射弹幕并写入引擎（原始列表保留在 rawComments） */
@@ -262,11 +292,13 @@ export default {
         if (token !== this.loadToken) return;
         if (comments && comments.length > 0) {
           this.rawComments = comments;
+          this.publishDanmakuAnchors();
           this.applyComments();
           this.loaded = true;
           this.$emit('loaded', { count: this.alignedComments.length, match, sources: result?.sources || [], cached: result?.cached === true });
         } else {
           this.rawComments = [];
+          this.publishDanmakuAnchors();
           this.engine.setComments([]);
           this.loaded = true;
           this.$emit('loaded', { count: 0, match, sources: result?.sources || [], error: result?.error || '' });
@@ -324,6 +356,7 @@ export default {
         const comments = await window.electronAPI.danmakuGetComments(animeId);
         if (token !== this.loadToken || !this.engine) return;
         this.rawComments = comments || [];
+        this.publishDanmakuAnchors();
         this.applyComments();
         this.loaded = true;
         this.$emit('loaded', { count: this.rawComments.length });
@@ -349,6 +382,7 @@ export default {
           ...this.rawComments,
           ...(localComments || []).map(comment => ({ ...comment, source: 'local' }))
         ].sort((a, b) => a.time - b.time);
+        this.publishDanmakuAnchors();
         this.applyComments();
         this.loaded = true;
         this.$emit('loaded', {

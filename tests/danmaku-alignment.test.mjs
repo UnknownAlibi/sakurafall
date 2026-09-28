@@ -16,6 +16,12 @@ import {
   addInsertRange
 } from '../src/renderer/utils/danmakuAlignment.js';
 import storeModule from '../src/main/services/DanmakuAlignmentStore.js';
+import {
+  inferDanmakuContentStart,
+  pickReferenceComments,
+  isStructuralDanmaku,
+  isHighlightDanmaku
+} from '../src/renderer/utils/danmakuAnchors.js';
 
 const { DanmakuAlignmentStore } = storeModule;
 
@@ -140,6 +146,68 @@ test('addInsertRange: 追加重叠/乱序的广告区间并保持有序，过短
 
   const ignored = addInsertRange(base, 100, 100.5);
   assert.deepEqual(ignored.inserts, base.inserts);
+});
+
+test('inferDanmakuContentStart: 从「空降/正片开始」成簇标记推断正片起点', () => {
+  const comments = [
+    { time: 10, text: '前排' },
+    { time: 88.2, text: '空降成功' },
+    { time: 90.5, text: '正片开始' },
+    { time: 92, text: '空降' },
+    { time: 600, text: '空降（这条在搜索窗口内也算）' },
+    { time: 1200, text: '正片开始' } // 超出搜索窗口，忽略
+  ];
+  const result = inferDanmakuContentStart(comments);
+  assert.equal(result.contentStart, 90.5, '取成簇标记的中位数');
+  assert.equal(result.samples, 3, '600 秒那条孤立标记不在簇内');
+  assert.ok(result.confidence > 0.5);
+});
+
+test('inferDanmakuContentStart: 无标记返回 null，孤立一条只给低置信度', () => {
+  assert.deepEqual(inferDanmakuContentStart([{ time: 5, text: '哈哈哈哈' }]), {
+    contentStart: null, confidence: 0, samples: 0
+  });
+
+  const single = inferDanmakuContentStart([{ time: 91, text: '空降' }]);
+  assert.equal(single.contentStart, 91);
+  assert.equal(single.confidence, 0.25);
+  assert.equal(single.samples, 1);
+});
+
+test('isStructuralDanmaku / isHighlightDanmaku: 识别结构性标记与高能弹幕', () => {
+  assert.equal(isStructuralDanmaku('空降成功'), true);
+  assert.equal(isStructuralDanmaku('OP'), true);
+  assert.equal(isStructuralDanmaku('这集真好看'), false);
+  assert.equal(isHighlightDanmaku('前方高能'), true);
+  assert.equal(isHighlightDanmaku('这里笑死我了'), true);
+});
+
+test('pickReferenceComments: 取目标时间附近弹幕并按接近程度排序', () => {
+  const comments = [
+    { time: 100, text: '远' },
+    { time: 61, text: '近' },
+    { time: 62, text: '近二' },
+    { time: 400, text: '超范围' }
+  ];
+  const items = pickReferenceComments(comments, 60, { radius: 50, limit: 10 });
+  assert.deepEqual(items.map(item => item.text), ['近', '近二', '远']);
+  assert.equal(items.every(item => item.time <= 110), true);
+});
+
+test('deriveAlignmentFromDetections: 弹幕侧正片起点优先，直接算出整体偏移', () => {
+  // 弹幕版正片从 90s 开始；本视频片头 0-95s → 视频整体比弹幕晚 5 秒
+  const withIntro = deriveAlignmentFromDetections({
+    danmakuContentStart: 90,
+    videoIntro: { start: 0, end: 95 },
+    base: { offset: 3 }
+  });
+  assert.equal(withIntro.alignment.offset, 5);
+  assert.match(withIntro.notes[0], /弹幕版正片起点 01:30/);
+
+  // 本视频删了片头（未检测到片头）→ 按正片从 0 开始，弹幕整体前移 90 秒
+  const cutIntro = deriveAlignmentFromDetections({ danmakuContentStart: 90, videoIntro: null });
+  assert.equal(cutIntro.alignment.offset, -90);
+  assert.match(cutIntro.notes[0], /前移 90 秒/);
 });
 
 test('describeAlignment: 生成中文摘要', () => {

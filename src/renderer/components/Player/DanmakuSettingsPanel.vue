@@ -67,6 +67,11 @@
           <span>时间轴对齐</span>
           <small>{{ alignmentSummary }}</small>
         </div>
+        <p class="danmaku-align-compare">
+          此刻画面 <strong>{{ formatClock(currentTime) }}</strong>
+          ↔ 对应弹幕 <strong>{{ formatClock(currentTime - alignment.offset) }}</strong>
+          <em v-if="alignment.offset !== 0">（已{{ alignment.offset > 0 ? '后' : '前' }}移 {{ Math.abs(alignment.offset) }} 秒）</em>
+        </p>
         <div class="danmaku-align-shift">
           <button type="button" class="danmaku-settings-action" title="弹幕提前 5 秒" @click="shiftOffset(-5)">−5s</button>
           <button type="button" class="danmaku-settings-action" title="弹幕提前 1 秒" @click="shiftOffset(-1)">−1s</button>
@@ -78,10 +83,17 @@
           <button
             type="button"
             class="danmaku-settings-action"
-            :disabled="!hasDetections"
-            :title="hasDetections ? '按检测到的片头/插入段推导锚点' : '播放后自动采集，暂无可推导的检测结果'"
+            :disabled="!hasDetections && danmakuContentStart === null"
+            :title="'按检测到的片头/插入段与弹幕侧「正片开始」标记推导偏移'"
             @click="deriveAlignment"
           >自动对齐</button>
+          <button
+            type="button"
+            class="danmaku-settings-action"
+            :disabled="danmakuContentStart === null"
+            :title="danmakuContentStart === null ? '弹幕里没找到「空降/正片开始」标记，可用下方弹幕对照校准' : '把当前画面视为正片第一帧，直接算出偏移'"
+            @click="markContentStart"
+          >这里就是正片开始</button>
           <button v-if="suggestion" type="button" class="danmaku-settings-action" @click="applySuggestion">
             沿用同源历史 {{ suggestion.offset > 0 ? '+' : '' }}{{ suggestion.offset }}s
           </button>
@@ -90,6 +102,26 @@
         <ul v-if="alignmentNotes.length" class="danmaku-align-notes">
           <li v-for="(note, index) in alignmentNotes" :key="index">{{ note }}</li>
         </ul>
+        <div class="danmaku-align-reference">
+          <div class="danmaku-align-reference-head">
+            <span>弹幕对照校准</span>
+            <small v-if="referenceItems.length">暂停时列出附近弹幕，点一条明显属于此刻画面的即可反推偏移</small>
+            <small v-else>暂停播放后，这里会列出当前画面附近的弹幕</small>
+          </div>
+          <ul v-if="referenceItems.length" class="danmaku-align-reference-list">
+            <li v-for="item in referenceItems" :key="`${item.time}-${item.text}`">
+              <button
+                type="button"
+                class="danmaku-align-reference-item"
+                :class="{ structural: item.structural, highlight: item.highlight }"
+                @click="alignToComment(item)"
+              >
+                <span class="danmaku-align-reference-time">{{ formatClock(item.time) }}</span>
+                <span class="danmaku-align-reference-text">{{ item.text }}</span>
+              </button>
+            </li>
+          </ul>
+        </div>
         <div class="danmaku-settings-actions danmaku-align-mark">
           <template v-if="pendingInsertStart === null">
             <button type="button" class="danmaku-settings-action" @click="markInsertStart">标记广告起点</button>
@@ -102,7 +134,7 @@
           </template>
         </div>
         <p class="danmaku-align-hint">
-          源删了片头/片尾或中间插了广告时，用「−/+」把弹幕对齐画面（正数=弹幕延后）；中段广告（无 HLS 标记的）在广告第一帧点「标记广告起点」、广告结束处点「记录终点」，该校准按「本集 + 当前播放源」记住。
+          推荐顺序：① 先点「自动对齐」——用弹幕里的「空降/正片开始」标记 + 本视频片头/广告段自动算偏移；② 若不准，暂停在任一画面，从上方「弹幕对照校准」里点一条明显属于此刻画面的弹幕（台词梗/高能反应），系统据此反推偏移；③ 仍要细微修正时用「−/+」或「这里就是正片开始」。中段广告（无 HLS 标记）用「标记广告起点/终点」。校准按「本集 + 当前播放源」记住，画面与弹幕的时间对照见上方。
         </p>
       </div>
       <div class="danmaku-settings-row is-block">
@@ -221,14 +253,34 @@ export default {
       hasDetections: 'hasDetections',
       alignmentNotes: 'notes',
       suggestion: 'suggestion',
-      pendingInsertStart: 'pendingInsertStart'
+      pendingInsertStart: 'pendingInsertStart',
+      danmakuContentStart: 'danmakuContentStart',
+      referenceWindow: 'referenceWindow'
     }),
-    ...mapGetters('player', ['currentTime'])
+    ...mapGetters('player', ['currentTime']),
+    referenceItems() {
+      return this.referenceWindow?.items || [];
+    }
   },
   methods: {
     // 时间轴微调：正数=弹幕延后
     shiftOffset(delta) {
       this.$store.dispatch('danmakuAlignment/shiftOffset', delta);
+    },
+
+    // 一键打点：把当前画面视为正片第一帧
+    async markContentStart() {
+      const ok = await this.$store.dispatch('danmakuAlignment/markContentStart', this.currentTime);
+      this.$emit('notice', ok === false ? '弹幕里未识别到正片起点标记，可用下方弹幕对照校准' : '已按「此刻画面 = 正片开始」校准', ok === false ? 'warning' : 'info');
+    },
+
+    // 弹幕对照校准：点选一条属于此刻画面的弹幕
+    async alignToComment(item) {
+      await this.$store.dispatch('danmakuAlignment/alignToComment', {
+        commentTime: item.time,
+        videoTime: this.currentTime
+      });
+      this.$emit('notice', `已把 ${this.formatClock(item.time)} 的弹幕对齐到当前画面`, 'info');
     },
 
     // 手动标记中段插入区间（广告）
@@ -475,6 +527,88 @@ export default {
 
 .danmaku-align-mark {
   margin-top: 2px;
+}
+
+/* 时间对照与弹幕对照校准 */
+.danmaku-align-compare {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.danmaku-align-compare strong {
+  color: rgba(255, 255, 255, 0.95);
+  font-variant-numeric: tabular-nums;
+}
+
+.danmaku-align-compare em {
+  font-style: normal;
+  color: rgba(255, 137, 177, 0.85);
+}
+
+.danmaku-align-reference {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.danmaku-align-reference-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.danmaku-align-reference-head small {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.danmaku-align-reference-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 152px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+
+.danmaku-align-reference-item {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.danmaku-align-reference-item:hover { background: rgba(255, 137, 177, 0.12); }
+.danmaku-align-reference-item.highlight { color: rgba(255, 208, 128, 0.95); }
+.danmaku-align-reference-item.structural {
+  color: #fff;
+  background: rgba(255, 137, 177, 0.08);
+}
+
+.danmaku-align-reference-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.danmaku-align-reference-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .danmaku-align-hint {

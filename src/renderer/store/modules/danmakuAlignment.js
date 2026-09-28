@@ -4,8 +4,10 @@ import {
   deriveAlignmentFromDetections,
   describeAlignment,
   isAlignmentEmpty,
-  addInsertRange
+  addInsertRange,
+  formatClock
 } from '../../utils/danmakuAlignment.js';
+import { inferDanmakuContentStart } from '../../utils/danmakuAnchors.js';
 
 // 弹幕时间轴对齐状态
 //
@@ -31,6 +33,10 @@ export default {
     suggestion: null,
     // 手动标记插入区间（广告）时的起点，null 表示未在标记中
     pendingInsertStart: null,
+    // 弹幕侧推断的锚点（来自弹幕文本，如「空降/正片开始」簇）
+    danmakuAnchors: { contentStart: null, confidence: 0, samples: 0 },
+    // 暂停时的候选弹幕窗口（供「弹幕对照校准」点选）
+    referenceWindow: { videoTime: 0, items: [] },
     loadToken: 0,
     status: 'idle' // idle | ready
   },
@@ -44,7 +50,10 @@ export default {
     detections: state => state.detections,
     notes: state => state.notes,
     suggestion: state => state.suggestion,
-    pendingInsertStart: state => state.pendingInsertStart
+    pendingInsertStart: state => state.pendingInsertStart,
+    danmakuAnchors: state => state.danmakuAnchors,
+    danmakuContentStart: state => state.danmakuAnchors.contentStart,
+    referenceWindow: state => state.referenceWindow
   },
 
   mutations: {
@@ -87,6 +96,17 @@ export default {
       state.pendingInsertStart = seconds === null ? null : Number(seconds);
     },
 
+    SET_DANMAKU_ANCHORS(state, anchors = null) {
+      state.danmakuAnchors = anchors || { contentStart: null, confidence: 0, samples: 0 };
+    },
+
+    SET_REFERENCE_WINDOW(state, { videoTime = 0, items = [] } = {}) {
+      state.referenceWindow = {
+        videoTime: Number(videoTime) || 0,
+        items: Array.isArray(items) ? items : []
+      };
+    },
+
     SET_STATUS(state, status) {
       state.status = status;
     }
@@ -106,6 +126,9 @@ export default {
       commit('SET_NOTES', []);
       // 检测结果属于「上一集/上一源」，换上下文先清空，等播放器重新采集
       commit('SET_DETECTIONS', {});
+      // 弹幕侧锚点与候选窗口同样属于上一集，弹幕加载完成后会重新推断
+      commit('SET_DANMAKU_ANCHORS', null);
+      commit('SET_REFERENCE_WINDOW', {});
       commit('SET_ALIGNMENT', createEmptyAlignment());
       commit('SET_SAVED', { alignment: createEmptyAlignment() });
       if (!state.episodeKey) return;
@@ -162,11 +185,50 @@ export default {
         videoIntro: state.detections.videoIntro,
         adRanges: state.detections.adRanges,
         canonicalIntroLength: state.detections.canonicalIntroLength,
+        danmakuContentStart: state.danmakuAnchors.contentStart,
         base: state.alignment
       });
       commit('SET_ALIGNMENT', alignment);
       commit('SET_NOTES', notes);
       dispatch('schedulePersist');
+    },
+
+    /** 记录弹幕侧锚点（弹幕加载完成后调用；不自动改动用户已有校准） */
+    ingestDanmakuComments({ commit }, comments = []) {
+      commit('SET_DANMAKU_ANCHORS', inferDanmakuContentStart(comments));
+    },
+
+    /**
+     * 一键打点：用户播到「正片开始」时调用，用弹幕侧锚点直接算出整体偏移。
+     * 用户只需识别「片头结束了」，不需要比对任何一条弹幕。
+     */
+    markContentStart({ commit, state, dispatch }, videoTime) {
+      const contentStart = state.danmakuAnchors.contentStart;
+      if (contentStart === null || contentStart === undefined) return false;
+      const offset = Math.round((Number(videoTime) - contentStart) * 10) / 10;
+      commit('SET_ALIGNMENT', { ...state.alignment, offset });
+      commit('SET_NOTES', [
+        `已按「此刻画面 = 正片开始」校准：弹幕整体${offset >= 0 ? '后' : '前'}移 ${Math.abs(offset)} 秒（弹幕版正片起点 ${formatClock(contentStart)}）`
+      ]);
+      dispatch('schedulePersist');
+      return true;
+    },
+
+    /**
+     * 弹幕对照校准：用户选了一条「明显属于此刻画面」的弹幕，用它的原始时间戳反推偏移。
+     * 精度最高，也最适合自动锚点失灵时兜底。
+     */
+    alignToComment({ commit, state, dispatch }, { commentTime, videoTime } = {}) {
+      const canonical = Number(commentTime);
+      const current = Number(videoTime);
+      if (!Number.isFinite(canonical) || !Number.isFinite(current)) return false;
+      const offset = Math.round((current - canonical) * 10) / 10;
+      commit('SET_ALIGNMENT', { ...state.alignment, offset });
+      commit('SET_NOTES', [
+        `已按对照弹幕校准：把 ${formatClock(canonical)} 的弹幕对齐到画面 ${formatClock(current)}，弹幕整体${offset >= 0 ? '后' : '前'}移 ${Math.abs(offset)} 秒`
+      ]);
+      dispatch('schedulePersist');
+      return true;
     },
 
     /** 沿用同源历史偏移（只取偏移值，锚点仍按当前集检测） */
