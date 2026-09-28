@@ -164,6 +164,18 @@ export function deriveAlignmentFromDetections(input = {}) {
   };
 }
 
+/**
+ * 追加一段「本视频插入的区间」（如中段广告），手动标记时用。
+ * 区间过短（<1 秒）或非法时原样返回既有配置。
+ */
+export function addInsertRange(alignment, start, end) {
+  const base = normalizeAlignment(alignment);
+  const from = Math.max(0, toFiniteNumber(start, 0));
+  const to = Math.max(from, toFiniteNumber(end, from));
+  if (to - from < 1) return base;
+  return normalizeAlignment({ ...base, inserts: [...base.inserts, { start: from, end: to }] });
+}
+
 /** 人类可读摘要（弹幕设置面板里显示） */
 export function describeAlignment(alignment) {
   const normalized = normalizeAlignment(alignment);

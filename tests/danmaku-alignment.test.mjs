@@ -12,7 +12,8 @@ import {
   mapCanonicalToVideoTime,
   remapDanmakuComments,
   deriveAlignmentFromDetections,
-  describeAlignment
+  describeAlignment,
+  addInsertRange
 } from '../src/renderer/utils/danmakuAlignment.js';
 import storeModule from '../src/main/services/DanmakuAlignmentStore.js';
 
@@ -129,6 +130,16 @@ test('deriveAlignmentFromDetections: HLS 广告段转为插入锚点并保留手
   assert.equal(alignment.offset, 2);
   assert.deepEqual(alignment.inserts, [{ start: 600, end: 690 }]);
   assert.equal(notes.some(note => note.includes('插入内容')), true);
+});
+
+test('addInsertRange: 追加重叠/乱序的广告区间并保持有序，过短区间忽略', () => {
+  const base = { offset: 0, cuts: [], inserts: [{ start: 600, end: 660 }] };
+  const added = addInsertRange(base, 300, 330);
+  assert.deepEqual(added.inserts.map(range => range.start), [300, 600]);
+  assert.equal(added.inserts[0].end, 330);
+
+  const ignored = addInsertRange(base, 100, 100.5);
+  assert.deepEqual(ignored.inserts, base.inserts);
 });
 
 test('describeAlignment: 生成中文摘要', () => {

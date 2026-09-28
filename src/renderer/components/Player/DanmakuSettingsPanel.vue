@@ -90,8 +90,19 @@
         <ul v-if="alignmentNotes.length" class="danmaku-align-notes">
           <li v-for="(note, index) in alignmentNotes" :key="index">{{ note }}</li>
         </ul>
+        <div class="danmaku-settings-actions danmaku-align-mark">
+          <template v-if="pendingInsertStart === null">
+            <button type="button" class="danmaku-settings-action" @click="markInsertStart">标记广告起点</button>
+          </template>
+          <template v-else>
+            <button type="button" class="danmaku-settings-action active" @click="markInsertEnd">
+              广告起点 {{ formatClock(pendingInsertStart) }} → 点此记录终点（当前 {{ formatClock(currentTime) }}）
+            </button>
+            <button type="button" class="danmaku-settings-action" @click="cancelPendingInsert">取消</button>
+          </template>
+        </div>
         <p class="danmaku-align-hint">
-          源删了片头/片尾或中间插了广告时，用「−/+」把弹幕对齐画面（正数=弹幕延后）；校准按「本集 + 当前播放源」记住。
+          源删了片头/片尾或中间插了广告时，用「−/+」把弹幕对齐画面（正数=弹幕延后）；中段广告（无 HLS 标记的）在广告第一帧点「标记广告起点」、广告结束处点「记录终点」，该校准按「本集 + 当前播放源」记住。
         </p>
       </div>
       <div class="danmaku-settings-row is-block">
@@ -209,13 +220,36 @@ export default {
       alignmentSummary: 'summary',
       hasDetections: 'hasDetections',
       alignmentNotes: 'notes',
-      suggestion: 'suggestion'
-    })
+      suggestion: 'suggestion',
+      pendingInsertStart: 'pendingInsertStart'
+    }),
+    ...mapGetters('player', ['currentTime'])
   },
   methods: {
     // 时间轴微调：正数=弹幕延后
     shiftOffset(delta) {
       this.$store.dispatch('danmakuAlignment/shiftOffset', delta);
+    },
+
+    // 手动标记中段插入区间（广告）
+    markInsertStart() {
+      this.$store.dispatch('danmakuAlignment/markInsertStart', this.currentTime);
+    },
+
+    markInsertEnd() {
+      this.$store.dispatch('danmakuAlignment/markInsertEnd', this.currentTime);
+      this.$emit('notice', '已记录广告区间，跨过该区间的弹幕已整体后移', 'info');
+    },
+
+    cancelPendingInsert() {
+      this.$store.dispatch('danmakuAlignment/cancelPendingInsert');
+    },
+
+    formatClock(seconds) {
+      const total = Math.max(0, Math.round(Number(seconds) || 0));
+      const mm = String(Math.floor(total / 60)).padStart(2, '0');
+      const ss = String(total % 60).padStart(2, '0');
+      return `${mm}:${ss}`;
     },
 
     // 按已采集的检测结果（片头候选 / HLS 广告段）推导分段锚点
@@ -437,6 +471,10 @@ export default {
   font-size: 11px;
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.62);
+}
+
+.danmaku-align-mark {
+  margin-top: 2px;
 }
 
 .danmaku-align-hint {

@@ -3,7 +3,8 @@ import {
   createEmptyAlignment,
   deriveAlignmentFromDetections,
   describeAlignment,
-  isAlignmentEmpty
+  isAlignmentEmpty,
+  addInsertRange
 } from '../../utils/danmakuAlignment.js';
 
 // 弹幕时间轴对齐状态
@@ -28,6 +29,8 @@ export default {
     detections: { videoIntro: null, adRanges: [], canonicalIntroLength: 0 },
     notes: [],
     suggestion: null,
+    // 手动标记插入区间（广告）时的起点，null 表示未在标记中
+    pendingInsertStart: null,
     loadToken: 0,
     status: 'idle' // idle | ready
   },
@@ -40,7 +43,8 @@ export default {
     hasDetections: state => !!(state.detections.videoIntro || (state.detections.adRanges || []).length),
     detections: state => state.detections,
     notes: state => state.notes,
-    suggestion: state => state.suggestion
+    suggestion: state => state.suggestion,
+    pendingInsertStart: state => state.pendingInsertStart
   },
 
   mutations: {
@@ -77,6 +81,10 @@ export default {
 
     SET_SUGGESTION(state, suggestion = null) {
       state.suggestion = suggestion || null;
+    },
+
+    SET_PENDING_INSERT_START(state, seconds = null) {
+      state.pendingInsertStart = seconds === null ? null : Number(seconds);
     },
 
     SET_STATUS(state, status) {
@@ -166,6 +174,24 @@ export default {
       if (!state.suggestion) return;
       commit('SET_ALIGNMENT', { ...state.alignment, offset: state.suggestion.offset });
       dispatch('schedulePersist');
+    },
+
+    /** 手动标记插入区间：在当前画面点「起点」，广告结束处点「终点」 */
+    markInsertStart({ commit }, time) {
+      commit('SET_PENDING_INSERT_START', Math.max(0, Math.round((Number(time) || 0) * 10) / 10));
+    },
+
+    markInsertEnd({ commit, state, dispatch }, time) {
+      if (state.pendingInsertStart === null) return;
+      const next = addInsertRange(state.alignment, state.pendingInsertStart, time);
+      commit('SET_PENDING_INSERT_START', null);
+      if (isAlignmentEmpty(next) || next.inserts.length === state.alignment.inserts.length) return;
+      commit('SET_ALIGNMENT', next);
+      dispatch('schedulePersist');
+    },
+
+    cancelPendingInsert({ commit }) {
+      commit('SET_PENDING_INSERT_START', null);
     },
 
     /** 防抖落库：播放中的连续微调只写一次 */
