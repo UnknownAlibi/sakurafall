@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { protectSourcePackSecrets, revealSourcePackSecrets } = require('../utils/secretStore');
 
 const SOURCE_PACK_KIND = 'sakurafall.source-pack';
 const THEME_PACK_KIND = 'sakurafall.theme-pack';
@@ -193,7 +194,8 @@ class CustomizationPackService {
       if (!overwrite && fs.existsSync(targetPath)) {
         return { success: false, error: '同 id 的片源包已安装', metadata: pack.metadata, installed: false };
       }
-      fs.writeFileSync(targetPath, JSON.stringify(pack, null, 2), 'utf8');
+      // 媒体库凭据落盘前加密（读回时在 _readSourcePackDir 解密）
+      fs.writeFileSync(targetPath, JSON.stringify(protectSourcePackSecrets(pack), null, 2), 'utf8');
     }
 
     let activation;
@@ -482,7 +484,7 @@ class CustomizationPackService {
     const result = [];
     for (const file of fs.readdirSync(dirPath).filter(name => /\.(?:json|sourcepack)$/i.test(name))) {
       try {
-        const pack = this.validateSourcePack(fs.readFileSync(path.join(dirPath, file), 'utf8'));
+        const pack = this.validateSourcePack(revealSourcePackSecrets(fs.readFileSync(path.join(dirPath, file), 'utf8')));
         pack.builtIn = builtIn;
         result.push(pack);
       } catch (error) {
