@@ -235,3 +235,8 @@ src/renderer/assets/branding/sakurane-loading-v4.webp
 
 # 仓库以 yarn.lock 作为依赖锁文件；npm 生成的本地锁文件不入库
 package-lock.json
+
+# 主题主稿素材（docs/theme-assets 下 18 张 PNG 合计约 28MB）仅为本地重新生成主题资源用，
+# 成品已提交在 src/renderer/assets/generated/；主稿不再入库，避免把 28MB 二进制带进历史。
+# 需要重新生成时由 scripts/build-yingyue-theme-assets.py 读取本地主稿目录。
+docs/theme-assets/
