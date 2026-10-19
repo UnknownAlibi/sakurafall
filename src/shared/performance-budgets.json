@@ -27,18 +27,18 @@
     "ratchet": [
       {
         "path": "src/renderer/components/AnimeZone/AnimeDetail.vue",
-        "maxLines": 3415,
-        "maxBytes": 108000
+        "maxLines": 1704,
+        "maxBytes": 72808
       },
       {
         "path": "src/renderer/views/Settings.vue",
-        "maxLines": 3154,
-        "maxBytes": 96500
+        "maxLines": 1922,
+        "maxBytes": 73549
       },
       {
         "path": "src/renderer/components/Player/VideoPlayer.vue",
-        "maxLines": 3087,
-        "maxBytes": 123500
+        "maxLines": 2906,
+        "maxBytes": 116981
       },
       {
         "path": "src/main/index.js",
