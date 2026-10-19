@@ -178,6 +178,11 @@ class AnimeDatabase {
 
             // 启用外键约束
             this.db.pragma('foreign_keys = ON');
+
+            // 写锁等待阈值：WAL 下并发写仍可能瞬时拿到 SQLITE_BUSY。
+            // better-sqlite3 的 Database 构造默认也会设 5s，这里显式声明，避免日后
+            // 改构造参数（加 timeout）时把这项保障悄悄丢掉。
+            this.db.pragma('busy_timeout = 5000');
             console.log('[DB] 数据库连接成功:', this.dbPath);
 
             // 创建收藏表 + 播放历史表
