@@ -274,11 +274,12 @@ export default {
   opacity: 0;
   transform: translate3d(-80px, -80px, 0);
   transition: opacity 0.12s ease;
-  will-change: transform;
 }
 
+/* will-change 只在真正显示时提升图层：不可见时不应长期占用一个合成层 */
 .anime-cursor.is-visible {
   opacity: 1;
+  will-change: transform;
 }
 
 .anime-cursor-core {
@@ -348,6 +349,14 @@ export default {
   height: 4px;
   background: rgba(126, 243, 232, 0.36);
   animation: cursor-trail 0.5s ease-out 0.1s infinite;
+}
+
+/* 组件常驻 DOM：光标不可见时（默认 balanced 档、软件渲染、滚动/高压降级、
+   播放器隐藏指针）这 3 个 infinite 动画仍在产帧，纯属空转。放在动画声明
+   之后以同权重覆盖，可见时行为不变。 */
+.anime-cursor:not(.is-visible) .anime-cursor-core,
+.anime-cursor:not(.is-visible) .anime-cursor-trail {
+  animation: none;
 }
 
 .anime-cursor.is-text .anime-cursor-trail,

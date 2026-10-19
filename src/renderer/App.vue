@@ -253,8 +253,11 @@ export default {
     this._removeCoverPressure = backgroundTaskScheduler.subscribePressure(paused => {
       window.electronAPI?.imageCacheSetPressure?.(paused)?.catch(() => {});
     });
-    // 软件渲染检测：GPU 被禁用（GpuGuard 降级）或极弱显卡时 WebGL 返回 SwiftShader，
-    // 标记到 <html data-software-rendering>，CSS 层据此收缩动画开销
+    // 软件渲染检测：GPU 被禁用（GpuGuard 降级）或极弱显卡时 WebGL 返回 SwiftShader；
+    // 而全屏兼容开关 disable-gpu-compositing 不影响 WebGL，只把页面合成切到 CPU
+    // （见 main/window-fullscreen.js）。所以还要查主进程的 GPU 特性状态——否则该开关
+    // 生效时本降级永远不触发，静止界面也会按 60fps 持续软件光栅化（实测占满一个核）。
+    let softwareRendering = false;
     let rendererProbeCanvas = null;
     let rendererProbeContext = null;
     try {
@@ -262,12 +265,8 @@ export default {
       rendererProbeContext = rendererProbeCanvas.getContext('webgl');
       const gl = rendererProbeContext;
       const renderer = gl ? String(gl.getParameter(gl.RENDERER) || '').toLowerCase() : '';
-      const software = !gl || renderer.includes('swiftshader')
+      softwareRendering = !gl || renderer.includes('swiftshader')
         || renderer.includes('software') || renderer.includes('llvmpipe');
-      if (software) {
-        document.documentElement.setAttribute('data-software-rendering', 'true');
-        console.warn('[Perf] 检测到软件渲染环境，动画已自动降级');
-      }
     } catch (_) { /* 检测失败不阻塞启动 */ }
     finally {
       // The probe must not keep an otherwise unused WebGL context alive for the
@@ -277,6 +276,20 @@ export default {
         rendererProbeCanvas.width = 1;
         rendererProbeCanvas.height = 1;
       }
+    }
+    let gpuCompositing = '';
+    if (window.electronAPI?.getGpuFeatureStatus) {
+      try {
+        const gpuStatus = await window.electronAPI.getGpuFeatureStatus();
+        gpuCompositing = String(gpuStatus?.gpuCompositing || '');
+        if (gpuCompositing && !gpuCompositing.startsWith('enabled')) {
+          softwareRendering = true;
+        }
+      } catch (_) { /* 探测失败按硬件合成处理 */ }
+    }
+    if (softwareRendering) {
+      document.documentElement.setAttribute('data-software-rendering', 'true');
+      console.warn(`[Perf] 软件渲染/CPU 合成（gpu_compositing=${gpuCompositing || 'unknown'}），循环动画已降级`);
     }
 
     this._handleVisibilityChange = () => {

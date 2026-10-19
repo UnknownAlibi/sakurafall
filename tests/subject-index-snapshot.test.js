@@ -273,6 +273,48 @@ test('query results expose the catalog version and advance with snapshot imports
   }
 });
 
+test('本地模式下的目录索引超过 TTL 后不再直接出列表', () => {
+  const service = new SubjectIndexService();
+  const freshAt = Date.now() - 60 * 60 * 1000;
+  service.getSyncStatus = () => ({
+    lastSync: { 'catalog-snapshot': { catalogReady: true, syncedAt: freshAt } }
+  });
+  service._snapshotBaseUrl = '';
+  assert.equal(service.canServeCatalog(), true, '1 小时前的本地索引仍可直接出列表');
+
+  service.getSyncStatus = () => ({
+    lastSync: { 'catalog-snapshot': { catalogReady: true, syncedAt: freshAt - 24 * 60 * 60 * 1000 } }
+  });
+  assert.equal(service.canServeCatalog(), false, '本地模式无法再同步，超过 TTL 必须回退网络');
+
+  // 有快照来源：服务端会持续下发增量，不受本地 TTL 限制
+  service._snapshotBaseUrl = 'https://service.test';
+  assert.equal(service.canServeCatalog(), true);
+
+  // 从未导入过快照
+  service.getSyncStatus = () => ({ lastSync: {} });
+  assert.equal(service.canServeCatalog(), false);
+});
+
+test('封面回填只补空值，稀疏 upsert 不会抹掉已回填的封面', async () => {
+  const service = new SubjectIndexService();
+  const db = createIndexDb();
+  service.db = db;
+  try {
+    await service.upsertSubjects([{ bgmId: 5, name: '甲', cover: '' }]);
+    assert.equal(service.updateCover(5, 'https://lain.bgm.tv/a.jpg'), true);
+    assert.equal(service.updateCover(5, 'https://lain.bgm.tv/b.jpg'), false, '已有封面不应被覆盖');
+
+    // 快照增量里该条 images 仍为空：不得把回填的封面写回空
+    await service.upsertSubjects([{ bgmId: 5, name: '甲', cover: '' }]);
+    const row = db.prepare('SELECT cover_url FROM bangumi_subjects WHERE bgm_id = 5').get();
+    assert.equal(row.cover_url, 'https://lain.bgm.tv/a.jpg');
+  } finally {
+    service.db = null;
+    db.close();
+  }
+});
+
 test('sparse list upserts preserve cached detail fields', async () => {
   const service = new SubjectIndexService();
   const db = createIndexDb();

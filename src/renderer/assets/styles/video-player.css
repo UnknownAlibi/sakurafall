@@ -742,9 +742,15 @@
   background: #000;
 }
 
-/* ===== 播放中控制栏隐藏时，鼠标光标一并隐藏（沉浸观影） ===== */
-.video-player-container.controls-idle {
-  cursor: none;
+/* ===== 播放中控制栏隐藏时，鼠标光标一并隐藏（沉浸观影） =====
+   必须带 !important 并覆盖后代：main.css 对 balanced/performance 演出档的
+   `.video-player-container` / `.video-element` 下了 `cursor: pointer !important`
+   （自绘光标的兜底规则），普通声明的 here 会被它压掉——表现为控制栏已隐藏、
+   鼠标指针却留在画面上。选择器权重 (0,2,0) 高于那边的 :where(...)，同为
+   !important 时由权重取胜。 */
+.video-player-container.controls-idle,
+.video-player-container.controls-idle * {
+  cursor: none !important;
 }
 
 /* ===== 闪烁反馈过渡 ===== */

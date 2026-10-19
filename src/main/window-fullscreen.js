@@ -7,23 +7,44 @@
  *  - bindFullscreenStateSync(win)：窗口全屏状态推送给渲染层 + 过渡期重绘与几何校正
  */
 const { app, BrowserWindow, screen } = require('electron');
+const { readGpuCompositingPreference, isGpuCompositingForcedByEnv } = require('./utils/gpuCompositingPreference');
 
 /**
  * 全屏显示兼容性开关（必须在 app ready 之前调用）。
  *
- * 禁用 GPU 合成（页面画布改走软件合成路径）。
- * 原因：Windows 11 24H2+ 的 DWM/MPO 合成器 + 混合显卡（AMD 核显/独显）组合下，
- * GPU 合成的窗口表面在进入全屏后可能被 DWM 冻结——视频 overlay 平面仍能刷新，
- * 但页面画布（控制栏、黑边等 UI）不再被呈现到屏幕。表现为：
- *   · 暂停时全屏，视频下方露出一片空白（视频贴顶、下方未重绘区域露底）
+ * 背景：Windows 11 24H2+ 的 DWM 覆盖层（MPO/DirectComposition）+ 混合显卡
+ * （实测 AMD 核显/独显）组合下，GPU 合成的窗口表面在进入全屏后可能被冻结——
+ * 视频平面仍在刷新，但页面画布（控制栏、黑边等 UI）不再被呈现到屏幕：
+ *   · 暂停时全屏，视频下方露出一片空白（宽高比非 16:9 时最明显，如 1920×820）
  *   · 播放时进全屏闪一下
  *   · 全屏后无论怎么移动鼠标，底部控制栏都不出现（DOM 层已显示，屏幕不呈现）
- * 16:9 视频因为 letterbox 偏移为 0，同样的故障不易察觉（部分片源"看起来正常"）。
- * 软件合成不经过 GPU 表面呈现链路，从根源上绕开该缺陷。
- * 视频解码/WebGL 等仍由 GPU 进程加速，代价仅在于页面合成走 CPU（1080p 播放
- * 实测 CPU 占用可接受；若后续需要，可按机型/驱动版本条件化启用）。
+ *
+ * 两档呈现策略（默认第一档）：
+ *  1. 'gpu'（默认）：保留 GPU 合成，只关闭 DirectComposition 这一条覆盖层路径。
+ *     实测可消除上述冻结，代价远小于整页 CPU 合成——播放时不会把视频帧
+ *     搬到 CPU 上重绘。
+ *  2. 'cpu'：禁用 GPU 合成，整页走软件合成。给第一档仍然复现的机器兜底，
+ *     播放时 CPU 占用明显更高。
+ *
+ * 优先级：环境变量 / 启动参数 > 设置页开关（userData/gpu-compositing.json）> 默认 'gpu'。
+ * @param {{ preferenceFile?: string }} [options]
  */
-function applyFullscreenCompatFlags() {
+function applyFullscreenCompatFlags({ preferenceFile } = {}) {
+    if (isGpuCompositingForcedByEnv()) {
+        app.commandLine.appendSwitch('disable-direct-composition');
+        console.log('[Compat] 环境变量/启动参数指定 GPU 合成，仅关闭 DirectComposition');
+        return;
+    }
+
+    // 偏好缺省（null）= 使用默认的 GPU 合成路径
+    const preference = preferenceFile ? readGpuCompositingPreference(preferenceFile) : null;
+    if (preference !== false) {
+        app.commandLine.appendSwitch('disable-direct-composition');
+        console.log('[Compat] GPU 合成 + 关闭 DirectComposition（全屏兼容）');
+        return;
+    }
+
+    console.log('[Compat] 设置页选择 CPU 合成，禁用 GPU 合成（播放负载会明显升高）');
     app.commandLine.appendSwitch('disable-gpu-compositing');
 }
 

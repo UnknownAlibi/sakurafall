@@ -15,6 +15,7 @@ const SharedRequests = require('../utils/sharedRequests');
 const anilistProvider = require('./AniListProvider');
 // P0：本地索引服务（fire-and-forget 写入，不阻塞主流程）
 const subjectIndexService = require('./SubjectIndexService');
+const { subjectCoverBackfill } = require('./SubjectCoverBackfill');
 const {
   isSubjectCatalogEligible,
   subjectReleaseState
@@ -221,7 +222,7 @@ class SubjectService {
     const todayKey = this._todayDateKey();
     const releaseScope = includeFuture ? 'all' : `released-${todayKey}`;
 
-    if (!includeFuture && subjectIndexService.hasCatalogSnapshot?.()) {
+    if (!includeFuture && subjectIndexService.canServeCatalog?.()) {
       const indexed = this._readCatalogPageFromIndex({ page: safePage, limit: safeLimit,
         sort: normalizedSort, year: safeYear, month: safeMonth, cat: safeCat });
       if (indexed) return { ...indexed, includeFuture: false, releaseDate: todayKey,
@@ -421,6 +422,7 @@ class SubjectService {
         requireRated: false
       });
       if (!result?.data?.length && !subjectIndexService.hasCatalogSnapshot?.()) return null;
+      subjectCoverBackfill.schedule(result.data);
       return {
         ...result,
         limit,
@@ -456,6 +458,7 @@ class SubjectService {
         requireRated: false
       });
       if (!result?.data?.length && !subjectIndexService.hasCatalogSnapshot?.()) return null;
+      subjectCoverBackfill.schedule(result.data);
       return {
         ...result,
         limit,
@@ -1228,7 +1231,7 @@ class SubjectService {
     ));
 
     const cacheKey = `bangumi:browse:v11:${normalizedSort}:${userTags.join(',') || 'all'}:${officialMetaTags.join(',') || 'all-platforms'}:${safeYear || 'all-years'}:${keyword || ''}:${safePage}:${safeLimit}`;
-    if (!keyword && officialMetaTags.length <= 1 && subjectIndexService.hasCatalogSnapshot?.()) {
+    if (!keyword && officialMetaTags.length <= 1 && subjectIndexService.canServeCatalog?.()) {
       const indexed = this._readBrowsePageFromIndex({ keyword, userTags, officialMetaTags,
         year: safeYear, sort: normalizedSort, page: safePage, limit: safeLimit });
       if (indexed) return { ...indexed, tag: tag || '', _servedFromIndex: true, _snapshotBacked: true };
@@ -1476,6 +1479,8 @@ class SubjectService {
     const cacheKey = String(bgmId);
     const cached = this._detailCache.get(cacheKey);
     if (cached && Date.now() < cached.expiry) {
+      // 缓存命中也要回写索引：列表读索引，否则详情拿到的封面永远进不了列表
+      this._indexUpsertDetail(cached.detail);
       return cached.detail;
     }
 

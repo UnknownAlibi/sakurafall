@@ -1569,6 +1569,16 @@ export default {
     const lifecycleToken = Symbol('anime-zone-lifecycle');
     this._animeZoneLifecycleToken = lifecycleToken;
     const isActive = () => this._animeZoneLifecycleToken === lifecycleToken;
+    // 列表空封面的后台补图结果：主进程补到后推过来，就地替换卡片封面
+    this._removeCoverUpdates = window.electronAPI?.onSubjectCoversUpdated?.((covers) => {
+      if (!isActive() || !covers) return;
+      const updates = Object.entries(covers)
+        .map(([bgmId, cover]) => ({ id: `bangumi_${bgmId}`, cover }))
+        .filter(item => item.cover);
+      if (updates.length > 0) {
+        this.$store.commit('anime/UPDATE_ANIME_LIST_BATCH', updates);
+      }
+    });
     window.addEventListener('resize', this.scheduleVirtualGridMeasure, { passive: true });
     try {
       // 加载最近播放历史（续播卡片）
@@ -1693,6 +1703,8 @@ export default {
   },
 
   beforeUnmount() {
+    this._removeCoverUpdates?.();
+    this._removeCoverUpdates = null;
     backgroundTaskScheduler.resume('catalog-scroll');
     backgroundTaskScheduler.cancelGroup('catalog-cache-refresh');
     backgroundTaskScheduler.cancelGroup('catalog-metadata');

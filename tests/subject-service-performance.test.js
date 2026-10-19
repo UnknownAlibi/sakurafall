@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { SubjectService } = require('../src/main/services/SubjectService');
 const subjectIndexService = require('../src/main/services/SubjectIndexService');
 const bangumiApi = require('../src/main/services/BangumiApi');
+const { subjectCoverBackfill } = require('../src/main/services/SubjectCoverBackfill');
 const {
   hasQualifiedRating,
   isSubjectCatalogEligible,
@@ -21,9 +22,19 @@ function createSubject(id, airDate = '2026-01-01') {
 
 test('ready catalog snapshots bypass remote scans and stale page totals, including empty filters', async t => {
   const ready = subjectIndexService.hasCatalogSnapshot;
+  const serve = subjectIndexService.canServeCatalog;
   const query = subjectIndexService.querySubjects;
-  t.after(() => { subjectIndexService.hasCatalogSnapshot = ready; subjectIndexService.querySubjects = query; });
+  const backfill = subjectCoverBackfill.schedule;
+  t.after(() => {
+    subjectIndexService.hasCatalogSnapshot = ready;
+    subjectIndexService.canServeCatalog = serve;
+    subjectIndexService.querySubjects = query;
+    subjectCoverBackfill.schedule = backfill;
+  });
   subjectIndexService.hasCatalogSnapshot = () => true;
+  subjectIndexService.canServeCatalog = () => true;
+  // 空封面补图会在后台额外请求详情接口，本测试只关心目录扫描
+  subjectCoverBackfill.schedule = () => {};
   const calls = [];
   subjectIndexService.querySubjects = filters => {
     calls.push(filters);
@@ -289,6 +300,9 @@ test('SubjectService serves indexed tag filters while the full collection warms'
   });
   const originalRequest = bangumiApi.request;
   const originalNormalizeItem = bangumiApi._normalizeItem;
+  const originalBackfill = subjectCoverBackfill.schedule;
+  // 后台补图会额外请求详情接口；本测试只断言"目录扫描不发网络请求"
+  subjectCoverBackfill.schedule = () => {};
   let networkRequests = 0;
   bangumiApi._normalizeItem = item => ({
     bgm_id: item.id,
@@ -328,6 +342,7 @@ test('SubjectService serves indexed tag filters while the full collection warms'
     subjectIndexService.querySubjects = originalQuery;
     bangumiApi.request = originalRequest;
     bangumiApi._normalizeItem = originalNormalizeItem;
+    subjectCoverBackfill.schedule = originalBackfill;
   }
 });
 

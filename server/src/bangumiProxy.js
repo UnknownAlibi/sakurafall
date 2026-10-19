@@ -134,7 +134,7 @@ class BangumiProxy {
       .concat(this.upstreams.filter(base => (this.cooldowns.get(base) || 0) > now));
   }
 
-  async _loadUpstream(url, method, body) {
+  async _loadUpstream(url, method, body, timeoutMs = this.timeoutMs) {
     let lastError;
     for (const base of this._orderedUpstreams()) {
       const target = `${base}${url.pathname}${url.search}`;
@@ -142,7 +142,7 @@ class BangumiProxy {
         const { response, body: responseBody } = await fetchBuffer(target, {
           method,
           body,
-          timeoutMs: this.timeoutMs,
+          timeoutMs,
           maxBytes: 12 * 1024 * 1024,
           headers: {
             Accept: 'application/json',
@@ -180,9 +180,9 @@ class BangumiProxy {
     throw lastError || new Error('no Bangumi upstream is available');
   }
 
-  async _refresh(key, url, method, body) {
+  async _refresh(key, url, method, body, timeoutMs = this.timeoutMs) {
     if (this.inflight.has(key)) return this.inflight.get(key);
-    const pending = this._loadUpstream(url, method, body)
+    const pending = this._loadUpstream(url, method, body, timeoutMs)
       .then(async result => {
         const policy = cachePolicy(url.pathname);
         await this.cache.set('bangumi', key, result.body, {
@@ -205,13 +205,21 @@ class BangumiProxy {
     await this._refresh(key, url, method, body);
   }
 
-  async requestJson(pathname) {
+  /**
+   * 服务内部直读上游（目录预热、封面补抓）。
+   * @param {string} pathname
+   * @param {{ timeoutMs?: number, force?: boolean }} [options] 预热这类批量任务可以放宽超时——
+   *   公网镜像单页可能要 5-6 秒，用客户端级别的 3.5 秒必然超时。
+   *   force=true 跳过缓存直取上游：补封面时必须这样，否则会读到"封面还是空"的旧详情。
+   */
+  async requestJson(pathname, options = {}) {
     const url = new URL(pathname, 'http://localhost');
     const key = this._cacheKey('GET', url, Buffer.alloc(0));
-    const cached = await this.cache.get('bangumi', key, { allowStale: true });
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || this.timeoutMs);
+    const cached = options.force ? null : await this.cache.get('bangumi', key, { allowStale: true });
     const result = cached
       ? { body: cached.body }
-      : await this._refresh(key, url, 'GET', Buffer.alloc(0));
+      : await this._refresh(key, url, 'GET', Buffer.alloc(0), timeoutMs);
     const parsed = JSON.parse(result.body.toString('utf8'));
     if (this.observeCatalog) {
       try { this.observeCatalog(parsed); } catch (_) { /* 快照失败不影响预热 */ }

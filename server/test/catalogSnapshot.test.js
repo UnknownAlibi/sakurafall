@@ -122,6 +122,41 @@ test('payload cache is bounded by bytes as well as entries', async t => {
   assert.equal(catalog._payloadCache.size, 0);
 });
 
+test('sparse observations never wipe a known cover', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-cover-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const catalog = new CatalogSnapshotService({ dataDir, warmEnabled: false });
+  t.after(() => catalog.close());
+
+  catalog.ingest({ data: [{ id: 7, type: 2, name: 'x', images: { common: 'https://lain.bgm.tv/a.jpg' } }] });
+  catalog.ingest({ data: [{ id: 7, type: 2, name: 'x', images: { common: '', large: '', medium: '' } }] });
+  assert.equal(catalog.records.get(7).subject.images.common, 'https://lain.bgm.tv/a.jpg');
+
+  // 新封面仍然可以正常更新
+  catalog.ingest({ data: [{ id: 7, type: 2, name: 'x', images: { common: 'https://lain.bgm.tv/b.jpg' } }] });
+  assert.equal(catalog.records.get(7).subject.images.common, 'https://lain.bgm.tv/b.jpg');
+});
+
+test('cover refill fetches details only for records without images', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-refill-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const catalog = new CatalogSnapshotService({ dataDir, warmEnabled: false, coverRefillDelayMs: 50 });
+  t.after(() => catalog.close());
+
+  catalog.ingest([
+    { id: 1, type: 2, name: 'has', images: { common: 'https://lain.bgm.tv/1.jpg' } },
+    { id: 2, type: 2, name: 'empty', images: { common: '', large: '' } }
+  ]);
+  const fetched = [];
+  const refilled = await catalog._refillMissingCovers(async id => {
+    fetched.push(id);
+    return { id, type: 2, name: 'empty', images: { common: `https://lain.bgm.tv/${id}.jpg` } };
+  });
+  assert.deepEqual(fetched, [2], '已有封面的条目不应重复请求');
+  assert.equal(refilled, 1);
+  assert.equal(catalog.records.get(2).subject.images.common, 'https://lain.bgm.tv/2.jpg');
+});
+
 test('warm publication does not overwrite fresher detail responses received during a page request', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-concurrent-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));

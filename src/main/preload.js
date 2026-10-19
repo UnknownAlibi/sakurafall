@@ -52,6 +52,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     platform: process.platform,
     isDev: isElectronDev,
     appVersion: () => ipcRenderer.invoke('app-version'),
+    getGpuFeatureStatus: () => ipcRenderer.invoke('gpu-feature-status'),
+    // 列表空封面后台补图结果：{ [bgmId]: coverUrl }
+    onSubjectCoversUpdated: (callback) => {
+        const handler = (_event, covers) => callback(covers);
+        ipcRenderer.on('subject-covers-updated', handler);
+        return () => ipcRenderer.removeListener('subject-covers-updated', handler);
+    },
+    // GPU 合成开关（关闭以规避全屏冻结，开启以省 CPU；切换需重启）
+    gpuCompositingGet: () => ipcRenderer.invoke('gpu-compositing-get'),
+    gpuCompositingSet: (enabled) => ipcRenderer.invoke('gpu-compositing-set', enabled === true),
+    appRelaunch: () => ipcRenderer.invoke('app-relaunch'),
     runtimeDiagnosticsReport: (type, details) => ipcRenderer.invoke('runtime-diagnostics-report', type, details),
     runtimeDiagnosticsSummary: () => ipcRenderer.invoke('runtime-diagnostics-summary'),
     runtimeDiagnosticsOpenFolder: () => ipcRenderer.invoke('runtime-diagnostics-open-folder'),

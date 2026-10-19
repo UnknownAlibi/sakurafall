@@ -5,9 +5,11 @@ const processStartedAt = Date.now();
 const { applyFullscreenCompatFlags, registerWindowFullscreenIpc, bindFullscreenStateSync } = require('./window-fullscreen');
 // 窗口状态持久化（尺寸/位置/最大化）抽离至独立模块
 const { loadWindowState, applyWindowState, bindWindowStatePersistence } = require('./window-state');
+// GPU 合成偏好（设置页开关落盘到 userData）
+const { resolveGpuCompositingPreferenceFile } = require('./utils/gpuCompositingPreference');
+const { registerGpuIpc } = require('./ipc/gpu');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-applyFullscreenCompatFlags();
 
 protocol.registerSchemesAsPrivileged([{
     scheme: 'sakurafall-cache',
@@ -49,6 +51,11 @@ if (isSmokeOffline) process.env.SAKURAFALL_OFFLINE_MODE = '1';
 const smokeReportArg = process.argv.find(arg => arg.startsWith('--smoke-report='));
 const smokeReportPath = smokeReportArg ? path.resolve(smokeReportArg.slice('--smoke-report='.length)) : '';
 
+// GPU 合成偏好（设置页开关）：必须在 app ready 前读取并决定是否禁用 GPU 合成。
+// 文件路径只解析一次，保证启动读取与运行时写入指向同一个 userData。
+const GPU_COMPOSITING_PREFERENCE_FILE = resolveGpuCompositingPreferenceFile(app.getPath('userData'));
+applyFullscreenCompatFlags({ preferenceFile: GPU_COMPOSITING_PREFERENCE_FILE });
+
 // 判断当前是否从 electron.exe 启动（开发模式）
 // 某些环境下 app.isPackaged 在 electron . 时也会返回 true，需要辅助判断
 const isElectronDev = /electron(?:\.exe)?$/i.test(process.execPath);
@@ -63,6 +70,7 @@ const AnimeDatabase = require('./services/AnimeDatabase');
 const bangumiApi = require('./services/BangumiApi');
 const subjectService = require('./services/SubjectService');
 const subjectIndexService = require('./services/SubjectIndexService');
+const { subjectCoverBackfill } = require('./services/SubjectCoverBackfill');
 const cmsApiService = require('./services/CmsApiService');
 const danmakuApi = require('./services/DanmakuApi');
 const danmakuAlignmentStore = require('./services/DanmakuAlignmentStore');
@@ -940,6 +948,12 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
         cmsApiService.setDatabase(animeDb);
         bangumiApi.setDatabase(animeDb);
         subjectService.setDatabase(animeDb);
+        // 列表空封面后台补图完成后，把所有窗口里对应卡片就地更新
+        subjectCoverBackfill.setNotifier((covers) => {
+            for (const win of BrowserWindow.getAllWindows()) {
+                if (!win.isDestroyed()) win.webContents.send('subject-covers-updated', covers);
+            }
+        });
         // P0: 本地 Bangumi 索引服务（本地查询为主，网络同步为辅）
         subjectIndexService.setDatabase(animeDb);
         danmakuApi.setDatabase(animeDb);
@@ -1032,7 +1046,10 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
         // 按域名补 Referer（防盗链）
         try {
             const host = new URL(reqUrl).hostname.toLowerCase();
-            const sourceHeaders = sourceProviderRegistry.getRequestHeadersForUrl(reqUrl);
+            // dev 下 Vite dev server 会一次性拉取数百个模块，这些请求不可能命中
+            // 片源防盗链规则，却会让每个请求都遍历一遍 provider 列表（主进程 CPU）。
+            const isDevServerRequest = isDev && /^http:\/\/(localhost|127\.0\.0\.1):5173\//i.test(reqUrl);
+            const sourceHeaders = isDevServerRequest ? {} : sourceProviderRegistry.getRequestHeadersForUrl(reqUrl);
             if (Object.keys(sourceHeaders).length > 0) {
                 Object.assign(details.requestHeaders, sourceHeaders);
             } else if (host.includes('bgm.tv') || host.includes('bangumi.tv') || host.includes('lain.bgm')) {
@@ -1082,6 +1099,22 @@ app.on('activate', () => {
 // IPC 通信处理
 secureIpcHandle('app-version', () => {
     return app.getVersion();
+});
+
+// GPU 特性状态：渲染层用它判断页面是否在走软件合成。
+// disable-gpu-compositing（window-fullscreen.js 的全屏兼容开关）只是把合成切到 CPU，
+// WebGL 仍由真实 GPU 提供，渲染层自检发现不了，需要主进程给出权威结论。
+secureIpcHandle('gpu-feature-status', () => {
+    try {
+        const status = app.getGPUFeatureStatus() || {};
+        return {
+            gpuCompositing: String(status.gpu_compositing || ''),
+            webgl: String(status.webgl || ''),
+            webgl2: String(status.webgl2 || '')
+        };
+    } catch (error) {
+        return { gpuCompositing: '', webgl: '', webgl2: '', error: error.message };
+    }
 });
 
 secureIpcHandle('runtime-diagnostics-report', (_event, type, details) => {
@@ -1379,6 +1412,14 @@ secureIpcHandle('enhanced-player-presets', async () => {
         presets: playerSvc.enhanced().getPresets(),
         defaultPresetId: playerSvc.enhanced().defaultPresetId
     };
+});
+
+// ===== 设置页 GPU 合成开关（已抽离至 ipc/gpu.js）=====
+registerGpuIpc({
+    handle: secureIpcHandle,
+    app,
+    preferenceFile: GPU_COMPOSITING_PREFERENCE_FILE,
+    isDev
 });
 
 // ===== Phase 7: 网络与 TUN 分流策略（已抽离至 ipc/network.js）=====

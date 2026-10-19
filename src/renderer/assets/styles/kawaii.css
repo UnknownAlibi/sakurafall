@@ -233,7 +233,8 @@
 :is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .main-content::before {
   left: 68%;
   font-size: 14px;
-  filter: saturate(1.15);
+  /* 刻意不加 filter：循环动画 + 滤镜会让该层每帧重做一次滤镜光栅化，
+     而本应用为绕开全屏合成缺陷全局走 CPU 合成，逐帧开销会被放大。 */
   animation: kawaii-petal-fall 11s linear 1.2s infinite;
 }
 
@@ -292,7 +293,6 @@
   left: 18%;
   font-size: 15px;
   opacity: 0.75;
-  filter: saturate(1.2);
   animation: kawaii-petal-fall 9s linear infinite;
   pointer-events: none;
   z-index: 2;

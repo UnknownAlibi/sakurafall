@@ -27,6 +27,16 @@ function unwrapCoverProxy(value, depth = 0) {
   return output;
 }
 
+/**
+ * 条目是否带可用封面。列表接口对刚建条目的 images 常是空字符串，
+ * 用它判断"这次观察到的封面是不是空壳"，避免把已抓到的封面覆盖掉。
+ */
+function hasUsableImages(subject) {
+  const images = subject?.images;
+  if (!images || typeof images !== 'object') return false;
+  return Object.values(images).some(value => typeof value === 'string' && value.trim());
+}
+
 function isSubject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
     Number(value.id || value.bgm_id || value.bgmId) > 0 &&
@@ -68,6 +78,10 @@ class CatalogSnapshotService {
     this.warmEnabled = options.warmEnabled === true;
     this.warmIntervalMs = Math.max(60_000, Number(options.warmIntervalMs) || 24 * 60 * 60_000);
     this.warmDelayMs = Math.max(25, Number(options.warmDelayMs) || 180);
+    // 每轮预热顺带用详情接口重抓多少个"无封面"条目（0 = 关闭）。
+    // 列表接口对新建条目的 images 常为空，只靠列表页永远补不上封面。
+    this.coverRefillLimit = Math.max(0, Number(options.coverRefillLimit) || 200);
+    this.coverRefillDelayMs = Math.max(50, Number(options.coverRefillDelayMs) || 350);
     this.pageSize = Math.max(20, Math.min(100, Number(options.pageSize) || 100));
     this.records = new Map();
     this.generatedAt = 0;
@@ -115,6 +129,10 @@ class CatalogSnapshotService {
       const cleanSubject = unwrapCoverProxy(subject);
       const previous = this.records.get(id);
       const merged = previous ? { ...previous.subject, ...cleanSubject } : cleanSubject;
+      // 稀疏观察（列表接口 images 为空）不得抹掉已抓到的封面
+      if (previous && !hasUsableImages(cleanSubject) && hasUsableImages(previous.subject)) {
+        merged.images = previous.subject.images;
+      }
       const nextJson = JSON.stringify(merged);
       if (previous && JSON.stringify(previous.subject) === nextJson) continue;
       this.records.set(id, { subject: merged, updatedAt: observedAt });
@@ -182,7 +200,7 @@ class CatalogSnapshotService {
       subjects
     }));
     const gzip = zlib.gzipSync(body, { level: 6 });
-    const etag = `\"${crypto.createHash('sha1').update(gzip).digest('hex')}\"`;
+    const etag = `"${crypto.createHash('sha1').update(gzip).digest('hex')}"`;
     const result = { body, gzip, etag };
     const bytes = body.byteLength + gzip.byteLength;
     if (bytes <= this.payloadCacheMaxBytes) {
@@ -229,23 +247,23 @@ class CatalogSnapshotService {
     return true;
   }
 
-  startWarmup(fetchPage) {
+  startWarmup(fetchPage, fetchDetail) {
     if (this._closed || !this.enabled || !this.warmEnabled || typeof fetchPage !== 'function') return;
     if (this._warmTimer) clearTimeout(this._warmTimer);
     const run = () => {
       this._warmTimer = null;
-      this.warm(fetchPage).catch(error => console.warn('[CatalogSnapshot] 预热失败:', error.message));
+      this.warm(fetchPage, fetchDetail).catch(error => console.warn('[CatalogSnapshot] 预热失败:', error.message));
     };
     const initialDelay = this.lastFullWarmAt > 0 ? 30_000 : 2_000;
     this._warmTimer = setTimeout(run, initialDelay);
     this._warmTimer.unref?.();
   }
 
-  warm(fetchPage) {
+  warm(fetchPage, fetchDetail) {
     if (this._closed) return Promise.resolve({ skipped: true });
     if (this._warming) return this._warming;
     let succeeded = false;
-    this._warming = this._runWarm(fetchPage)
+    this._warming = this._runWarm(fetchPage, fetchDetail)
       .then(result => {
         succeeded = true;
         return result;
@@ -254,13 +272,13 @@ class CatalogSnapshotService {
         this._warming = null;
         if (this._closed || !this.warmEnabled) return;
         const nextDelay = succeeded ? this.warmIntervalMs : Math.min(this.warmIntervalMs, 10 * 60 * 1000);
-        this._warmTimer = setTimeout(() => this.warm(fetchPage).catch(() => {}), nextDelay);
+        this._warmTimer = setTimeout(() => this.warm(fetchPage, fetchDetail).catch(() => {}), nextDelay);
         this._warmTimer.unref?.();
       });
     return this._warming;
   }
 
-  async _runWarm(fetchPage) {
+  async _runWarm(fetchPage, fetchDetail) {
     // Keep published data unchanged until every category has a complete scan.
     const staged = new Map();
     for (const category of DEFAULT_CATEGORIES) {
@@ -308,7 +326,51 @@ class CatalogSnapshotService {
     this._dirty = true;
     this._clearPayloadCache();
     this.flush();
-    return { total: this.records.size, generatedAt: this.generatedAt };
+    const refilled = await this._refillMissingCovers(fetchDetail);
+    // 运维可见性：一整轮预热 + 补图可能要跑很久，完成后留一条记录便于核对
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'catalog-warm',
+      total: this.records.size,
+      refilled,
+      generatedAt: this.generatedAt
+    }));
+    return { total: this.records.size, generatedAt: this.generatedAt, refilled };
+  }
+
+  /**
+   * 用详情接口补抓"无封面"条目的 images。
+   * 列表接口对刚建的条目经常返回空 images，仅靠列表页扫描永远补不上；
+   * 每轮限量 + 限速，避免给上游造成压力。
+   * @param {(id: number) => Promise<object>} fetchDetail
+   * @returns {Promise<number>} 实际补到的条数
+   */
+  async _refillMissingCovers(fetchDetail) {
+    if (this._closed || !this.enabled || this.coverRefillLimit <= 0) return 0;
+    if (typeof fetchDetail !== 'function') return 0;
+    const pending = [];
+    for (const [id, record] of this.records) {
+      if (pending.length >= this.coverRefillLimit) break;
+      if (!hasUsableImages(record.subject)) pending.push(id);
+    }
+    let updated = 0;
+    for (const id of pending) {
+      if (this._closed) break;
+      try {
+        const detail = await fetchDetail(id);
+        const subject = collectSubjects(detail)[0];
+        if (subject && hasUsableImages(subject)) {
+          updated += this.ingest(subject) > 0 ? 1 : 0;
+        }
+      } catch (_error) {
+        // 单条失败忽略，下一轮预热再试
+      }
+      if (this.coverRefillDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, this.coverRefillDelayMs));
+      }
+    }
+    if (updated > 0) this.flush();
+    return updated;
   }
 
   close() {

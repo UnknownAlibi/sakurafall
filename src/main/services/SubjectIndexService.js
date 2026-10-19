@@ -37,6 +37,9 @@ class SubjectIndexService {
     this.DEFAULT_PAGE_SIZE = 24;
     this.SNAPSHOT_SCHEMA_VERSION = 1;
     this.SNAPSHOT_MIN_INTERVAL = 6 * 60 * 60 * 1000;
+    // 无快照来源（本地模式/离线）时，索引只能当缓存用：超过这个时长就回退网络，
+    // 否则列表会被最后一次导入的快照永久冻结（新番、补上的封面都拿不到）。
+    this.CATALOG_LOCAL_TTL_MS = 24 * 60 * 60 * 1000;
     this._snapshotBaseUrl = '';
     this._snapshotTimer = null;
     this._snapshotSyncPromise = null;
@@ -102,7 +105,8 @@ class SubjectIndexService {
         name_cn = excluded.name_cn,
         -- 稀疏列表元数据不得清空已缓存的详细字段（快照增量/列表页可能缺 summary/aliases）
         aliases = CASE WHEN excluded.aliases IS NULL OR excluded.aliases = '' THEN bangumi_subjects.aliases ELSE excluded.aliases END,
-        cover_url = excluded.cover_url,
+        -- 稀疏列表数据（例如快照里 images 为空、搜索结果的精简条目）不得抹掉已缓存的封面
+        cover_url = CASE WHEN excluded.cover_url IS NULL OR excluded.cover_url = '' THEN bangumi_subjects.cover_url ELSE excluded.cover_url END,
         rating = excluded.rating,
         rank = excluded.rank,
         votes = excluded.votes,
@@ -203,7 +207,7 @@ class SubjectIndexService {
           name_cn = excluded.name_cn,
           aliases = CASE WHEN excluded.aliases IS NULL OR excluded.aliases = '' THEN bangumi_subjects.aliases ELSE excluded.aliases END,
           summary = CASE WHEN excluded.summary IS NULL OR excluded.summary = '' THEN bangumi_subjects.summary ELSE excluded.summary END,
-          cover_url = excluded.cover_url,
+          cover_url = CASE WHEN excluded.cover_url IS NULL OR excluded.cover_url = '' THEN bangumi_subjects.cover_url ELSE excluded.cover_url END,
           rating = excluded.rating,
           rank = excluded.rank,
           votes = excluded.votes,
@@ -627,6 +631,48 @@ class SubjectIndexService {
 
   hasCatalogSnapshot() {
     return this.getSyncStatus().lastSync['catalog-snapshot']?.catalogReady === true;
+  }
+
+  /**
+   * 目录索引是否可以直接出列表。
+   *
+   * hasCatalogSnapshot() 只回答"导入过快照没有"，不判断数据还能不能更新：
+   *  - 有快照来源（云端模式）：服务端会持续下发增量，信任索引；
+   *  - 没有来源（本地模式/离线）：索引永远停在最后一次导入，超过 TTL 必须回退
+   *    网络取数，否则列表会被旧快照冻结（实测：本地模式下空封面永远补不上）。
+   * @param {{ maxStaleMs?: number }} [options]
+   * @returns {boolean}
+   */
+  canServeCatalog({ maxStaleMs } = {}) {
+    const state = this.getSyncStatus().lastSync['catalog-snapshot'];
+    if (state?.catalogReady !== true) return false;
+    if (this._snapshotBaseUrl) return true;
+    const syncedAt = Number(state.syncedAt || state.updatedAt || 0);
+    if (!(syncedAt > 0)) return false;
+    const ttl = Math.max(60 * 60 * 1000, Number(maxStaleMs) || this.CATALOG_LOCAL_TTL_MS);
+    return Date.now() - syncedAt <= ttl;
+  }
+
+  /**
+   * 仅回填空封面（不覆盖已有值）。给列表的后台补图用。
+   * @param {number|string} bgmId
+   * @param {string} coverUrl
+   * @returns {boolean} 是否真的写入
+   */
+  updateCover(bgmId, coverUrl) {
+    const id = Number(bgmId);
+    const cover = String(coverUrl || '').trim();
+    if (!this.db || !Number.isSafeInteger(id) || id <= 0 || !cover) return false;
+    try {
+      const info = this.db.prepare(`
+        UPDATE bangumi_subjects SET cover_url = ?
+        WHERE bgm_id = ? AND (cover_url IS NULL OR cover_url = '')
+      `).run(cover, id);
+      return Number(info?.changes) > 0;
+    } catch (error) {
+      console.warn('[SubjectIndex] 回填封面失败:', error.message);
+      return false;
+    }
   }
 
   /**

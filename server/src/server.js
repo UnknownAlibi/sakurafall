@@ -84,9 +84,18 @@ function createApplication(config = loadConfig()) {
   const releases = new ReleaseService(config.releaseDir);
   const rateLimit = createRateLimiter(config.rateLimitPerMinute);
   const startedAt = Date.now();
-  catalog.startWarmup(({ category, limit, offset }) => bangumi.requestJson(
-    `/v0/subjects?type=2&cat=${category}&sort=date&limit=${limit}&offset=${offset}`
-  ));
+  // 预热/补图是后台批处理，公网镜像单页可能要 5-6 秒；
+  // 沿用面向客户端的 3.5s 超时会让每一页都超时，最终整轮预热失败。
+  const warmTimeoutMs = Math.max(15_000, config.requestTimeoutMs);
+  catalog.startWarmup(
+    ({ category, limit, offset }) => bangumi.requestJson(
+      `/v0/subjects?type=2&cat=${category}&sort=date&limit=${limit}&offset=${offset}`,
+      { timeoutMs: warmTimeoutMs, force: true }
+    ),
+    // 列表接口对新建条目的 images 常为空，用详情接口补抓封面。
+    // force：必须绕过缓存直取上游，否则会读到"封面还是空"的旧详情。
+    id => bangumi.requestJson(`/v0/subjects/${id}`, { timeoutMs: warmTimeoutMs, force: true })
+  );
 
   const handler = async (req, res) => {
     const requestStarted = performance.now();
