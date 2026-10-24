@@ -244,16 +244,7 @@
   animation: kawaii-petal-fall 15s linear 5s infinite;
 }
 
-/* ---------- 5. 标题栏：品牌签名渐变字 ---------- */
-
-.app-signature {
-  background: linear-gradient(90deg, #ffd3e2, #a5ecff);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* ---------- 6. 进度条：糖果圆头 +（anime 模式）条纹流动 ---------- */
+/* ---------- 5. 进度条：糖果圆头 +（anime 模式）条纹流动 ---------- */
 
 :where(.progress, .dl-progress-bar) {
   border-radius: var(--radius-pill);
@@ -308,15 +299,6 @@
   animation: kawaii-petal-fall 13s linear 3.5s infinite;
   pointer-events: none;
   z-index: 2;
-}
-
-/* 标题栏小星星眨眼 */
-:is([data-ui-effects="anime"], [data-ui-effects="balanced"]) .title-bar-center::after {
-  content: var(--sparkle-glyph, '✨');
-  font-size: 11px;
-  margin-left: 8px;
-  animation: kawaii-twinkle 2.6s ease-in-out infinite;
-  pointer-events: none;
 }
 
 /* 角标呼吸弹跳 */
@@ -506,7 +488,6 @@
   .main-content::before,
   .main-content::after,
   .page-header-note,
-  .title-bar-center::after,
   .progress-bar,
   .dl-progress-fill {
     animation: none !important;

@@ -57,7 +57,20 @@
   --scrollbar-thumb: #c9c8d3;
   --scrollbar-thumb-hover: #aaa8b7;
 
-  /* 标题栏 */
+  /* 统一视觉层：控制件与表面材质 */
+  --radius-control: 10px;
+  --radius-card: 18px;
+  --surface-muted: rgba(37, 36, 62, 0.045);
+  --border-subtle: rgba(37, 36, 62, 0.075);
+  --shadow-soft: 0 4px 16px rgba(37, 36, 62, 0.065), 0 1px 3px rgba(37, 36, 62, 0.04);
+  --focus-ring: 0 0 0 3px rgba(var(--primary-rgb), 0.14);
+  --accent-gradient: linear-gradient(135deg, var(--primary-color), var(--accent-lavender));
+  --page-gutter: clamp(18px, 2.2vw, 32px);
+
+  /* 无边框窗口的透明顶部拖拽/控件层高度 */
+  --app-chrome-height: 34px;
+
+  /* 标题栏（播放窗口/旧组件仍使用） */
   --titlebar-bg: #292742;
   --titlebar-text: #ffffff;
   --nav-bg: #ffffff;
@@ -169,6 +182,12 @@
   --scrollbar-track: #2a1f30;
   --scrollbar-thumb: rgba(255, 138, 176, 0.2);
   --scrollbar-thumb-hover: rgba(255, 138, 176, 0.35);
+
+  --surface-muted: rgba(255, 255, 255, 0.055);
+  --border-subtle: rgba(255, 255, 255, 0.075);
+  --shadow-soft: 0 5px 18px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.16);
+  --focus-ring: 0 0 0 3px rgba(var(--primary-rgb), 0.2);
+  --accent-gradient: linear-gradient(135deg, var(--primary-color), var(--accent-lavender));
 
   /* 标题栏 */
   --titlebar-bg: #2a1f30;

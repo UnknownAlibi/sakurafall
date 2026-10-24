@@ -121,14 +121,14 @@ test('continue-watching removal updates immediately and rolls back on IPC failur
   }
 });
 
-test('application updater is fully global: mounted in title bar, absent from settings', () => {
+test('application updater is fully global: mounted in window chrome, absent from settings', () => {
   const settings = fs.readFileSync(path.join(root, 'src/renderer/views/Settings.vue'), 'utf8');
-  const titleBar = fs.readFileSync(path.join(root, 'src/renderer/components/Common/TitleBar.vue'), 'utf8');
+  const windowChrome = fs.readFileSync(path.join(root, 'src/renderer/components/Common/WindowChrome.vue'), 'utf8');
   const updater = fs.readFileSync(path.join(root, 'src/renderer/components/Common/UpdateCenter.vue'), 'utf8');
   const card = fs.readFileSync(path.join(root, 'src/renderer/components/Common/UpdateCard.vue'), 'utf8');
 
-  // 全局入口：标题栏常驻徽标 + 下拉卡片，不再依赖设置页
-  assert.match(titleBar, /<UpdateCenter\s*\/>/);
+  // 全局入口：无边框窗口的悬浮控件条常驻徽标 + 下拉卡片，不再依赖设置页
+  assert.match(windowChrome, /<UpdateCenter\s*\/>/);
   assert.doesNotMatch(settings, /<UpdateSettings\s*\/>/);
   assert.doesNotMatch(settings, /async checkForUpdates\s*\(/);
   // 设置页不再承载任何更新 UI（含更新源输入框）
@@ -274,6 +274,20 @@ test('纯净模式守卫：禁用路由过渡但不能用全局选择器隐藏�
   assert.match(app, /this\.uiEffectsMode !== 'performance'/, '纯净模式应从 Vue 层关闭路由过渡');
   assert.match(app, /page-forward-enter-from[\s\S]*?opacity: 1 !important;[\s\S]*?transform: none !important;/, '切档时应清理残留的透明过渡状态');
   assert.doesNotMatch(mainCss, /\[data-ui-effects="performance"\]\s+\*[,{]/, '纯净模式不能覆盖全部组件的过渡生命周期');
+});
+
+test('main window uses a borderless floating chrome instead of a title bar', () => {
+  const app = fs.readFileSync(path.join(root, 'src/renderer/App.vue'), 'utf8');
+  const chrome = fs.readFileSync(path.join(root, 'src/renderer/components/Common/WindowChrome.vue'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8');
+
+  assert.match(main, /titleBarStyle: 'hidden'[\s\S]*?frame: false/);
+  assert.doesNotMatch(app, /<TitleBar/);
+  assert.match(app, /<WindowChrome v-if="!isPlayerWindow"/);
+  assert.match(app, /with-window-chrome/);
+  assert.match(chrome, /-webkit-app-region: drag/);
+  assert.match(chrome, /window-chrome-controls[\s\S]*?-webkit-app-region: no-drag/);
+  assert.match(chrome, /updateTheme\(this\.isDark \? 'light' : 'dark'\)/);
 });
 
 test('player pointer focus and fullscreen idle behavior stay independent', () => {

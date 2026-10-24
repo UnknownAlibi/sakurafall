@@ -284,7 +284,10 @@ function normalizeEnhancedPlayerOptions(options = {}) {
     if (mpvPath && !isMpvExecutablePath(mpvPath)) {
         throw new Error('mpv 路径无效：请选择 mpv.exe、mpvnet.exe 或其变体');
     }
-    return { ...options, mpvPath };
+    // 播放器内部地址可能是 sakurafall-media://proxy/...，外部 mpv 无法识别；
+    // 统一还原为原始 HTTP(S) 地址，并保留代理 URL 里的 Referer。
+    const target = videoStreamProxy.resolveProxyTarget(options.url, options.headers);
+    return { ...options, mpvPath, url: target.url, headers: target.headers };
 }
 
 /**
@@ -2035,11 +2038,13 @@ secureIpcHandle('dlna-cast', async (event, payload = {}) => {
         if (!payload.deviceId) return { success: false, error: '未指定投屏设备' };
         if (!payload.url) return { success: false, error: '视频地址为空' };
 
+        // 播放器内部可能是 sakurafall-media://proxy/...，DLNA 代理必须拿到原始 HTTP(S) 地址
+        const target = videoStreamProxy.resolveProxyTarget(payload.url, payload.headers);
         // 启动本地代理服务器（DLNA 设备可能无法直接访问 https / 带 header 的源）
         await playerSvc.dlna().startProxyServer();
         playerSvc.dlna().setProxyTarget({
-            url: payload.url,
-            headers: payload.headers || null,
+            url: target.url,
+            headers: target.headers,
             title: payload.title || '',
             mime: payload.mime || ''
         });

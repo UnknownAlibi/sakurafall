@@ -30,6 +30,7 @@ import './assets/styles/main.css';
 import './assets/styles/theme-anime.css';
 import './assets/styles/kawaii.css';
 import './assets/styles/polish.css';
+import './assets/styles/refined-ui.css';
 
 // 生产环境禁用普通调试日志，保留错误日志
 if (!import.meta.env.DEV) {

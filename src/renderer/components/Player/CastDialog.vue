@@ -212,7 +212,9 @@ export default {
         const result = await window.electronAPI.dlnaCast({
           deviceId: device.id,
           url: this.video.url,
-          title
+          title,
+          // 代理/防盗链片源通常需要原始 Referer/UA；由主进程负责合并
+          headers: this.video?.resolvedVideo?.headers || this.video?.headers || null
         });
         if (result && result.success) {
           this.activeDevice = device;

@@ -183,3 +183,13 @@ test('initial player preparation is bounded and reports each fallback stage', ()
   assert.match(animeDetailModalSource, /updatePreparationStage\(`正在验证/);
   assert.match(playerWindowSource, /pendingVideoStage/);
 });
+
+test('manual episode switching cancels a pending auto-play countdown', () => {
+  const playEpisode = playerWindowSource.split('async playEpisode(episode, options = {})')[1]
+    ?.split('\n    async fallbackAfterEpisodeResolutionFailure(')[0] || '';
+  assert.match(playEpisode, /clearTimeout\(this\.autoPlayTimer\)/);
+  assert.match(playEpisode, /this\.autoPlayTimer = null/);
+  const applyIncoming = playerWindowSource.split('async applyIncomingPlayerData(videoData)')[1]
+    ?.split('\n    ensureSelectedLine(')[0] || '';
+  assert.match(applyIncoming, /clearTimeout\(this\.autoPlayTimer\)/);
+});

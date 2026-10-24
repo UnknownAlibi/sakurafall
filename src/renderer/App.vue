@@ -1,9 +1,9 @@
 <template>
   <div id="app">
-    <!-- 标题栏（播放窗口使用自己的精简标题栏） -->
-    <TitleBar v-if="!isPlayerWindow" />
+    <!-- 无边框窗口：透明拖拽层 + 右上角悬浮窗口控件（播放窗口使用自己的精简标题栏） -->
+    <WindowChrome v-if="!isPlayerWindow" />
 
-    <div class="app-workspace" :class="{ 'player-workspace': isPlayerWindow }">
+    <div class="app-workspace" :class="{ 'player-workspace': isPlayerWindow, 'with-window-chrome': !isPlayerWindow }">
       <!-- 桌面端使用应用级导航轨道，给内容区留下稳定的纵向空间。 -->
       <TabNavigation v-if="!isPlayerWindow" />
 
@@ -57,7 +57,7 @@
 
 <script>
 import { mapGetters, mapActions } from 'vuex';
-import TitleBar from './components/Common/TitleBar.vue';
+import WindowChrome from './components/Common/WindowChrome.vue';
 import TabNavigation from './components/Common/TabNavigation.vue';
 import GlobalNotification from './components/Common/GlobalNotification.vue';
 import ConfirmDialog from './components/Common/ConfirmDialog.vue';
@@ -75,7 +75,7 @@ import backgroundTaskScheduler from './services/backgroundTaskScheduler.js';
 export default {
   name: 'App',
   components: {
-    TitleBar,
+    WindowChrome,
     TabNavigation,
     GlobalNotification,
     ConfirmDialog,
@@ -510,6 +510,11 @@ html, body {
     linear-gradient(180deg, var(--theme-ambient-dark-top, rgba(26, 18, 32, 0.7)) 0%, var(--theme-ambient-dark-mid, rgba(26, 18, 32, 0.88)) 52%, var(--bg-base) 100%),
     var(--app-ambient-bg) center top / cover no-repeat,
     var(--bg-base);
+}
+
+.app-workspace.with-window-chrome {
+  /* 给无边框窗口的透明拖拽/控件层留出命中区域；背景仍由 app-workspace 铺满 */
+  padding-top: var(--app-chrome-height, 34px);
 }
 
 .app-workspace.player-workspace {

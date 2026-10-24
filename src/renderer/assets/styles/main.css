@@ -426,19 +426,6 @@ button[data-stable-hitbox]:active {
   transition: width 0.3s;
 }
 
-.title-bar {
-  background-color: var(--titlebar-bg);
-  color: var(--titlebar-text);
-  padding: 10px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.title-bar h1 {
-  margin: 0;
-}
-
 .settings {
   background-color: var(--bg-surface);
   padding: 20px;
@@ -837,7 +824,6 @@ button[data-stable-hitbox]:active {
 [data-software-rendering="true"] :where(
   .tab-navigation::before,
   .tab-navigation::after,
-  .title-bar-center::after,
   .progress-bar::after,
   .dl-progress-fill::after
 ) {

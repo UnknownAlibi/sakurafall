@@ -1,0 +1,1150 @@
+/* =====================================================================
+   refined-ui.css — 统一视觉精修层（最后加载）
+   原则：主题变量优先、只改材质与排版，不引入大面积模糊/滤镜/常驻动画。
+   #app 前缀用于覆盖各 SFC scoped 样式，保证这一层只负责视觉而不改交互。
+   ===================================================================== */
+
+/* ---------- 0. 基础排版与焦点 ---------- */
+
+html,
+body {
+  font-size: 14px;
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app :where(button, input, select, textarea) {
+  font-family: inherit;
+}
+
+#app :where(button, a, input, select):focus-visible {
+  outline: 2px solid rgba(var(--primary-rgb), 0.62);
+  outline-offset: 2px;
+}
+
+/* ---------- 1. 页面骨架与页头 ---------- */
+
+#app :where(.anime-zone, .discovery-page, .my-favorites, .bt-hub, .source-manager, .settings) {
+  padding-left: var(--page-gutter);
+  padding-right: var(--page-gutter);
+}
+
+#app .page-header {
+  padding: 18px 0 16px;
+  border-bottom-color: transparent;
+}
+
+#app .page-header-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+#app .page-header-title small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+#app .page-header-actions {
+  gap: 8px;
+}
+
+#app .settings {
+  background: transparent;
+}
+
+#app .settings-header {
+  padding: 18px 0 20px;
+  border-bottom-color: transparent;
+  background: transparent;
+}
+
+#app .settings-title-lockup h1 {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+#app .settings-issue {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--brand-cyan-deep);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+/* ---------- 2. 主页：顶栏、继续观看、筛选器 ---------- */
+
+#app .anime-zone .top-bar {
+  gap: 20px;
+  padding: 16px var(--page-gutter);
+  border-bottom-color: color-mix(in srgb, var(--border-color) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 52%, transparent);
+  box-shadow: none;
+}
+
+#app .anime-zone .top-bar::after {
+  left: var(--page-gutter);
+  width: 58px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent-gradient);
+}
+
+#app .library-brand {
+  gap: 12px;
+}
+
+#app .library-brand-copy strong {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+#app .library-brand-copy small {
+  color: var(--brand-cyan-deep);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+#app .anime-zone .top-bar-right {
+  gap: 10px;
+}
+
+#app .search-box {
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-glass);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+#app .search-box:focus-within {
+  border-color: rgba(var(--primary-rgb), 0.42);
+  box-shadow: var(--focus-ring), var(--shadow-soft);
+}
+
+#app .search-input {
+  width: 220px;
+  padding: 9px 14px;
+  font-size: 13px;
+}
+
+#app .search-btn {
+  align-self: stretch;
+  margin: 3px;
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  box-shadow: 0 3px 10px rgba(var(--primary-rgb), 0.18);
+}
+
+#app .clear-btn {
+  color: var(--text-tertiary);
+}
+
+#app .image-search-btn {
+  width: 36px;
+  height: 36px;
+  border-color: transparent;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-glass);
+  box-shadow: var(--shadow-soft);
+}
+
+#app .continue-header {
+  padding: 4px 0 8px;
+}
+
+#app .continue-title {
+  font-size: 14px;
+  font-weight: 750;
+}
+
+#app .continue-title-icon {
+  color: var(--primary-color);
+}
+
+#app .continue-card {
+  border-color: var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-card-glass);
+  box-shadow: var(--shadow-soft);
+}
+
+#app .continue-card:hover {
+  border-color: rgba(var(--primary-rgb), 0.28);
+  box-shadow: var(--shadow-anime);
+}
+
+#app .continue-cover {
+  border-radius: 10px;
+}
+
+#app .continue-name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+#app .continue-ep {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+#app .main-list-toolbar {
+  margin-top: 14px;
+  padding: 8px 2px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#app .main-list-toolbar::after {
+  display: none;
+}
+
+#app .list-toolbar-title {
+  margin-bottom: 14px;
+}
+
+#app .list-toolbar-title h3 {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+#app .list-toolbar-title small {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+#app .list-toolbar-title > span {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+#app .toolbar-row {
+  gap: 10px;
+}
+
+#app .toolbar-row + .toolbar-row {
+  margin-top: 10px;
+}
+
+#app .toolbar-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#app .toolbar-chip-list {
+  gap: 7px;
+}
+
+#app .toolbar-chip {
+  padding: 6px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#app .toolbar-chip:hover {
+  border-color: rgba(var(--primary-rgb), 0.26);
+  background: var(--primary-lighter);
+  color: var(--primary-color);
+}
+
+#app .toolbar-chip.active {
+  border-color: transparent;
+  background: var(--accent-gradient);
+  color: var(--text-inverse);
+  font-weight: 700;
+  box-shadow: 0 3px 10px rgba(var(--primary-rgb), 0.2);
+}
+
+#app :where(.season-select, .browse-filter-select) {
+  min-height: 32px;
+  padding: 5px 28px 5px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  font-weight: 600;
+}
+
+#app :where(.season-select, .browse-filter-select):focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+#app .search-status {
+  gap: 8px;
+  padding: 10px 0 0;
+  border: 0;
+  background: transparent;
+}
+
+#app .genre-status-tag {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--primary-light);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+#app .clear-search-btn {
+  border-radius: var(--radius-pill);
+  background: transparent;
+}
+
+/* ---------- 3. 目录卡片与通用内容卡 ---------- */
+
+#app .anime-grid {
+  gap: 18px;
+}
+
+#app .anime-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-soft);
+}
+
+#app .anime-card.card-entered:hover {
+  border-color: rgba(var(--primary-rgb), 0.34);
+  box-shadow: var(--shadow-anime);
+}
+
+#app .anime-overlay {
+  height: 40%;
+  background: linear-gradient(180deg, transparent, rgba(14, 10, 20, 0.76));
+}
+
+#app .anime-card .anime-details {
+  min-height: 88px;
+  padding: 14px 14px 12px;
+}
+
+#app .anime-card .anime-title {
+  min-height: 42px;
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+#app .anime-card .anime-meta {
+  gap: 5px;
+}
+
+#app :where(.anime-year, .anime-area, .anime-type-tag) {
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+#app :where(.anime-ep-total-badge, .anime-ep-badge, .anime-rating-badge) {
+  padding: 4px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+}
+
+#app .anime-card .fav-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 10px rgba(18, 20, 35, 0.2);
+}
+
+[data-theme="dark"] #app .anime-card .fav-btn {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(20, 14, 26, 0.78);
+}
+
+#app :where(.schedule-card, .hot-card, .continue-card, .play-source-card, .dl-card, .source-card) {
+  border-color: var(--border-subtle);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+}
+
+#app :where(.schedule-card, .hot-card, .continue-card, .play-source-card, .dl-card, .source-card):hover {
+  border-color: rgba(var(--primary-rgb), 0.28);
+  box-shadow: var(--shadow-anime);
+}
+
+/* ---------- 4. 详情弹窗：封面、信息、剧集与片源 ---------- */
+
+#app .anime-detail-modal .modal-content {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  box-shadow: 0 28px 80px rgba(5, 2, 8, 0.58);
+}
+
+#app .anime-detail-modal .modal-body {
+  margin: 12px;
+  padding: 26px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+[data-theme="dark"] #app .anime-detail-modal .modal-body {
+  background: rgba(33, 27, 40, 0.93);
+}
+
+#app .anime-info-section {
+  gap: 28px;
+  margin-bottom: 24px;
+}
+
+#app .anime-cover {
+  width: 168px;
+  height: 232px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  box-shadow: 0 14px 32px rgba(5, 2, 6, 0.38);
+}
+
+#app .cover-glow {
+  opacity: 0.22;
+  filter: blur(12px);
+}
+
+#app .anime-detail-modal .anime-title {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+#app .anime-detail-modal .title-row {
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+#app .title-row .fav-btn {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+}
+
+#app .info-tag {
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  font-size: 11.5px;
+}
+
+#app .type-tag {
+  min-height: 30px;
+  padding: 5px 12px;
+  background: var(--accent-gradient);
+  box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.2);
+}
+
+#app .intro-text {
+  font-size: 13.5px;
+  line-height: 1.85;
+  max-height: 62px;
+}
+
+#app .section-label,
+#app .block-title {
+  font-size: 15px;
+  font-weight: 750;
+}
+
+#app .bgm-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--surface-muted);
+}
+
+#app .bgm-tab {
+  flex: 1;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+#app .bgm-tab:hover {
+  background: var(--primary-lighter);
+  color: var(--primary-color);
+}
+
+#app .bgm-tab.active {
+  background: var(--accent-gradient);
+  color: var(--text-inverse);
+  box-shadow: var(--shadow-soft);
+  font-weight: 700;
+}
+
+#app .bgm-tab.active::after {
+  display: none;
+}
+
+#app .bgm-tab-content {
+  padding-top: 4px;
+}
+
+#app .rating-block {
+  padding: 18px;
+  border-radius: 16px;
+  background: var(--surface-muted);
+}
+
+#app .rating-score {
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+#app .hist-bar-track {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+#app .hist-bar {
+  background: var(--accent-gradient);
+}
+
+#app .stat-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+#app .tag-chip {
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+}
+
+#app .line-selector,
+#app .source-line-selector {
+  gap: 7px;
+}
+
+#app .anime-detail-modal .line-btn,
+#app .anime-detail-modal .source-line-btn {
+  padding: 7px 15px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  font-weight: 600;
+}
+
+#app .anime-detail-modal .line-btn.active,
+#app .anime-detail-modal .source-line-btn.active {
+  background: var(--accent-gradient);
+  color: var(--text-inverse);
+}
+
+#app .anime-detail-modal .episodes-grid {
+  gap: 8px;
+}
+
+#app .anime-detail-modal .episode-btn {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+
+#app .anime-detail-modal .episode-btn:hover:not(:disabled) {
+  border-color: rgba(var(--primary-rgb), 0.34);
+  background: var(--primary-lighter);
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.07);
+}
+
+#app .anime-detail-modal .episode-btn.active::before {
+  background: var(--accent-gradient);
+}
+
+#app .anime-detail-modal .ep-number {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+#app .play-source-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-card-glass);
+  box-shadow: var(--shadow-soft);
+}
+
+#app .play-source-card:hover {
+  border-color: rgba(var(--primary-rgb), 0.3);
+  box-shadow: var(--shadow-anime);
+}
+
+#app .source-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+#app .source-meta {
+  font-size: 11.5px;
+}
+
+#app .source-episodes {
+  border-radius: 12px;
+}
+
+#app .anime-detail-modal .close-btn {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+#app .no-episodes-hint {
+  margin: 8px 0;
+  padding: 24px;
+  border-radius: 16px;
+  background: var(--surface-muted);
+}
+
+/* ---------- 5. 播放器：浮动控制条、进度与菜单 ---------- */
+
+#app .control-bar {
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(12, 12, 24, 0.68);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+#app .progress-container {
+  order: 1;
+  gap: 12px;
+}
+
+#app .controls-container {
+  order: 2;
+  min-height: 40px;
+  gap: 8px;
+}
+
+#app .time-display {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 11px;
+}
+
+#app .progress-slider {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+#app .progress-slider::-webkit-slider-thumb {
+  width: 15px;
+  height: 15px;
+  box-shadow: 0 0 0 4px rgba(var(--primary-rgb), 0.12);
+}
+
+#app .progress-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.16);
+}
+
+#app .controls-left,
+#app .controls-right {
+  gap: 4px;
+}
+
+#app .control-btn {
+  min-width: 34px;
+  height: 34px;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+#app .control-btn:hover {
+  border-color: rgba(var(--primary-rgb), 0.24);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#app .play-btn {
+  min-width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--accent-gradient);
+  box-shadow: 0 4px 14px rgba(var(--primary-rgb), 0.24);
+}
+
+#app .volume-range {
+  width: 76px;
+  height: 6px;
+}
+
+#app .volume-percent {
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 11px;
+}
+
+#app .rate-btn,
+#app .quality-btn {
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+#app :where(.rate-menu, .quality-menu, .danmaku-menu, .subtitle-menu) {
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(17, 17, 30, 0.96);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
+}
+
+#app :where(.rate-option, .quality-option, .danmaku-option, .subtitle-option) {
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+#app .player-settings-menu {
+  width: 320px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(17, 17, 30, 0.97);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+#app .settings-menu-heading {
+  padding-bottom: 12px;
+}
+
+#app .settings-menu-heading strong {
+  font-size: 14px;
+}
+
+#app .settings-menu-row {
+  min-height: 44px;
+}
+
+#app .player-window-page {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(var(--primary-rgb), 0.16), transparent 32%),
+    radial-gradient(circle at 90% 4%, rgba(66, 199, 238, 0.1), transparent 28%),
+    linear-gradient(180deg, rgba(9, 8, 15, 0.3) 0%, rgba(9, 8, 15, 0.62) 100%),
+    var(--app-ambient-bg) center top / cover no-repeat,
+    #090913;
+}
+
+#app .player-title-bar {
+  height: 34px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 22, 0.58);
+}
+
+#app .player-title-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 0;
+}
+
+#app .player-brand-mark {
+  opacity: 0.9;
+  flex-shrink: 0;
+}
+
+#app .player-title-text {
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+#app .player-title-right {
+  gap: 1px;
+}
+
+#app .player-title-bar .title-btn {
+  width: 32px;
+  height: 26px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+#app .player-title-bar .title-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+#app .player-title-bar .title-btn.close-btn:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+#app .player-window-page.mini-mode .player-title-bar {
+  height: 28px;
+}
+
+#app .player-window-page.mini-mode .player-brand-mark {
+  display: none;
+}
+
+#app .player-window-page .episodes-sidebar {
+  margin: 8px 8px 8px 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(18, 16, 28, 0.62);
+  overflow: hidden;
+}
+
+#app .player-window-page .sidebar-header {
+  padding: 16px 14px 12px;
+}
+
+#app .player-window-page .line-tab {
+  border-radius: var(--radius-pill);
+}
+
+#app .player-window-page .line-tab.active {
+  background: var(--accent-gradient);
+}
+
+#app .player-window-page .episode-search-input {
+  border-radius: 10px;
+}
+
+#app .player-window-page .episode-btn {
+  border-radius: 9px;
+}
+
+#app .player-window-page .episode-btn.active {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* 一起看 / 弹幕设置 / 手帐 / 投屏等浮层，统一为圆角深色面板 */
+
+#app :where(.watch-together-panel, .danmaku-settings-panel, .cast-dialog) {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(18, 18, 32, 0.97);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+#app .wt-header,
+#app .cast-header {
+  padding: 14px 16px;
+}
+
+#app .wt-title span,
+#app .cast-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+#app .wt-close,
+#app .cast-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+#app .wt-form-area {
+  padding: 14px 16px;
+}
+
+#app .wt-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#app .wt-tab {
+  flex: 1;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  font-weight: 600;
+}
+
+#app .wt-tab.active {
+  background: var(--accent-gradient);
+  color: #fff;
+}
+
+#app .wt-field {
+  gap: 6px;
+}
+
+#app .wt-field input {
+  padding: 9px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+#app .wt-field input:focus {
+  border-color: rgba(var(--primary-rgb), 0.5);
+  box-shadow: var(--focus-ring);
+}
+
+#app .wt-primary-btn {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--accent-gradient);
+  font-weight: 700;
+}
+
+#app .wt-tip {
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+#app .wt-room-card {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#app .wt-room-code {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+#app .wt-chat-input {
+  gap: 6px;
+}
+
+#app .wt-chat-input input {
+  border-radius: 10px;
+}
+
+#app .danmaku-settings-row {
+  padding: 10px 0;
+}
+
+#app .danmaku-settings-label span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#app .danmaku-settings-action {
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+#app .notebook-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  box-shadow: var(--shadow-lg);
+}
+
+#app .notebook-header {
+  padding: 18px 18px 12px;
+}
+
+#app .notebook-save {
+  border-radius: 10px;
+  background: var(--accent-gradient);
+  font-weight: 700;
+}
+
+#app .notebook-note {
+  border-radius: 12px;
+}
+
+#app .notebook-badge {
+  border-radius: var(--radius-pill);
+}
+
+#app .device-item {
+  border-radius: 12px;
+}
+
+#app .hint-btn.primary {
+  border-radius: 10px;
+  background: var(--accent-gradient);
+  font-weight: 700;
+}
+
+/* ---------- 6. 设置 / BT / 数据源页：统一分区与输入控件 ---------- */
+
+#app .settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+#app :where(.setting-section, .settings-section) {
+  border: 1px solid color-mix(in srgb, var(--border-color) 55%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-surface) 42%, transparent);
+  box-shadow: none;
+}
+
+#app .section-title {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+#app .setting-item {
+  border-bottom-color: var(--border-subtle);
+}
+
+#app .setting-label {
+  font-weight: 600;
+}
+
+#app :where(.settings, .bt-hub, .source-manager) :where(
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+  select,
+  textarea
+) {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+#app :where(.settings, .bt-hub, .source-manager) :where(
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]),
+  select,
+  textarea
+):focus {
+  border-color: rgba(var(--primary-rgb), 0.5);
+  box-shadow: var(--focus-ring);
+}
+
+/* ---------- 7. 响应式与性能守卫 ---------- */
+
+@media (max-width: 900px) {
+  #app .control-bar {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    padding: 12px 10px 10px;
+    border-radius: 14px;
+  }
+
+  #app .controls-left,
+  #app .controls-right {
+    gap: 2px;
+  }
+
+  #app .control-btn {
+    min-width: 30px;
+    height: 30px;
+    padding: 5px;
+    border-radius: 8px;
+  }
+
+  #app .play-btn {
+    min-width: 34px;
+    height: 34px;
+  }
+
+  #app .volume-range {
+    width: 58px;
+  }
+
+  #app .anime-info-section {
+    gap: 20px;
+  }
+
+  #app .anime-cover {
+    width: 142px;
+    height: 198px;
+  }
+
+  #app .anime-detail-modal .anime-title {
+    font-size: 22px;
+  }
+}
+
+@media (max-width: 640px) {
+  #app .anime-detail-modal .modal-body {
+    padding: 18px;
+  }
+
+  #app .anime-info-section {
+    gap: 16px;
+  }
+
+  #app .anime-cover {
+    width: 116px;
+    height: 162px;
+  }
+
+  #app .anime-detail-modal .anime-title {
+    font-size: 20px;
+  }
+
+  #app .anime-detail-modal .title-row {
+    flex-wrap: wrap;
+  }
+
+  #app .bgm-tabs {
+    overflow-x: auto;
+  }
+
+  #app .bgm-tab {
+    min-width: 64px;
+  }
+}
+
+/* 不新增高成本效果；已有性能/软件渲染降级规则继续生效。 */
+@media (prefers-reduced-motion: reduce) {
+  #app :where(.anime-card, .toolbar-chip, .continue-card, .control-btn, .play-source-card) {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+[data-ui-effects="performance"] #app :where(.anime-card, .toolbar-chip, .continue-card, .control-btn, .play-source-card),
+[data-software-rendering="true"] #app :where(.anime-card, .toolbar-chip, .continue-card, .control-btn, .play-source-card) {
+  transition: none !important;
+}
+
+[data-ui-effects="performance"] #app .cover-glow,
+[data-software-rendering="true"] #app .cover-glow {
+  display: none;
+}

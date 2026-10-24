@@ -3,6 +3,7 @@
     <!-- 简化标题栏：标题 + 置顶 + 最小化/最大化/关闭 -->
     <div class="player-title-bar">
       <div class="player-title-left">
+        <BrandMark :size="18" class="player-brand-mark" />
         <span class="player-title-text">{{ videoTitle }}</span>
       </div>
       <div class="player-title-right">
@@ -127,6 +128,7 @@
 
 <script>
 import VideoPlayer from '../components/Player/VideoPlayer.vue';
+import BrandMark from '../components/Common/BrandMark.vue';
 import episodeProgressiveRender from '../mixins/episodeProgressiveRender.js';
 import {
   findEpisodeIndex,
@@ -145,7 +147,7 @@ import { toIpcPlainObject } from '../utils/ipcPayload.js';
 
 export default {
   name: 'PlayerWindow',
-  components: { VideoPlayer },
+  components: { VideoPlayer, BrandMark },
   mixins: [episodeProgressiveRender],
   data() {
     return {
@@ -261,6 +263,11 @@ export default {
   },
   methods: {
     async applyIncomingPlayerData(videoData) {
+      // 新数据（含切线路/切集）到达时，取消上一集结束后的自动连播倒计时
+      if (this.autoPlayTimer) {
+        clearTimeout(this.autoPlayTimer);
+        this.autoPlayTimer = null;
+      }
       if (videoData?.pending) {
         this.initialResolvePending = true;
         this.initialResolveError = '';
@@ -428,6 +435,11 @@ export default {
 
     async playEpisode(episode, options = {}) {
       if (!episode || !this.currentVideo?.anime) return;
+      // 手动切集/切线路时取消即将触发的自动连播，避免 2 秒后把用户刚选的集数再覆盖掉
+      if (this.autoPlayTimer) {
+        clearTimeout(this.autoPlayTimer);
+        this.autoPlayTimer = null;
+      }
       const lineId = String(options.lineId || this.selectedLine || this.currentVideo?.lineId || '');
       const playToken = ++this.episodePlayToken;
       this.pendingLineId = lineId;

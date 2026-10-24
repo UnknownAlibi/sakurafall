@@ -316,6 +316,13 @@ async function main() {
       throw new Error(`Source panel crashed the page: ${sourcePanelState.pageError}`);
     }
     await player.evaluate(`document.querySelector('.source-panel-close')?.click()`, true);
+    // 源面板关闭后下一帧可能仍覆盖着指针；等它真正卸载并把控制栏唤醒后再按坐标点击。
+    await waitFor(
+      () => player.evaluate(`!document.querySelector('.source-panel')`),
+      'source panel closed',
+      3000,
+      100
+    );
 
     console.log('[smoke] Verifying progress-bar click and drag seeking');
     await player.send('Input.dispatchMouseEvent', {
@@ -323,6 +330,12 @@ async function main() {
       x: 640,
       y: 760
     });
+    await waitFor(
+      () => player.evaluate(`document.querySelector('.control-bar')?.classList.contains('visible') || false`),
+      'controls visible before progress seek',
+      3000,
+      100
+    );
     const progressRect = await waitFor(
       () => player.evaluate(`(() => {
         const slider = document.querySelector('.progress-slider');

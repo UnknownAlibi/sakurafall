@@ -5,6 +5,7 @@ const net = require('net');
 const {
   buildProxyUrl,
   parseProxyUrl,
+  resolveProxyTarget,
   isHlsTarget,
   rewriteHlsManifest,
   setProxy,
@@ -126,4 +127,21 @@ test('视频流线路走代理时上游请求经代理转发，清空代理后�
     await new Promise(resolve => proxy.close(resolve));
     await new Promise(resolve => target.close(resolve));
   }
+});
+
+
+test('external players receive the original URL and referer from a proxy URL', () => {
+  const original = 'https://cdn.example.com/live/index.m3u8?token=abc';
+  const proxied = buildProxyUrl(original, { referer: 'https://player.example.com/' });
+
+  const resolved = resolveProxyTarget(proxied, { 'User-Agent': 'mpv' });
+  assert.deepEqual(resolved, {
+    url: original,
+    headers: {
+      'User-Agent': 'mpv',
+      Referer: 'https://player.example.com/'
+    }
+  });
+
+  assert.deepEqual(resolveProxyTarget(original, null), { url: original, headers: null });
 });

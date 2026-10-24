@@ -95,6 +95,19 @@ function parseProxyUrl(rawUrl) {
 }
 
 /**
+ * 将播放器内部使用的 sakurafall-media 代理地址还原成外部播放器/DLNA 可访问的
+ * 原始 HTTP(S) 地址，并合并代理 URL 中携带的 Referer。
+ * 非代理地址原样返回，便于调用方统一处理。
+ */
+function resolveProxyTarget(targetUrl, headers = {}) {
+  const parsed = parseProxyUrl(targetUrl);
+  if (!parsed) return { url: targetUrl, headers };
+  const merged = { ...(headers || {}) };
+  if (parsed.referer && !merged.Referer && !merged.referer) merged.Referer = parsed.referer;
+  return { url: parsed.target, headers: merged };
+}
+
+/**
  * 注册代理协议 handler（应用级，幂等）
  * 必须在 app ready 之前调用的部分（scheme 特权）由 index.js 统一注册，
  * 这里只负责 app ready 后的 protocol.handle。
@@ -343,6 +356,7 @@ module.exports = {
   setAssetResolver,
   setProxy,
   parseProxyUrl,
+  resolveProxyTarget,
   proxyRemoteStream,
   isHlsTarget,
   rewriteHlsManifest,
