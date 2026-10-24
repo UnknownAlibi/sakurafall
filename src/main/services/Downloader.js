@@ -9,6 +9,8 @@ const http = require('http');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
 const crypto = require('crypto');
+const HttpsProxyAgent = require('https-proxy-agent');
+const HttpClient = require('../utils/HttpClient');
 
 // 下载任务状态枚举
 const STATUS = {
@@ -24,6 +26,11 @@ const DEFAULT_MAX_CONCURRENT = 2;
 
 // 默认 UA
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
+
+// 分片/直链重定向上限，避免恶意源造成无限请求
+const MAX_REDIRECTS = 5;
+// m3u8 清单文本上限（正常清单远小于此）
+const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 
 class Downloader {
     constructor(options = {}) {
@@ -43,6 +50,14 @@ class Downloader {
         // ffmpeg 可执行文件路径（缓存）
         this._ffmpegPath = null;
         this._ffmpegChecked = false;
+
+        // 下载流量与播放共用视频线路代理（由 applyNetworkConfig 注入）
+        this.proxy = '';
+        this._proxyAgent = null;
+        this._manifestClient = new HttpClient({
+            timeout: 15000,
+            maxResponseBytes: MAX_MANIFEST_BYTES
+        });
 
         // 状态持久化防抖
         this._saveTimer = null;
@@ -75,6 +90,42 @@ class Downloader {
         const next = Math.max(1, parseInt(max, 10) || DEFAULT_MAX_CONCURRENT);
         this.maxConcurrent = next;
         this._scheduleNext();
+    }
+
+    /**
+     * 设置下载代理（m3u8 文本、分片与 ffmpeg 均生效）。
+     * 由主进程 applyNetworkConfig 按“视频流线路”策略注入；空字符串表示直连。
+     */
+    setProxy(proxyUrl) {
+        const next = String(proxyUrl || '').trim();
+        if (next === this.proxy) return;
+        try { this._proxyAgent?.destroy?.(); } catch (_) { /* ignore */ }
+        this.proxy = next;
+        this._proxyAgent = null;
+        this._manifestClient.setProxy(next);
+        if (!next) return;
+        try {
+            this._proxyAgent = new HttpsProxyAgent(next);
+        } catch (error) {
+            console.error('[Downloader] 代理配置无效，下载保持直连:', error.message);
+            this.proxy = '';
+            this._manifestClient.setProxy('');
+        }
+    }
+
+    _requestAgent() {
+        return this._proxyAgent;
+    }
+
+    _proxyEnv() {
+        if (!this.proxy) return process.env;
+        return {
+            ...process.env,
+            HTTP_PROXY: this.proxy,
+            HTTPS_PROXY: this.proxy,
+            http_proxy: this.proxy,
+            https_proxy: this.proxy
+        };
     }
 
     /**
@@ -386,14 +437,21 @@ class Downloader {
                 '-y',
                 '-hide_banner',
                 '-loglevel', 'info',
-                '-stats',
+                '-stats'
+            ];
+            // ffmpeg 的 HTTP 协议支持 -http_proxy；对 https 输入同样生效。
+            if (this.proxy) args.push('-http_proxy', this.proxy);
+            args.push(
                 '-i', task.url,
                 '-c', 'copy',
                 '-bsf:a', 'aac_adtstoasc',
                 task.filePath
-            ];
+            );
 
-            const child = spawn(ffmpeg, args, { windowsHide: true });
+            const child = spawn(ffmpeg, args, {
+                windowsHide: true,
+                env: this._proxyEnv()
+            });
             task._child = child;
 
             let stderrBuf = '';
@@ -579,29 +637,59 @@ class Downloader {
     /**
      * 下载单个文件（支持进度回调）
      */
-    _downloadFile(url, destPath, task) {
+    _downloadFile(url, destPath, task, redirectCount = 0) {
+        if (!/^https?:\/\//i.test(url)) {
+            return Promise.reject(new Error('仅支持 HTTP(S) 下载地址'));
+        }
+        if (redirectCount > MAX_REDIRECTS) {
+            return Promise.reject(new Error(`重定向次数超过上限: ${MAX_REDIRECTS}`));
+        }
         return new Promise((resolve, reject) => {
-            const file = fs.createWriteStream(destPath);
             const client = url.startsWith('https') ? https : http;
-
-            const req = client.get(url, {
+            const requestOptions = {
                 headers: { 'User-Agent': DEFAULT_UA, 'Referer': this._guessReferer(url) },
                 timeout: 30000
-            }, (res) => {
-                // 处理重定向
+            };
+            const agent = this._requestAgent();
+            if (agent) requestOptions.agent = agent;
+
+            let settled = false;
+            let file = null;
+            const removePartial = () => {
+                try { fs.unlinkSync(destPath); } catch (_) { /* ignore */ }
+            };
+            const fail = (error) => {
+                if (settled) return;
+                settled = true;
+                if (file) {
+                    try { file.destroy(); } catch (_) { /* ignore */ }
+                }
+                removePartial();
+                reject(error);
+            };
+
+            const req = client.get(url, requestOptions, (res) => {
+                // 重定向：此时还没创建目标文件，直接跟随即可
                 if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    file.close();
-                    try { fs.unlinkSync(destPath); } catch (_) { /* ignore */ }
+                    res.resume();
                     const nextUrl = this._resolveUrl(res.headers.location, url);
-                    this._downloadFile(nextUrl, destPath, task).then(resolve, reject);
+                    this._downloadFile(nextUrl, destPath, task, redirectCount + 1)
+                        .then((value) => {
+                            if (settled) return;
+                            settled = true;
+                            resolve(value);
+                        }, fail);
                     return;
                 }
                 if (res.statusCode !== 200) {
-                    file.close();
-                    try { fs.unlinkSync(destPath); } catch (_) { /* ignore */ }
-                    reject(new Error(`HTTP ${res.statusCode}`));
+                    res.resume();
+                    fail(new Error(`HTTP ${res.statusCode}`));
                     return;
                 }
+
+                file = fs.createWriteStream(destPath);
+                file.on('error', fail);
+                res.on('error', fail);
 
                 const total = parseInt(res.headers['content-length'], 10) || 0;
                 if (total) task.totalBytes = total;
@@ -610,9 +698,7 @@ class Downloader {
                 res.on('data', (chunk) => {
                     if (task._abortFlag) {
                         req.destroy();
-                        file.close();
-                        try { fs.unlinkSync(destPath); } catch (_) { /* ignore */ }
-                        reject(new Error('已取消'));
+                        fail(new Error('已取消'));
                         return;
                     }
                     received += chunk.length;
@@ -623,17 +709,19 @@ class Downloader {
                 });
                 res.pipe(file);
                 file.on('finish', () => {
-                    file.close(() => resolve());
+                    if (settled) return;
+                    file.close(() => {
+                        if (settled) return;
+                        settled = true;
+                        resolve();
+                    });
                 });
             });
 
-            req.on('error', (err) => {
-                file.close();
-                try { fs.unlinkSync(destPath); } catch (_) { /* ignore */ }
-                reject(err);
-            });
+            req.on('error', fail);
             req.on('timeout', () => {
-                req.destroy(new Error('请求超时'));
+                req.destroy();
+                fail(new Error('请求超时'));
             });
         });
     }
@@ -641,28 +729,11 @@ class Downloader {
     // ── m3u8 解析工具 ─────────────────────────────────
 
     _fetchText(url) {
-        return new Promise((resolve, reject) => {
-            const client = url.startsWith('https') ? https : http;
-            const req = client.get(url, {
-                headers: { 'User-Agent': DEFAULT_UA, 'Referer': this._guessReferer(url) },
-                timeout: 15000
-            }, (res) => {
-                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                    const nextUrl = this._resolveUrl(res.headers.location, url);
-                    this._fetchText(nextUrl).then(resolve, reject);
-                    return;
-                }
-                if (res.statusCode !== 200) {
-                    reject(new Error(`HTTP ${res.statusCode}`));
-                    return;
-                }
-                let data = '';
-                res.setEncoding('utf8');
-                res.on('data', (chunk) => { data += chunk; });
-                res.on('end', () => resolve(data));
-            });
-            req.on('error', reject);
-            req.on('timeout', () => req.destroy(new Error('请求超时')));
+        // 复用统一 HttpClient：继承代理、重定向上限和响应体大小限制。
+        return this._manifestClient.fetch(url, {
+            headers: { 'User-Agent': DEFAULT_UA, 'Referer': this._guessReferer(url) },
+            timeout: 15000,
+            noDedupe: true
         });
     }
 

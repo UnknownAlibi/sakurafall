@@ -7,8 +7,8 @@
 <p align="center">多源番剧元数据聚合、以可替换扩展包提供播放能力的 Windows 动漫桌面客户端。</p>
 
 <p align="center">
-  <img alt="Vue 3" src="https://img.shields.io/badge/Vue-3.3-42b883?logo=vuedotjs&logoColor=white">
-  <img alt="Electron 25" src="https://img.shields.io/badge/Electron-25-47848f?logo=electron&logoColor=white">
+  <img alt="Vue 3.5" src="https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white">
+  <img alt="Electron 44" src="https://img.shields.io/badge/Electron-44-47848f?logo=electron&logoColor=white">
   <img alt="Vite 4" src="https://img.shields.io/badge/Vite-4-646cff?logo=vite&logoColor=white">
   <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-blue">
 </p>
@@ -45,37 +45,37 @@ SQLite cache <───────── Main process IPC boundary <───�
 ## 环境要求
 
 - Windows 10 或 Windows 11
-- Node.js 18 或更高版本
-- npm 或 Yarn
+- Node.js 22.12 或更高版本（Electron 44 的最低要求）
+- Yarn（仓库以 `yarn.lock` 作为唯一依赖锁文件）
 
 ## 本地开发
 
 ```powershell
 git clone https://github.com/UnknownAlibi/sakurafall.git
 cd sakurafall
-npm install
-npm run dev
+yarn install --frozen-lockfile
+yarn dev
 ```
 
-`npm run dev` 会启动 Vite 开发服务和 Electron 桌面窗口。Vite 默认监听 `http://127.0.0.1:5173/`。
+`yarn dev` 会启动 Vite 开发服务和 Electron 桌面窗口。Vite 默认监听 `http://127.0.0.1:5173/`。
 
 ## 构建与验证
 
 ```powershell
 # 代码检查
-npm run lint
+yarn lint
 
 # 单元和回归测试
-npm test
+yarn test
 
 # 渲染器、性能预算和基础校验
-npm run verify
+yarn verify
 
 # Windows 安装包、在线/离线冒烟、安装与卸载验收
-npm run verify:release
+yarn verify:release
 ```
 
-安装包生成在 `dist-app/`。当前 RC 安装包尚未进行 Windows 代码签名，不建议直接面向大规模用户分发。验收结果见 [RC 状态](docs/RC_STATUS.md)，发布流程见 [发布清单](docs/RELEASE_CHECKLIST.md)。
+安装包生成在 `dist-app/`。当前 RC 安装包尚未进行 Windows 代码签名，不建议直接面向大规模用户分发。验收结果见 [RC 状态](docs/RC_STATUS.md)，发布流程见 [发布清单](docs/RELEASE_CHECKLIST.md)，版本变更见 [变更日志](CHANGELOG.md)。
 
 ## 扩展包
 
@@ -86,6 +86,7 @@ npm run verify:release
 ## 数据与隐私
 
 - 用户收藏、播放历史、凭证和缓存只保存在 Electron `userData` 目录及本地 SQLite 中。
+- 代理地址与第三方 API Key 通过 Electron `safeStorage` 加密保存，不写入渲染层 localStorage。
 - 本地数据库、日志、代理配置和 API 凭证不得提交到仓库。
 - 运行诊断会对常见凭证字段进行脱敏，并限制日志文件数量和大小。
 - 仓库不托管视频文件，也不提供任何第三方服务的可用性保证。

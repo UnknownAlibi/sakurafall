@@ -9,6 +9,7 @@ const {
     toPositiveInteger
 } = require('../utils/playHistoryIdentity');
 const { createViewingNotesTable, createEpisodeSegmentsTable, createDanmakuAlignmentsTable } = require('./dbSchemaHelpers');
+const { DbWriteQueue } = require('./dbWriteQueue');
 
 const SCHEMA_VERSION = 10;
 
@@ -22,10 +23,7 @@ class AnimeDatabase {
         this._cacheEntryCount = null;
         this.MAX_CACHE_ENTRIES = 500;
         // 写队列：非关键写入（历史更新、缓存写入）缓冲后批量执行，避免同步阻塞主进程
-        this._writeQueue = [];
-        this._writeQueueTimer = null;
-        this._writeQueueFlushInterval = 2000; // 2 秒 flush 一次
-        this._writeQueueMaxSize = 50; // 队列上限，超过立即 flush
+        this._writeQueue = new DbWriteQueue({ getDb: () => this.db });
         // WAL 定期 checkpoint：WAL 只在达到阈值（默认 1000 页）时才自动回写，
         // 长期低频写入的场景下 wal 文件会一直胀着；PASSIVE 不阻塞读写，开销可忽略。
         this._walCheckpointTimer = null;
@@ -82,55 +80,6 @@ class AnimeDatabase {
         this._lastUsedFlushTimer = setInterval(() => this._flushLastUsed(), this._lastUsedFlushInterval);
         // 不阻止进程退出
         if (this._lastUsedFlushTimer.unref) this._lastUsedFlushTimer.unref();
-    }
-
-    // ── 写队列：非关键写入异步化，避免同步阻塞主进程 ──
-
-    /**
-     * 将写入操作加入队列，延迟批量执行
-     * @param {Function} fn - 返回 prepared statement run 的函数，接收 db 参数
-     */
-    _enqueueWrite(fn) {
-        this._writeQueue.push(fn);
-        // 队列满则立即 flush
-        if (this._writeQueue.length >= this._writeQueueMaxSize) {
-            this._flushWriteQueue();
-            return;
-        }
-        // 否则调度定时 flush
-        if (!this._writeQueueTimer) {
-            this._writeQueueTimer = setTimeout(() => {
-                this._writeQueueTimer = null;
-                this._flushWriteQueue();
-            }, this._writeQueueFlushInterval);
-            if (this._writeQueueTimer.unref) this._writeQueueTimer.unref();
-        }
-    }
-
-    /**
-     * 批量执行队列中的写入操作（单事务）
-     */
-    _flushWriteQueue() {
-        if (this._writeQueueTimer) {
-            clearTimeout(this._writeQueueTimer);
-            this._writeQueueTimer = null;
-        }
-        if (!this.db || this._writeQueue.length === 0) return;
-        const ops = this._writeQueue.splice(0);
-        try {
-            const tx = this.db.transaction(() => {
-                for (const fn of ops) {
-                    try {
-                        fn(this.db);
-                    } catch (error) {
-                        console.warn('[DB] 延迟写入失败:', error.message);
-                    }
-                }
-            });
-            tx();
-        } catch (error) {
-            console.error('[DB] 延迟写入事务失败:', error);
-        }
     }
 
     connect() {
@@ -1389,7 +1338,7 @@ class AnimeDatabase {
         const playPos = data.play_position ?? 0;
 
         // 加入写队列，延迟批量执行
-        this._enqueueWrite((db) => {
+        this._writeQueue.enqueue((db) => {
             const updateFav = db.prepare(`
                 UPDATE favorites SET last_episode = ?, last_episode_index = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE anime_id = ? AND source = ?
@@ -1594,11 +1543,20 @@ class AnimeDatabase {
             this._walCheckpointTimer = null;
         }
         this._flushLastUsed();
-        this._flushWriteQueue();
+        // flush 会自行清理定时器；关闭阶段失败不再安排重试
+        this._writeQueue.flush({ allowRetry: false });
+        this._writeQueue.dispose();
         if (this.db) {
             // 退出前把 WAL 回写并截断，避免 wal 文件长期残留占用磁盘
             this._checkpointWal('TRUNCATE');
-            this.db.close();
+            try {
+                this.db.close();
+            } catch (error) {
+                console.warn('[DB] 关闭数据库失败:', error.message);
+            } finally {
+                // 置空后可安全重复调用 close()（例如 before-quit 多次触发）
+                this.db = null;
+            }
             console.log('数据库已关闭');
         }
     }

@@ -9,6 +9,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pathGuards from '../src/main/utils/pathGuards.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IPC_DIR = path.join(root, 'src/main/ipc');
@@ -67,4 +68,28 @@ test('IPC 通道名唯一：拆分过程中不得重复注册或漏删旧块', (
   }
   assert.ok(owners.size >= 150, `识别到的通道数偏少（${owners.size}），拆分时可能漏注册`);
   assert.deepStrictEqual(duplicates, [], '存在重复注册的 IPC 通道');
+});
+
+test('默认 session 显式设置权限请求与检查处理器', () => {
+  const source = fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8');
+  assert.match(source, /setPermissionRequestHandler/, '必须显式拒绝未使用的 Web 权限');
+  assert.match(source, /setPermissionCheckHandler/, '权限检查路径也必须显式处理');
+  assert.match(source, /clipboard-sanitized-write/, '复制到剪贴板是现有功能，需要放行');
+});
+
+test('IPC 路径守卫：下载目录、mpv 路径与图片扩展名都有边界', () => {
+  const downloadRoot = path.join(root, 'tmp-download-root');
+  assert.equal(pathGuards.isPathInside(downloadRoot, downloadRoot), true);
+  assert.equal(pathGuards.isPathInside(downloadRoot, path.join(downloadRoot, 'episode.mp4')), true);
+  assert.equal(pathGuards.isPathInside(downloadRoot, path.join(downloadRoot, '..', 'evil.exe')), false);
+  assert.equal(pathGuards.isPathInside(downloadRoot, `${downloadRoot}2/evil.exe`), false);
+
+  assert.equal(pathGuards.isMpvExecutablePath(path.join(downloadRoot, 'mpv.exe')), true);
+  assert.equal(pathGuards.isMpvExecutablePath(path.join(downloadRoot, 'mpvnet.exe')), true);
+  assert.equal(pathGuards.isMpvExecutablePath(path.join(downloadRoot, 'mpv-x86_64.exe')), true);
+  assert.equal(pathGuards.isMpvExecutablePath(path.join(downloadRoot, 'cmd.exe')), false);
+  assert.equal(pathGuards.isMpvExecutablePath('mpv.exe'), false, '相对路径不应被接受');
+
+  assert.equal(pathGuards.isSupportedImagePath(path.join(downloadRoot, 'cover.JPG')), true);
+  assert.equal(pathGuards.isSupportedImagePath(path.join(downloadRoot, 'notes.exe')), false);
 });

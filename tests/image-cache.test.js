@@ -263,3 +263,54 @@ test('ImageCacheService: derives a thumbnail from an existing original without a
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
 });
+
+test('ImageCacheService: getAllCachedUrls 过滤过期/丢失文件，_enforceLimits 回收磁盘', () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-ttl-'));
+  const cache = new ImageCacheService({
+    cacheDir,
+    maxAgeMs: 60_000,
+    publicUrlResolver: filePath => `cache://${path.basename(filePath)}`
+  });
+  try {
+    const now = Date.now();
+    fs.writeFileSync(path.join(cacheDir, 'fresh.png'), 'fresh');
+    fs.writeFileSync(path.join(cacheDir, 'expired.png'), 'expired');
+    cache.index = {
+      fresh: {
+        url: 'https://example.com/fresh.png',
+        fileName: 'fresh.png',
+        variant: 'original',
+        size: 5,
+        createdAt: now,
+        lastUsedAt: now
+      },
+      expired: {
+        url: 'https://example.com/expired.png',
+        fileName: 'expired.png',
+        variant: 'original',
+        size: 7,
+        createdAt: now - 120_000,
+        lastUsedAt: now - 120_000
+      },
+      missing: {
+        url: 'https://example.com/missing.png',
+        fileName: 'missing.png',
+        variant: 'original',
+        size: 3,
+        createdAt: now,
+        lastUsedAt: now
+      }
+    };
+
+    const all = cache.getAllCachedUrls();
+    assert.deepEqual(Object.keys(all), ['https://example.com/fresh.png']);
+
+    cache._enforceLimits();
+    assert.equal(fs.existsSync(path.join(cacheDir, 'expired.png')), false, '过期文件应被回收');
+    assert.equal(cache.index.expired, undefined);
+    assert.equal(cache.index.missing, undefined, '索引里的丢失文件应被清理');
+    assert.ok(cache.index.fresh);
+  } finally {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  }
+});

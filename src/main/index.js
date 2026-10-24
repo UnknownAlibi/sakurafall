@@ -7,6 +7,7 @@ const { applyFullscreenCompatFlags, registerWindowFullscreenIpc, bindFullscreenS
 const { loadWindowState, applyWindowState, bindWindowStatePersistence } = require('./window-state');
 // GPU 合成偏好（设置页开关落盘到 userData）
 const { resolveGpuCompositingPreferenceFile } = require('./utils/gpuCompositingPreference');
+const { isPathInside, isMpvExecutablePath, isSupportedImagePath } = require('./utils/pathGuards');
 const { registerGpuIpc } = require('./ipc/gpu');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -103,6 +104,7 @@ const { SharePageResolverService } = require('./services/sources/SharePageResolv
 const { MediaLibraryService } = require('./services/sources/MediaLibraryService');
 const { CustomizationPackService } = require('./services/CustomizationPackService');
 const { RuntimeDiagnosticsService } = require('./services/RuntimeDiagnosticsService');
+const { SettingsSecretStore } = require('./services/SettingsSecretStore');
 const { BtSearchService } = require('./services/bt/BtSearchService');
 const { registerBtIpc } = require('./ipc/bt');
 const { registerCmsIpc } = require('./ipc/cmsSources');
@@ -111,6 +113,7 @@ const { registerDanmakuIpc } = require('./ipc/danmaku');
 const { registerLibraryIpc } = require('./ipc/library');
 const { registerMetadataIpc } = require('./ipc/metadata');
 const { registerNetworkIpc } = require('./ipc/network');
+const { registerSettingsSecretsIpc } = require('./ipc/settingsSecrets');
 const { registerPlaybackHealthIpc } = require('./ipc/playbackHealth');
 const { registerSourceProviderIpc } = require('./ipc/sourceProviders');
 const { registerUpdateIpc } = require('./ipc/update');
@@ -228,6 +231,8 @@ let updateReminder = null;
 // 开发环境检测：electron.exe 启动，或未打包，或显式 NODE_ENV=development
 const isDev = isElectronDev || !app.isPackaged || process.env.NODE_ENV === 'development';
 const devRendererUrl = 'http://localhost:5173/index.html';
+// 主窗口/播放窗口使用 defaultSession：默认拒绝 Web 权限，只放行播放器与复制房间号所需项。
+const ALLOWED_SESSION_PERMISSIONS = new Set(['clipboard-sanitized-write', 'clipboard-write', 'fullscreen']);
 const appIconPath = app.isPackaged
     ? path.join(process.resourcesPath, 'icon.ico')
     : path.join(__dirname, '../../build/icon-v4.ico');
@@ -264,6 +269,39 @@ function isExternalWebUrl(rawUrl) {
 function openExternalUrl(rawUrl) {
     if (!isExternalWebUrl(rawUrl)) return Promise.reject(new Error('仅允许 HTTP(S)/磁力链接'));
     return shell.openExternal(rawUrl);
+}
+
+// 以图搜番：只读取常见位图，且限制单文件大小，避免渲染器传入任意大文件/非图片。
+const MAX_TRACE_MOE_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * 增强播放器选项来自渲染器，mpvPath 不允许指向任意可执行文件。
+ * 合法值：mpv.exe / mpvnet.exe / mpv-x86_64.exe 等以 mpv 开头的绝对 .exe 路径。
+ */
+function normalizeEnhancedPlayerOptions(options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return {};
+    const mpvPath = String(options.mpvPath || '').trim();
+    if (mpvPath && !isMpvExecutablePath(mpvPath)) {
+        throw new Error('mpv 路径无效：请选择 mpv.exe、mpvnet.exe 或其变体');
+    }
+    return { ...options, mpvPath };
+}
+
+/**
+ * 下载器相关路径只允许当前下载目录或已知任务的路径/父目录，
+ * 避免渲染器把任意文件交给 shell.openPath / showItemInFolder。
+ */
+function isManagedDownloadPath(target) {
+    if (!downloader) return false;
+    const resolved = path.resolve(String(target || ''));
+    const root = String(downloader.downloadDir || '').trim();
+    if (root && isPathInside(root, resolved)) return true;
+    for (const task of downloader.tasks.values()) {
+        if (!task?.filePath) continue;
+        const taskPath = path.resolve(task.filePath);
+        if (taskPath === resolved || path.dirname(taskPath) === resolved) return true;
+    }
+    return false;
 }
 
 function secureIpcHandle(channel, listener) {
@@ -604,6 +642,8 @@ async function applyNetworkConfig(config = {}) {
     // 主进程直链流转发（mp4 / 直链 HLS 经 sakurafall-media://proxy）同样遵循该策略，
     // 否则「走代理」只对渲染进程的 hls.js 分片生效，被墙的直链依旧打不开
     videoStreamProxy.setProxy(videoPolicy === 'proxy' ? proxy : '');
+    // 下载走视频线路：m3u8 清单、分片与 ffmpeg 都与播放使用同一代理策略
+    downloader?.setProxy(videoPolicy === 'proxy' ? proxy : '');
 
     // Phase 4: 插件源走与 Bangumi 相同的代理（插件源多为境外站点）
     pluginHttpClient.setProxy(proxy);
@@ -1033,6 +1073,15 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     // 应用默认网络/缓存配置
     await applyNetworkConfig();
 
+    // 默认 session 只加载本地渲染页，但仍显式拒绝摄像头/麦克风/通知等 Web 权限。
+    // 复制房间号需要 clipboard-sanitized-write，HTML5 全屏回退需要 fullscreen。
+    session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+        callback(ALLOWED_SESSION_PERMISSIONS.has(permission));
+    });
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission) => (
+        ALLOWED_SESSION_PERMISSIONS.has(permission)
+    ));
+
     // 图片防盗链拦截：给各 CDN 请求补上 Referer + UA
     // 放在 whenReady 中而非 createWindow，避免窗口重建时重复注册监听器
     session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
@@ -1335,6 +1384,16 @@ secureIpcHandle('trace-moe-search-file', async (event, imagePath) => {
         if (!imagePath) {
             return { success: false, error: '图片路径为空' };
         }
+        if (!isSupportedImagePath(imagePath)) {
+            return { success: false, error: '仅支持 JPG/PNG/WebP/GIF/BMP/AVIF 图片', results: [] };
+        }
+        const stat = fs.statSync(imagePath);
+        if (!stat.isFile()) {
+            return { success: false, error: '图片路径不是文件', results: [] };
+        }
+        if (stat.size > MAX_TRACE_MOE_IMAGE_BYTES) {
+            return { success: false, error: '图片文件超过 20MB 限制', results: [] };
+        }
         const result = await traceMoeApi.searchByImage(imagePath);
         return { success: true, ...result };
     } catch (error) {
@@ -1396,11 +1455,19 @@ secureIpcHandle('trace-moe-search-data-url', async (event, dataUrl) => {
 
 // Phase 6: 增强播放（mpv + Anime4K）— 委托给 EnhancedPlayerService
 secureIpcHandle('enhanced-player-check', async (event, options = {}) => {
-    return playerSvc.enhanced().check(options);
+    try {
+        return playerSvc.enhanced().check(normalizeEnhancedPlayerOptions(options));
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
 });
 
 secureIpcHandle('enhanced-player-open', async (event, options = {}) => {
-    return playerSvc.enhanced().open(options);
+    try {
+        return playerSvc.enhanced().open(normalizeEnhancedPlayerOptions(options));
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
 });
 
 secureIpcHandle('enhanced-player-install', async () => {
@@ -1424,6 +1491,14 @@ registerGpuIpc({
 
 // ===== Phase 7: 网络与 TUN 分流策略（已抽离至 ipc/network.js）=====
 registerNetworkIpc({ handle: secureIpcHandle, networkPolicyService });
+
+// 设置页敏感项（代理/第三方 API Key）不再落 localStorage，统一 safeStorage 加密
+registerSettingsSecretsIpc({
+    handle: secureIpcHandle,
+    store: new SettingsSecretStore({
+        filePath: path.join(app.getPath('userData'), 'settings-secrets.json')
+    })
+});
 
 // ===== Phase 4: 插件式源规则系统 IPC（已抽离至 ipc/sourceProviders.js）=====
 // 与 cms-* 通道并存：CMS 源走 cms-*，XPath 规则源走 plugin-*
@@ -1752,8 +1827,14 @@ secureIpcHandle('download-select-dir', async (event) => {
 // 在系统文件管理器中打开下载目录（便利操作，复用 shell.openPath）
 secureIpcHandle('download-open-dir', async (event, dirPath) => {
     try {
-        const target = dirPath || (downloader ? downloader.downloadDir : '');
+        const target = path.resolve(String(dirPath || (downloader ? downloader.downloadDir : '') || ''));
         if (!target) return { success: false, error: '下载目录未设置' };
+        if (!isManagedDownloadPath(target)) {
+            return { success: false, error: '只能打开下载目录或已知任务所在目录' };
+        }
+        if (!fs.statSync(target).isDirectory()) {
+            return { success: false, error: '目标不是目录' };
+        }
         const errMsg = await shell.openPath(target);
         return { success: !errMsg, error: errMsg || null };
     } catch (error) {
@@ -1766,7 +1847,11 @@ secureIpcHandle('download-open-dir', async (event, dirPath) => {
 secureIpcHandle('download-open-file', async (event, filePath) => {
     try {
         if (!filePath) return { success: false, error: '文件路径为空' };
-        shell.showItemInFolder(filePath);
+        const target = path.resolve(String(filePath));
+        if (!isManagedDownloadPath(target) || !fs.statSync(target).isFile()) {
+            return { success: false, error: '只能定位下载目录内已下载的文件' };
+        }
+        shell.showItemInFolder(target);
         return { success: true };
     } catch (error) {
         console.error('[Download] 定位文件失败:', error);

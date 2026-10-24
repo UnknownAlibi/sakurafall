@@ -65,7 +65,43 @@ const state = {
 
 // saveSettings 防抖：多个 updateX action 短时间内合并为一次 localStorage 写入
 let _saveTimer = null;
+let settingsSecretsLoaded = false;
 const SAVE_DEBOUNCE_MS = 300;
+
+// 这些字段不写 localStorage，统一由主进程 safeStorage 加密保存
+const SECRET_SETTING_FIELDS = [
+    'proxy',
+    'danmakuCustomToken',
+    'dandanplayAppSecret',
+    'openSubtitlesApiKey'
+];
+
+function publicSettingsSnapshot(settings = {}) {
+    const copy = { ...settings };
+    for (const field of SECRET_SETTING_FIELDS) delete copy[field];
+    return copy;
+}
+
+function secretSettingsSnapshot(settings = {}) {
+    const secrets = {};
+    for (const field of SECRET_SETTING_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(settings, field)) {
+            secrets[field] = String(settings[field] || '');
+        }
+    }
+    return secrets;
+}
+
+async function persistSecretSettings(settings) {
+    if (!window.electronAPI?.settingsSecretsSet) {
+        return { success: false, error: '当前版本不支持加密保存设置密钥' };
+    }
+    try {
+        return await window.electronAPI.settingsSecretsSet(secretSettingsSnapshot(settings));
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
 
 const mutations = {
     SET_THEME(state, theme) {
@@ -198,35 +234,89 @@ const mutations = {
 
 const actions = {
     async loadSettings({ commit }) {
+        let settings = {};
         try {
-            const settings = JSON.parse(localStorage.getItem('app-settings') || '{}');
-            const migratedKey = 'ui-effects-balanced-migration-v1';
-            if (!localStorage.getItem(migratedKey)) {
-                if (!settings.uiEffectsMode || settings.uiEffectsMode === 'anime') {
-                    settings.uiEffectsMode = 'balanced';
-                }
-                localStorage.setItem(migratedKey, '1');
-                localStorage.setItem('app-settings', JSON.stringify({ ...state, ...settings }));
-            }
-            commit('SET_SETTINGS', settings);
+            const parsed = JSON.parse(localStorage.getItem('app-settings') || '{}');
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) settings = parsed;
         } catch (error) {
             console.error('加载设置失败:', error);
         }
+
+        // 敏感字段来自主进程 safeStorage；旧版本明文值在这里完成迁移。
+        // 加密存储不可用时退回旧行为（密钥留在 localStorage），保证不丢数据。
+        let secrets = {};
+        let secretsReady = false;
+        try {
+            const result = await window.electronAPI?.settingsSecretsGet?.();
+            if (result?.success && result.secrets && typeof result.secrets === 'object') {
+                secrets = result.secrets;
+                secretsReady = true;
+            }
+        } catch (error) {
+            console.warn('加载加密设置失败，将使用本地值:', error.message);
+        }
+
+        const legacySecrets = {};
+        for (const field of SECRET_SETTING_FIELDS) {
+            const legacyValue = typeof settings[field] === 'string' ? settings[field].trim() : '';
+            if (legacyValue && !secrets[field]) legacySecrets[field] = legacyValue;
+            const value = secrets[field] !== undefined ? secrets[field] : legacyValue;
+            if (value) settings[field] = value;
+            else delete settings[field];
+        }
+
+        const migratedKey = 'ui-effects-balanced-migration-v1';
+        if (!localStorage.getItem(migratedKey)) {
+            if (!settings.uiEffectsMode || settings.uiEffectsMode === 'anime') {
+                settings.uiEffectsMode = 'balanced';
+            }
+            localStorage.setItem(migratedKey, '1');
+        }
+        commit('SET_SETTINGS', settings);
+
+        // 旧明文密钥先写入加密存储；成功后才从 localStorage 清除，失败则保留旧值避免丢失。
+        if (Object.keys(legacySecrets).length > 0) {
+            const result = await persistSecretSettings(legacySecrets);
+            if (result?.success) {
+                secretsReady = true;
+            } else {
+                console.warn('设置密钥加密保存失败，本次保留 localStorage 旧值:', result?.error);
+            }
+        }
+
+        try {
+            const snapshot = secretsReady
+                ? publicSettingsSnapshot({ ...state, ...settings })
+                : { ...state, ...settings };
+            localStorage.setItem('app-settings', JSON.stringify(snapshot));
+        } catch (error) {
+            console.error('保存设置快照失败:', error);
+        }
+        settingsSecretsLoaded = secretsReady;
     },
 
     async saveSettings({ state }) {
         // 300ms 防抖：连续多个 updateX action 合并为一次 localStorage 写入
         if (_saveTimer) clearTimeout(_saveTimer);
         return new Promise((resolve) => {
-            _saveTimer = setTimeout(() => {
+            _saveTimer = setTimeout(async () => {
                 _saveTimer = null;
+                // 加密存储不可用/未载入时保留旧行为，避免窗口初始化用空默认值覆盖已有密钥
+                const snapshot = settingsSecretsLoaded ? publicSettingsSnapshot(state) : state;
                 try {
-                    localStorage.setItem('app-settings', JSON.stringify(state));
-                    resolve(true);
+                    localStorage.setItem('app-settings', JSON.stringify(snapshot));
                 } catch (error) {
                     console.error('保存设置失败:', error);
                     resolve(false);
+                    return;
                 }
+                if (settingsSecretsLoaded) {
+                    const secretResult = await persistSecretSettings(state);
+                    if (!secretResult?.success) {
+                        console.error('保存设置密钥失败:', secretResult?.error);
+                    }
+                }
+                resolve(true);
             }, SAVE_DEBOUNCE_MS);
         });
     },

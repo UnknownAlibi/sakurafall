@@ -31,6 +31,24 @@ const { SERVICE_BASE_URL } = require('../config/serviceEndpoints');
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const DEFAULT_PORT = 9876;
+// 房间号是局域网加入房间的唯一凭据：限制短时间内的错误尝试，避免 6 位数字被枚举。
+const WS_AUTH_WINDOW_MS = 60 * 1000;
+const WS_AUTH_MAX_FAILURES = 10;
+
+/**
+ * 房间共享载荷只用于展示与进度同步。播放地址通常带签名/防盗链参数，
+ * 成员端也用不到，因此在进入服务层前统一剥离。
+ */
+function sanitizeRoomVideoInfo(videoInfo) {
+    if (!videoInfo || typeof videoInfo !== 'object' || Array.isArray(videoInfo)) return null;
+    const safe = { ...videoInfo };
+    for (const key of Object.keys(safe)) {
+        if (/^(?:url|play_?url|headers?|cookies?|authorization|referer|token|api_?key)$/i.test(key)) {
+            delete safe[key];
+        }
+    }
+    return Object.keys(safe).length > 0 ? safe : null;
+}
 
 // ============================================================
 // WebSocket 帧编解码
@@ -235,6 +253,8 @@ class WatchTogetherService {
         // 主机模式：HTTP/WS 服务器与已连接成员
         this.httpServer = null;
         this.hostConnections = new Set();
+        // 局域网 WS 握手失败计数（按远端地址），防止房间号枚举
+        this._upgradeAuthFailures = new Map();
 
         // 成员模式：连接到主机的 WS 客户端
         this.clientSocket = null;
@@ -280,8 +300,8 @@ class WatchTogetherService {
     }
 
     _generateRoomCode() {
-        // 6 位数字房间号
-        return String(Math.floor(100000 + Math.random() * 900000));
+        // 6 位数字房间号；使用 CSPRNG，避免被推测出下一个房间号
+        return String(crypto.randomInt(100000, 1000000));
     }
 
     _getLanAddress() {
@@ -345,7 +365,7 @@ class WatchTogetherService {
     /**
      * 创建房间（主机模式）
      * @param {string} roomName 房间名
-     * @param {Object} videoInfo 视频信息 { title, url, anime, episode }
+     * @param {Object} videoInfo 视频信息 { title, animeName, episodeTitle, episodeIndex, episodeIdentity }
      */
     async createRoom(roomName, videoInfo) {
         // 已在房间中则先离开
@@ -353,7 +373,8 @@ class WatchTogetherService {
 
         this.roomName = roomName || '一起看';
         this.isHost = true;
-        this.videoInfo = videoInfo || null;
+        // 不把播放直链/请求头带进房间共享载荷
+        this.videoInfo = sanitizeRoomVideoInfo(videoInfo);
         this.memberCount = 1;
         this.intentionalLeave = false;
         let degraded = false;
@@ -611,12 +632,10 @@ class WatchTogetherService {
     _startWsServer() {
         return new Promise((resolve, reject) => {
             this.httpServer = http.createServer((req, res) => {
-                // 普通 HTTP 健康检查：返回房间基本信息
+                // 普通 HTTP 健康检查：不返回房间号/房间名，避免任何局域网设备探测到加入凭据。
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     ok: true,
-                    roomCode: this.roomCode,
-                    roomName: this.roomName,
                     memberCount: this.memberCount
                 }));
             });
@@ -642,6 +661,43 @@ class WatchTogetherService {
         });
     }
 
+    _rejectUpgrade(socket, statusCode, reason, message = reason) {
+        const body = String(message || reason);
+        try {
+            socket.write(
+                `HTTP/1.1 ${statusCode} ${reason}\r\n`
+                + 'Content-Type: text/plain; charset=utf-8\r\n'
+                + `Content-Length: ${Buffer.byteLength(body)}\r\n`
+                + 'Connection: close\r\n\r\n'
+                + body
+            );
+        } catch (_) { /* socket already gone */ }
+        socket.destroy();
+    }
+
+    _isUpgradeRateLimited(clientKey) {
+        const entry = this._upgradeAuthFailures.get(clientKey);
+        if (!entry) return false;
+        if (entry.resetAt <= Date.now()) {
+            this._upgradeAuthFailures.delete(clientKey);
+            return false;
+        }
+        return entry.count >= WS_AUTH_MAX_FAILURES;
+    }
+
+    _recordUpgradeFailure(clientKey) {
+        const now = Date.now();
+        const entry = this._upgradeAuthFailures.get(clientKey);
+        if (!entry || entry.resetAt <= now) {
+            this._upgradeAuthFailures.set(clientKey, {
+                count: 1,
+                resetAt: now + WS_AUTH_WINDOW_MS
+            });
+            return;
+        }
+        entry.count += 1;
+    }
+
     _handleUpgrade(req, socket, head) {
         const key = req.headers['sec-websocket-key'];
         if (!key) {
@@ -649,18 +705,25 @@ class WatchTogetherService {
             return;
         }
 
-        // 校验房间号（URL query 中携带）
+        const clientKey = String(req.socket?.remoteAddress || 'unknown');
+        if (this._isUpgradeRateLimited(clientKey)) {
+            this._rejectUpgrade(socket, 429, 'Too Many Requests', '尝试次数过多，请稍后再试');
+            return;
+        }
+
+        // 校验房间号（URL query 中携带）：空房间号同样视为失败，不能靠“省略参数”绕过
         let requestRoomCode = '';
         try {
             const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
             requestRoomCode = url.searchParams.get('roomCode') || '';
         } catch (_) { /* ignore */ }
 
-        if (requestRoomCode && this.roomCode && requestRoomCode !== this.roomCode) {
-            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n房间号不匹配');
-            socket.destroy();
+        if (!this.roomCode || requestRoomCode !== this.roomCode) {
+            this._recordUpgradeFailure(clientKey);
+            this._rejectUpgrade(socket, 403, 'Forbidden', '房间号不匹配');
             return;
         }
+        this._upgradeAuthFailures.delete(clientKey);
 
         const acceptKey = crypto
             .createHash('sha1')
@@ -748,6 +811,7 @@ class WatchTogetherService {
             try { ws.close(); } catch (_) { /* ignore */ }
         }
         this.hostConnections.clear();
+        this._upgradeAuthFailures.clear();
 
         if (this.httpServer) {
             try { this.httpServer.close(); } catch (_) { /* ignore */ }
@@ -812,7 +876,7 @@ class WatchTogetherService {
                 try { msg = JSON.parse(text); } catch (_) { return; }
                 if (msg.type === 'joined') {
                     this.memberCount = msg.memberCount || 1;
-                    if (msg.videoInfo) this.videoInfo = msg.videoInfo;
+                    if (msg.videoInfo) this.videoInfo = sanitizeRoomVideoInfo(msg.videoInfo);
                     if (msg.roomName) this.roomName = msg.roomName;
                     this.hostConnected = this.isHost || !!msg.hostConnected;
                 } else if (msg.type === 'member-count') {

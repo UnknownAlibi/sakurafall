@@ -13,6 +13,7 @@ const DEFAULT_TIMEOUT = 12000;
 const DEFAULT_MAX_ENTRIES = 2000;
 const DEFAULT_MAX_BYTES = 300 * 1024 * 1024;
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_REDIRECTS = 5;
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
 
@@ -35,6 +36,10 @@ class ImageCacheService {
     this.maxEntries = Math.max(100, parseInt(options.maxEntries, 10) || DEFAULT_MAX_ENTRIES);
     this.maxBytes = Math.max(50 * 1024 * 1024, parseInt(options.maxBytes, 10) || DEFAULT_MAX_BYTES);
     this.maxImageBytes = Math.max(1024 * 1024, parseInt(options.maxImageBytes, 10) || DEFAULT_MAX_IMAGE_BYTES);
+    const configuredMaxAge = Number(options.maxAgeMs);
+    this.maxAgeMs = Number.isFinite(configuredMaxAge) && configuredMaxAge >= 0
+      ? configuredMaxAge
+      : DEFAULT_MAX_AGE_MS;
     this.proxy = options.proxy || '';
     this.imageProcessor = options.imageProcessor || null;
     this.publicUrlResolver = options.publicUrlResolver || null;
@@ -211,15 +216,22 @@ class ImageCacheService {
   getAllCachedUrls() {
     const result = {};
     if (!this.cacheDir) return result;
+    // 启动时只做一次 readdir，避免 2000 条缓存逐一 existsSync 阻塞主进程
+    let fileNames;
+    try {
+      fileNames = new Set(fs.readdirSync(this.cacheDir));
+    } catch (_error) {
+      return result;
+    }
+    const cutoff = this.maxAgeMs > 0 ? Date.now() - this.maxAgeMs : 0;
     for (const entry of Object.values(this.index)) {
       if (!entry?.fileName || !entry.url) continue;
-      const filePath = path.join(this.cacheDir, entry.fileName);
-      if (fs.existsSync(filePath)) {
-        const variant = entry.variant === 'thumbnail'
-          ? { type: 'thumbnail', width: entry.variantWidth || 360 }
-          : { type: 'original' };
-        result[this._rendererCacheKey(entry.url, variant)] = this._publicUrl(filePath);
-      }
+      if (!fileNames.has(entry.fileName)) continue;
+      if (cutoff && entry.createdAt && entry.createdAt < cutoff) continue;
+      const variant = entry.variant === 'thumbnail'
+        ? { type: 'thumbnail', width: entry.variantWidth || 360 }
+        : { type: 'original' };
+      result[this._rendererCacheKey(entry.url, variant)] = this._publicUrl(path.join(this.cacheDir, entry.fileName));
     }
     return result;
   }
@@ -309,6 +321,11 @@ class ImageCacheService {
     if (!entry?.fileName) return null;
     const filePath = path.join(this.cacheDir, entry.fileName);
     if (!fs.existsSync(filePath)) {
+      delete this.index[key];
+      return null;
+    }
+    if (this.maxAgeMs > 0 && entry.createdAt && entry.createdAt < Date.now() - this.maxAgeMs) {
+      try { fs.unlinkSync(filePath); } catch (_error) { /* ignore */ }
       delete this.index[key];
       return null;
     }
@@ -601,15 +618,29 @@ class ImageCacheService {
       .map(([key, entry]) => ({ key, ...entry, filePath: path.join(this.cacheDir, entry.fileName || '') }))
       .filter(entry => entry.fileName);
 
+    // 同样只扫一次目录，避免每次写封面都对全部缓存做 existsSync
+    let fileNames;
+    try {
+      fileNames = new Set(fs.readdirSync(this.cacheDir));
+    } catch (_error) {
+      fileNames = new Set();
+    }
+    const cutoff = this.maxAgeMs > 0 ? Date.now() - this.maxAgeMs : 0;
+
     let totalBytes = 0;
     const existing = [];
     for (const entry of entries) {
-      if (fs.existsSync(entry.filePath)) {
-        totalBytes += entry.size || 0;
-        existing.push(entry);
-      } else {
+      if (!fileNames.has(entry.fileName)) {
         delete this.index[entry.key];
+        continue;
       }
+      if (cutoff && entry.createdAt && entry.createdAt < cutoff) {
+        try { fs.unlinkSync(entry.filePath); } catch (_error) { /* ignore */ }
+        delete this.index[entry.key];
+        continue;
+      }
+      totalBytes += entry.size || 0;
+      existing.push(entry);
     }
 
     existing.sort((a, b) => (a.lastUsedAt || 0) - (b.lastUsedAt || 0));

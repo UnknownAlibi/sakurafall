@@ -229,6 +229,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 网络配置
     setNetworkConfig: (config) => ipcRenderer.invoke('set-network-config', config),
+    // 设置页敏感项（代理/第三方 API Key）：主进程 safeStorage 加密落盘
+    settingsSecretsGet: () => ipcRenderer.invoke('settings-secrets-get'),
+    settingsSecretsSet: (secrets) => ipcRenderer.invoke('settings-secrets-set', toIpcSafeValue(secrets)),
 
     // 本地数据库API
     getAnimeList: (page, limit, search) => ipcRenderer.invoke('get-anime-list', page, limit, search),

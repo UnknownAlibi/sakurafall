@@ -512,11 +512,13 @@ class UpdateChecker {
       // 让独立 PowerShell 进程先等待当前应用完全退出，再覆盖原安装目录并启动新版。
       // 路径只通过环境变量传入，避免 cmd 多层引号导致命令被吞掉；/D 显式保留
       // 用户选择的安装目录，即使 NSIS 注册表信息丢失也不会装到默认 C 盘。
+      // NSIS 的 /D 必须是最后一个参数且不能带引号（路径含空格时也一样），
+      // 否则含空格的安装目录（如用户名带空格）会被当成带引号的字面路径。
       const runner = [
         "$ErrorActionPreference = 'Stop'",
         'try {',
         '  Wait-Process -Id ([int]$env:SAKURAFALL_UPDATE_PARENT_PID) -Timeout 120 -ErrorAction SilentlyContinue',
-        "  $installerArgs = '/S /D=\"' + $env:SAKURAFALL_UPDATE_INSTALL_DIR + '\"'",
+        "  $installerArgs = '/S /D=' + $env:SAKURAFALL_UPDATE_INSTALL_DIR",
         '  $installer = Start-Process -FilePath $env:SAKURAFALL_UPDATE_INSTALLER -ArgumentList $installerArgs -WindowStyle Hidden -PassThru -Wait',
         "  if ($installer.ExitCode -ne 0) { throw ('Installer exited with code ' + $installer.ExitCode) }",
         '  if (-not (Test-Path -LiteralPath $env:SAKURAFALL_UPDATE_EXECUTABLE)) { throw \'Updated executable is missing\' }',

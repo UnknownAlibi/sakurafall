@@ -35,6 +35,46 @@ function collectMessages(service) {
   return { received, waitFor };
 }
 
+function requestUpgrade(port, roomCode) {
+  return new Promise((resolve, reject) => {
+    const requestPath = roomCode ? `/?roomCode=${encodeURIComponent(roomCode)}` : '/';
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: requestPath,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='
+      }
+    });
+    req.on('upgrade', (res, socket) => {
+      socket.destroy();
+      resolve(res.statusCode || 101);
+    });
+    req.on('response', (res) => {
+      res.resume();
+      resolve(res.statusCode || 0);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function getJson(port, requestPath = '/') {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: requestPath }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { text += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(text)); } catch (error) { reject(error); }
+      });
+    }).on('error', reject);
+  });
+}
+
 test('watch together: LAN address selection ignores TUN and virtual adapters', () => {
   const service = new WatchTogetherService({
     relayBaseUrl: '',
@@ -104,6 +144,49 @@ test('watch together: member ping echoes pong with identical monotonic timestamp
     member.leaveRoom();
     // 等待端口释放，避免影响后续测试
     await new Promise(r => setTimeout(r, 200));
+  }
+});
+
+test('watch together: LAN room requires exact room code and never shares playback url', async () => {
+  const port = await getFreePort();
+  const host = new WatchTogetherService({ relayBaseUrl: '' });
+  host.port = port;
+
+  try {
+    const room = await host.createRoom('鉴权测试', {
+      title: '番剧',
+      url: 'https://cdn.example/live?token=super-secret',
+      episode: 1
+    });
+    assert.equal(room.success, true);
+    assert.equal(room.videoInfo.url, undefined, '创建房间的返回载荷不应包含播放地址');
+
+    // 省略房间号不能绕过；错误房间号应被拒绝；正确房间号才能升级
+    assert.equal(await requestUpgrade(port, ''), 403);
+    const wrongCode = room.roomCode === '000000' ? '000001' : '000000';
+    assert.equal(await requestUpgrade(port, wrongCode), 403);
+    assert.equal(await requestUpgrade(port, room.roomCode), 101);
+
+    const health = await getJson(port, '/');
+    assert.equal(health.ok, true);
+    assert.equal(health.roomCode, undefined, '健康检查不能泄露房间号');
+    assert.equal(health.roomName, undefined, '健康检查不能泄露房间名');
+
+    const member = new WatchTogetherService({ relayBaseUrl: '' });
+    member.port = port;
+    const inbox = collectMessages(member);
+    try {
+      await member.joinRoom(room.roomCode, '127.0.0.1');
+      const joined = await inbox.waitFor(message => message.type === 'joined');
+      assert.equal(joined.roomCode, room.roomCode);
+      assert.equal(joined.videoInfo.title, '番剧');
+      assert.equal(joined.videoInfo.url, undefined, '成员不应收到宿主播放直链');
+    } finally {
+      member.leaveRoom();
+    }
+  } finally {
+    host.leaveRoom();
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
 });
 
@@ -228,14 +311,22 @@ test('watch together: central relay creates and joins a room without a host addr
   const memberInbox = collectMessages(member);
 
   try {
-    const room = await host.createRoom('中继房间', { title: '测试番剧', episode: 2 });
+    const room = await host.createRoom('中继房间', {
+      title: '测试番剧',
+      url: 'https://cdn.example/live?token=super-secret',
+      episode: 2
+    });
     assert.equal(room.relay, true);
     assert.match(room.roomCode, /^\d{6}$/);
+
+    const publicRoom = await getJson(server.address().port, `/v1/rooms/${room.roomCode}`);
+    assert.equal(publicRoom.videoInfo, undefined, '公开房间查询不应返回 videoInfo');
 
     const joined = await member.joinRoom(room.roomCode);
     assert.equal(joined.relay, true);
     const joinedMessage = await memberInbox.waitFor(message => message.type === 'joined');
     assert.equal(joinedMessage.videoInfo.title, '测试番剧');
+    assert.equal(joinedMessage.videoInfo.url, undefined, '中继成员不应收到播放直链');
 
     assert.equal(host.broadcastState({ isPlaying: true, currentTime: 88 }).success, true);
     const sync = await memberInbox.waitFor(message => message.type === 'sync');

@@ -25,6 +25,55 @@ const DEFAULT_TIMEOUT = 15000;
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// 跨域重定向时不允许跟随的请求头（防止认证信息被带到第三方主机）
+const SENSITIVE_REDIRECT_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'proxy-authorization',
+  'x-api-key',
+  'x-emby-token',
+  'api-key',
+  'x-auth-token'
+]);
+
+function redirectError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+/**
+ * 根据跳转前后 URL 生成安全的重定向选项：
+ *   - 只允许 http(s)
+ *   - 禁止 https -> http 降级
+ *   - 跨 origin 时移除认证相关请求头
+ */
+function buildRedirectOptions(currentUrl, nextUrl, options = {}) {
+  let current;
+  let next;
+  try {
+    current = new URL(currentUrl);
+    next = new URL(nextUrl);
+  } catch (_error) {
+    throw redirectError('UNSAFE_REDIRECT', '重定向地址无效');
+  }
+  if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+    throw redirectError('UNSAFE_REDIRECT', `拒绝非 HTTP(S) 重定向: ${next.protocol}`);
+  }
+  if (current.protocol === 'https:' && next.protocol !== 'https:') {
+    throw redirectError('INSECURE_REDIRECT', '拒绝 HTTPS -> HTTP 降级重定向');
+  }
+  if (current.origin === next.origin) return options;
+
+  const safeHeaders = {};
+  for (const [key, value] of Object.entries(options.headers || {})) {
+    if (!SENSITIVE_REDIRECT_HEADERS.has(String(key).toLowerCase())) {
+      safeHeaders[key] = value;
+    }
+  }
+  return { ...options, headers: safeHeaders };
+}
+
 function createAbortError() {
   const error = new Error('Request aborted');
   error.name = 'AbortError';
@@ -200,8 +249,16 @@ class HttpClient {
           const newUrl = location.startsWith('http')
             ? location
             : new URL(location, url).toString();
+          let nextOptions;
+          try {
+            nextOptions = buildRedirectOptions(url, newUrl, options);
+          } catch (error) {
+            cleanupSignal();
+            rejectOnce(error);
+            return;
+          }
           cleanupSignal();
-          this.fetch(newUrl, options, _redirectCount + 1).then(resolveOnce).catch(rejectOnce);
+          this.fetch(newUrl, nextOptions, _redirectCount + 1).then(resolveOnce).catch(rejectOnce);
           return;
         }
 
@@ -341,8 +398,16 @@ class HttpClient {
           const newUrl = res.headers.location.startsWith('http')
             ? res.headers.location
             : new URL(res.headers.location, url).toString();
+          let nextOptions;
+          try {
+            nextOptions = buildRedirectOptions(url, newUrl, options);
+          } catch (error) {
+            cleanupSignal();
+            rejectOnce(error);
+            return;
+          }
           cleanupSignal();
-          this.downloadToFile(newUrl, filePath, options, onProgress, _redirectCount + 1)
+          this.downloadToFile(newUrl, filePath, nextOptions, onProgress, _redirectCount + 1)
             .then(resolveOnce).catch(rejectOnce);
           return;
         }

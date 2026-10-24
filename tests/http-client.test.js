@@ -112,3 +112,81 @@ test('HttpClient: rejects non-success HTTP status codes', async () => {
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('HttpClient: cross-origin redirect strips authorization headers', async () => {
+  let seenAuth = null;
+  let seenEmby = null;
+  const target = http.createServer((req, res) => {
+    seenAuth = req.headers.authorization || null;
+    seenEmby = req.headers['x-emby-token'] || null;
+    res.end('ok');
+  });
+  await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+  const targetUrl = `http://127.0.0.1:${target.address().port}/target`;
+
+  const redirector = http.createServer((_req, res) => {
+    res.writeHead(302, { Location: targetUrl });
+    res.end();
+  });
+  await new Promise(resolve => redirector.listen(0, '127.0.0.1', resolve));
+  const redirectUrl = `http://127.0.0.1:${redirector.address().port}/start`;
+
+  const client = new HttpClient({ timeout: 5000 });
+  try {
+    const body = await client.fetch(redirectUrl, {
+      headers: {
+        Authorization: 'Bearer should-not-leak',
+        'X-Emby-Token': 'emby-token-should-not-leak'
+      }
+    });
+    assert.equal(body, 'ok');
+    assert.equal(seenAuth, null, '跨域重定向必须移除 Authorization');
+    assert.equal(seenEmby, null, '跨域重定向必须移除 X-Emby-Token');
+  } finally {
+    await new Promise(resolve => target.close(resolve));
+    await new Promise(resolve => redirector.close(resolve));
+  }
+});
+
+test('HttpClient: same-origin redirect keeps authorization headers', async () => {
+  let seenAuth = null;
+  const server = http.createServer((req, res) => {
+    if (req.url === '/start') {
+      res.writeHead(302, { Location: '/target' });
+      res.end();
+      return;
+    }
+    seenAuth = req.headers.authorization || null;
+    res.end('ok');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/start`;
+  const client = new HttpClient({ timeout: 5000 });
+
+  try {
+    const body = await client.fetch(url, { headers: { Authorization: 'Bearer keep' } });
+    assert.equal(body, 'ok');
+    assert.equal(seenAuth, 'Bearer keep');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('HttpClient: rejects redirects to non-http protocols', async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(302, { Location: 'file:///etc/passwd' });
+    res.end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/escape`;
+  const client = new HttpClient({ timeout: 5000 });
+
+  try {
+    await assert.rejects(
+      client.fetch(url),
+      error => error?.code === 'UNSAFE_REDIRECT'
+    );
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});

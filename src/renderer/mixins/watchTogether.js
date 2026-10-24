@@ -44,9 +44,9 @@ export default {
     wtVideoInfoForRoom() {
       const v = this.currentVideo;
       if (!v) return null;
+      // 播放地址常带签名/防盗链参数，成员端不使用；房间载荷只放展示与进度同步所需元数据。
       return {
         title: v.title || '',
-        url: v.url || '',
         animeName: v.anime?.name || '',
         episodeTitle: v.episode?.title || '',
         episodeIndex: v.episode?.index ?? -1,

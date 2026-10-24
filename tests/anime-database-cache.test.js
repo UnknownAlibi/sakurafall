@@ -349,7 +349,29 @@ test('connect/close: 启动 WAL 周期 checkpoint，关闭时 TRUNCATE 并清理
       '关闭时应执行 TRUNCATE checkpoint 回收 wal 文件'
     );
     assert.strictEqual(db._walCheckpointTimer, null, '关闭后应清理定时器');
+
+    // 幂等：before-quit 可能多次触发，重复 close 不应抛异常
+    assert.doesNotThrow(() => db.close());
+    assert.strictEqual(db.db, null, '关闭后数据库引用应置空');
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
   }
+});
+
+test('write queue: 事务失败保留队列并重试，成功后一次性清空', () => {
+  const db = createDb();
+  let executed = 0;
+  db._writeQueue.enqueue(() => { executed += 1; });
+  const originalTransaction = db.db.transaction;
+  db.db.transaction = () => () => { throw new Error('disk full'); };
+
+  db._writeQueue.flush();
+  assert.strictEqual(executed, 0, '事务失败时不应执行/丢弃队列');
+  assert.strictEqual(db._writeQueue.size, 1, '失败后队列必须保留');
+  db._writeQueue.dispose();
+
+  db.db.transaction = originalTransaction;
+  db._writeQueue.flush();
+  assert.strictEqual(executed, 1, '重试成功后应执行');
+  assert.strictEqual(db._writeQueue.size, 0, '成功后应清空队列');
 });

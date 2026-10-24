@@ -3,6 +3,18 @@ const { sendJson, readBody } = require('./httpUtils');
 
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
+// 播放地址/请求头可能包含签名或凭据，成员端只需要展示与进度同步所需的元数据。
+function sanitizeVideoInfo(videoInfo) {
+  if (!videoInfo || typeof videoInfo !== 'object' || Array.isArray(videoInfo)) return null;
+  const safe = { ...videoInfo };
+  for (const key of Object.keys(safe)) {
+    if (/^(?:url|play_?url|headers?|cookies?|authorization|referer|token|api_?key)$/i.test(key)) {
+      delete safe[key];
+    }
+  }
+  return Object.keys(safe).length > 0 ? safe : null;
+}
+
 function parseFrame(buffer) {
   if (buffer.length < 2) return null;
   const opcode = buffer[0] & 0x0f;
@@ -121,7 +133,7 @@ class RoomRelay {
       roomCode,
       hostToken,
       roomName: String(input.roomName || '一起看').slice(0, 80),
-      videoInfo: input.videoInfo && typeof input.videoInfo === 'object' ? input.videoInfo : null,
+      videoInfo: sanitizeVideoInfo(input.videoInfo),
       host: null,
       members: new Map(),
       lastActiveAt: Date.now()
@@ -143,9 +155,9 @@ class RoomRelay {
       const room = this.rooms.get(url.pathname.split('/').pop());
       if (!room) sendJson(res, 404, { error: 'room_not_found' });
       else sendJson(res, 200, {
+        // 公开查询只返回加入房间所需的最小信息；videoInfo 仅在 WS 握手成功后下发。
         roomCode: room.roomCode,
         roomName: room.roomName,
-        videoInfo: room.videoInfo,
         hostConnected: !!room.host,
         memberCount: room.members.size + (room.host ? 1 : 0)
       });

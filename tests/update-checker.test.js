@@ -422,6 +422,10 @@ test('runInstaller: 正确使用 process.execPath 字符串构造安装命令', 
     assert.strictEqual(spawned[0].opts.env.SAKURAFALL_UPDATE_INSTALL_DIR, path.dirname(path.resolve(process.execPath)));
     assert.strictEqual(spawned[0].opts.env.SAKURAFALL_UPDATE_INSTALLER, path.resolve(fakeInstaller));
     assert.ok(spawned[0].args.join(' ').includes('Wait-Process'), '应等待旧版本完全退出后再覆盖安装');
+    // 回归：NSIS 的 /D 不能带引号（即使路径含空格），且必须是最后一个参数。
+    const installScript = spawned[0].args[spawned[0].args.length - 1];
+    assert.match(installScript, /\/D=' \+ \$env:SAKURAFALL_UPDATE_INSTALL_DIR/);
+    assert.doesNotMatch(installScript, /\/D="/);
   } finally {
     childProcess.spawn = realSpawn;
     restore();
