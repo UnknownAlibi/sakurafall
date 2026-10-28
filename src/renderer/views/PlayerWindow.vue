@@ -5,6 +5,22 @@
       <div class="player-title-left">
         <BrandMark :size="18" class="player-brand-mark" />
         <span class="player-title-text">{{ videoTitle }}</span>
+        <button
+          v-if="hasEpisodes && !isMiniMode"
+          type="button"
+          class="episodes-toggle"
+          :class="{ active: episodesOpen }"
+          :aria-expanded="String(episodesOpen)"
+          aria-controls="player-episodes-panel"
+          @click="toggleEpisodesPanel"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+            <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/>
+          </svg>
+          <span>选集</span>
+          <em>{{ currentLineEpisodes.length }}</em>
+        </button>
       </div>
       <div class="player-title-right">
         <button
@@ -16,7 +32,7 @@
         >
           <span class="enhanced-mark">{{ enhancedPlayerBusy ? '···' : 'MPV' }}</span>
         </button>
-        <button class="title-btn pin-btn" @click="toggleAlwaysOnTop" :title="isPinned ? '取消置顶' : '窗口置顶'">
+        <button class="title-btn pin-btn" :class="{ active: isPinned }" @click="toggleAlwaysOnTop" :title="isPinned ? '取消置顶' : '窗口置顶'">
           <svg v-if="isPinned" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <path d="M16 9V4l1-1V2H7v1l1 1v5l-2 2v2h5.2v7l.8 2 .8-2v-7H18v-2l-2-2z"/>
           </svg>
@@ -43,8 +59,8 @@
       </div>
     </div>
 
-    <!-- 主体：播放器 + 选集侧栏 -->
-    <div class="player-body">
+    <!-- 主体：播放器满幅，选集为可收起的右侧浮层 -->
+    <div class="player-body" :class="{ 'episodes-open': episodesOpen }">
       <!-- 播放器区域 -->
       <div class="player-section">
         <div v-if="initialResolvePending" class="player-prepare-state" role="status" aria-live="polite">
@@ -80,21 +96,51 @@
         </transition>
       </div>
 
-      <!-- 选集侧栏 -->
-      <div v-if="hasEpisodes" class="episodes-sidebar">
+      <transition name="episodes-scrim">
+        <div v-if="episodesOpen" class="episodes-scrim" aria-hidden="true" @click="closeEpisodesPanel"></div>
+      </transition>
+
+      <!-- 选集浮层：默认收起，不挤占视频区域 -->
+      <aside
+        v-if="hasEpisodes"
+        id="player-episodes-panel"
+        class="episodes-sidebar"
+        :class="{ open: episodesOpen }"
+        :aria-hidden="String(!episodesOpen)"
+        :inert="episodesOpen ? null : ''"
+        aria-label="选集"
+      >
         <div class="sidebar-header">
-          <span class="sidebar-title">选集</span>
-          <span class="sidebar-count">{{ currentLineEpisodes.length }}集</span>
+          <div class="sidebar-heading">
+            <div class="sidebar-title-group">
+              <span class="sidebar-title">选集</span>
+              <small>{{ currentVideo?.anime?.name || '当前番剧' }}</small>
+            </div>
+            <span class="sidebar-count">{{ currentLineEpisodes.length }} 集</span>
+          </div>
+          <button type="button" class="sidebar-close" title="收起选集" aria-label="收起选集" @click="closeEpisodesPanel">×</button>
         </div>
 
-        <!-- 线路选择 -->
-        <div v-if="Object.keys(episodes).length > 1" class="line-selector">
-          <button v-for="(episodeList, lineId) in episodes" :key="lineId" @click="selectLine(lineId)"
-            :class="['line-tab', { active: selectedLine === lineId, switching: pendingLineId === lineId }]"
-            :aria-busy="pendingLineId === lineId">
-            {{ formattedLineNames[lineId] || lineId }}
-          </button>
-        </div>
+        <!-- 线路选择：下拉，避免右上角一排按钮 -->
+        <label v-if="Object.keys(episodes).length > 1" class="line-select-wrap">
+          <span class="line-select-label">线路</span>
+          <span class="line-select-box">
+            <select
+              class="line-select"
+              :value="selectedLine"
+              :disabled="!!pendingLineId"
+              aria-label="选择播放线路"
+              @change="selectLine($event.target.value)"
+            >
+              <option v-for="(episodeList, lineId) in episodes" :key="lineId" :value="lineId">
+                {{ formattedLineNames[lineId] || lineId }}
+              </option>
+            </select>
+            <svg class="line-select-arrow" width="10" height="6" viewBox="0 0 10 6" aria-hidden="true">
+              <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </label>
 
         <!-- 搜索筛选（集数较多时显示） -->
         <div v-if="currentLineEpisodes.length > 12" class="episode-search">
@@ -121,7 +167,7 @@
           </button>
           <div v-if="filteredEpisodes.length === 0" class="no-match">无匹配集数</div>
         </div>
-      </div>
+      </aside>
     </div>
   </div>
 </template>
@@ -158,6 +204,7 @@ export default {
       removeStateListener: null,
       removeLoadNewListener: null,
       episodeFilter: '',
+      episodesOpen: false,
       currentEpisodeEl: null,
       episodePlayToken: 0,
       pendingLineId: '',
@@ -435,6 +482,7 @@ export default {
 
     async playEpisode(episode, options = {}) {
       if (!episode || !this.currentVideo?.anime) return;
+      this.episodesOpen = false;
       // 手动切集/切线路时取消即将触发的自动连播，避免 2 秒后把用户刚选的集数再覆盖掉
       if (this.autoPlayTimer) {
         clearTimeout(this.autoPlayTimer);
@@ -587,12 +635,30 @@ export default {
       if (this.nextEpisode) this.playEpisode(this.nextEpisode);
     },
 
-    // 将当前播放集滚动到选集列表的可视区域
-    scrollCurrentIntoView() {
-      const el = this.currentEpisodeEl;
-      if (el && el.scrollIntoView) {
-        el.scrollIntoView({ block: 'center', behavior: 'auto' });
+    toggleEpisodesPanel() {
+      if (!this.hasEpisodes) return;
+      this.episodesOpen = !this.episodesOpen;
+      if (this.episodesOpen) {
+        this.$nextTick(() => this.scrollCurrentIntoView());
       }
+    },
+
+    closeEpisodesPanel() {
+      this.episodesOpen = false;
+    },
+
+    // 只滚动选集列表本身：scrollIntoView 会连带滚动带 overflow:hidden 的
+    // 播放器容器，导致抽屉展开瞬间整块视频向左抖动。
+    scrollCurrentIntoView() {
+      if (!this.episodesOpen) return;
+      const list = this.$refs.episodesListEl;
+      const el = this.currentEpisodeEl;
+      if (!list || !el) return;
+      const listRect = list.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      if (elRect.top >= listRect.top && elRect.bottom <= listRect.bottom) return;
+      const centerOffset = elRect.top - listRect.top - (list.clientHeight - elRect.height) / 2;
+      list.scrollTop = Math.max(0, list.scrollTop + centerOffset);
     },
 
     async minimizeWindow() {
@@ -611,6 +677,7 @@ export default {
     async toggleMiniMode() {
       if (!window.electronAPI?.playerToggleMini) return;
       this.isMiniMode = await window.electronAPI.playerToggleMini();
+      if (this.isMiniMode) this.episodesOpen = false;
     }
   },
   async mounted() {
@@ -656,11 +723,23 @@ export default {
     }
     this.ensureSelectedLine();
     this.resetVisibleEpisodes();
+    // 选集浮层打开时，Esc 只负责收起浮层，不触发退出全屏等播放器快捷键。
+    this._onPlayerEscape = (event) => {
+      if (event.key !== 'Escape' || !this.episodesOpen) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeEpisodesPanel();
+    };
+    document.addEventListener('keydown', this._onPlayerEscape, true);
     // 首次加载后滚动当前集到可视区
     this.$nextTick(() => this.scrollCurrentIntoView());
   },
   beforeUnmount() {
     this.episodePlayToken += 1;
+    if (this._onPlayerEscape) {
+      document.removeEventListener('keydown', this._onPlayerEscape, true);
+      this._onPlayerEscape = null;
+    }
     if (this.removeStateListener) this.removeStateListener();
     if (this.removeLoadNewListener) this.removeLoadNewListener();
     if (this.autoPlayTimer) {
@@ -683,6 +762,7 @@ export default {
     radial-gradient(circle at 88% 8%, rgba(66, 199, 238, 0.16), transparent 30%),
     #090913;
   overflow: hidden;
+  overflow: clip;
 }
 
 /* 标题栏 */
@@ -703,6 +783,9 @@ export default {
 }
 
 .player-title-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding-left: 14px;
   flex: 1;
   min-width: 0;
@@ -710,12 +793,57 @@ export default {
 }
 
 .player-title-text {
+  flex: 1;
+  min-width: 0;
   font-weight: 500;
   font-size: 12px;
   opacity: 0.9;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.episodes-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.episodes-toggle em {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-style: normal;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.episodes-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.episodes-toggle.active {
+  border-color: transparent;
+  background: var(--accent-gradient);
+  color: #fff;
+}
+
+.episodes-toggle.active em {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .player-title-right {
@@ -784,12 +912,16 @@ export default {
 /* 主体 */
 .player-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   overflow: hidden;
+  overflow: clip;
+  position: relative;
 }
 
 .player-section {
   flex: 1;
+  min-height: 0;
   background: #000;
   min-width: 0;
   position: relative;
@@ -908,16 +1040,50 @@ export default {
   cursor: pointer;
 }
 
-/* 选集侧栏 */
+/* 选集浮层 */
 .episodes-sidebar {
-  width: 236px;
-  background:
-    linear-gradient(180deg, rgba(28, 23, 43, 0.98), rgba(18, 17, 31, 0.98)),
-    var(--app-ambient-bg) right top / 360px auto no-repeat;
-  border-left: 1px solid rgba(255, 138, 176, 0.12);
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 60;
+  width: min(336px, calc(100% - 24px));
+  max-height: calc(100% - 96px);
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(15, 14, 25, 0.82);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(18px) saturate(1.06);
+  backdrop-filter: blur(18px) saturate(1.06);
+  opacity: 0;
+  transform: translateX(calc(100% + 20px));
+  pointer-events: none;
+  transition: transform 0.26s var(--ease-smooth), opacity 0.18s ease;
+}
+
+.episodes-sidebar.open {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.episodes-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  background: rgba(3, 3, 10, 0.36);
+}
+
+.episodes-scrim-enter-active,
+.episodes-scrim-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.episodes-scrim-enter-from,
+.episodes-scrim-leave-to {
+  opacity: 0;
 }
 
 .sidebar-header {
@@ -928,10 +1094,33 @@ export default {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.sidebar-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-title-group small {
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-title {
-  font-size: 13px;
+  font-size: 14px;
   color: #eee;
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .sidebar-count {
@@ -942,42 +1131,85 @@ export default {
   background: rgba(255, 255, 255, 0.07);
 }
 
-.line-selector {
+.sidebar-close {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sidebar-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+/* 线路下拉 */
+.line-select-wrap {
   display: flex;
-  gap: 4px;
-  padding: 10px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.line-tab {
-  padding: 5px 10px;
-  background: rgba(255, 255, 255, 0.07);
-  color: rgba(255, 255, 255, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: background-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth);
+.line-select-label {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
 }
 
-.line-tab:hover {
-  background: rgba(255, 255, 255, 0.14);
+.line-select-box {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.line-select {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+.line-select:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.line-select:focus-visible {
+  border-color: rgba(var(--primary-rgb), 0.7);
+  box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.22);
+}
+
+.line-select:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.line-select option {
+  background: #1b1829;
   color: #eee;
 }
 
-.line-tab.active {
-  background: linear-gradient(135deg, #fb7299, #9c7bff);
-  color: #fff;
-  border-color: transparent;
-}
-
-.line-tab.switching {
-  animation: line-switch-pulse 0.8s ease-in-out infinite alternate;
-}
-
-@keyframes line-switch-pulse {
-  to { box-shadow: 0 0 0 3px rgba(251, 114, 153, 0.18); }
+.line-select-arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(255, 255, 255, 0.45);
+  pointer-events: none;
 }
 
 /* 集数搜索框 */
@@ -1041,14 +1273,16 @@ export default {
 }
 
 .episodes-list {
-  flex: 1;
+  flex: 0 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: 10px;
+  padding: 12px;
   display: grid;
-  /* 固定 3 列，侧栏宽度足够；文字允许换行避免挤压 */
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+  gap: 7px;
   align-content: start;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 
 .episodes-list::-webkit-scrollbar {
@@ -1094,16 +1328,20 @@ export default {
 
 @media (max-width: 700px) {
   .episodes-sidebar {
-    width: 160px;
+    top: 6px;
+    right: 6px;
+    bottom: 82px;
+    width: calc(100% - 12px);
   }
-  .episodes-list {
-    grid-template-columns: repeat(2, 1fr);
+  .episodes-toggle span {
+    display: none;
   }
 }
 
 /* ===== Phase 9: 迷你模式 ===== */
 /* 迷你模式：隐藏选集侧栏、标题文字、AI/置顶按钮，仅保留视频 + 迷你切换 + 最小化/关闭 */
-.player-window-page.mini-mode .episodes-sidebar {
+.player-window-page.mini-mode .episodes-sidebar,
+.player-window-page.mini-mode .episodes-scrim {
   display: none;
 }
 .player-window-page.mini-mode .player-title-text,

@@ -195,6 +195,21 @@
 
       <!-- 右侧控制组 -->
       <div class="controls-right">
+        <!-- 换源：原右上角悬浮按钮迁入控制栏，避免遮挡画面 -->
+        <button
+          v-if="canSwitchSource"
+          type="button"
+          class="control-btn source-switch-control"
+          title="换源 · SakuraRoute 智能线路"
+          aria-label="换源"
+          @click="$emit('source-switch')"
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 7h11l-3-3"/><path d="M17 17H6l3 3"/><path d="M18 7l-5 5"/><path d="M6 17l5-5"/>
+          </svg>
+          <span class="control-btn-label">换源</span>
+        </button>
+
         <!-- 常用播放设置：播放时可直接调整，无需离开当前视频 -->
         <div class="player-settings-control">
           <button
@@ -283,17 +298,17 @@
               <label class="settings-menu-row settings-toggle-row">
                 <span>
                   <strong>Anime4K 实时增强（实验）</strong>
-                  <small v-if="anime4kEnabled && anime4kActive">运行中 · 已验证增强帧输出</small>
+                  <small v-if="anime4kEnabled && anime4kActive">运行中 · GPU 正在修复线条与细节</small>
                   <small v-else-if="anime4kEnabled && anime4kDegraded">兼容显示增强中 · CNN 当前未运行</small>
                   <small v-else-if="anime4kEnabled">正在初始化并验证 GPU 输出...</small>
-                  <small v-else>GPU 实时修复线条并按显示尺寸放大，仅 1080P 级片源可用</small>
+                  <small v-else>GPU 实时修复线条与细节；1080P 源不提升分辨率，低清源才可能 2× 放大</small>
                 </span>
                 <input type="checkbox" :checked="anime4kEnabled" @change="$emit('anime4k-change', $event.target.checked)" />
                 <i aria-hidden="true"></i>
               </label>
 
               <label v-if="anime4kEnabled" class="settings-menu-row settings-range-row">
-                <span class="settings-menu-label">超分档位</span>
+                <span class="settings-menu-label">增强档位</span>
                 <select
                   class="settings-menu-select"
                   :value="anime4kPreset"
@@ -338,18 +353,6 @@
           </transition>
         </div>
 
-        <!-- 投屏按钮（DLNA） -->
-        <button
-          :class="['control-btn', 'cast-btn', { active: casting }]"
-          @click="$emit('cast-toggle')"
-          :title="casting ? '投屏中' : '投屏到电视'"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>
-            <line x1="2" y1="20" x2="2.01" y2="20"/>
-          </svg>
-        </button>
-
         <!-- 弹幕控制（开关 + 导入菜单） -->
         <div class="danmaku-control">
           <button
@@ -361,6 +364,7 @@
               <path d="M3 6h18M3 12h12M3 18h6"/>
               <circle v-if="danmakuActive" cx="19" cy="18" r="3" fill="currentColor" opacity="0.6" stroke="none"/>
             </svg>
+            <span class="control-btn-label">弹幕</span>
           </button>
           <transition name="fade-scale">
             <div v-show="showDanmakuMenu" class="danmaku-menu" @mouseleave="showDanmakuMenu = false">
@@ -383,49 +387,74 @@
           </transition>
         </div>
 
-        <!-- 画中画按钮 -->
-        <button class="control-btn" @click="$emit('picture-in-picture-toggle')" title="画中画">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="3" width="20" height="14" rx="2"/>
-            <rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity="0.4"/>
-          </svg>
-        </button>
-
-        <!-- 樱月手帐：记录当前时间点 -->
-        <button
-          :class="['control-btn', 'notebook-btn', { active: notebookActive }]"
-          @click="$emit('notebook-toggle')"
-          :title="notebookActive ? '收起樱月手帐' : '樱月手帐'"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-          </svg>
-        </button>
-
-        <!-- Episode DNA：片头/片尾/广告段标记 -->
-        <button
-          :class="['control-btn', 'dna-btn', { active: dnaActive }]"
-          @click="$emit('dna-toggle')"
-          :title="dnaActive ? '收起剧集片段' : '剧集片段（片头/片尾）'"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 12h3l2-6 4 12 2-6h7"/>
-          </svg>
-        </button>
-
-        <!-- 一起看按钮（多人同步播放） -->
-        <button
-          :class="['control-btn', 'watch-together-btn', { active: watchTogetherActive }]"
-          @click="$emit('watch-together-toggle')"
-          :title="watchTogetherActive ? '一起看（已开启）' : '一起看'"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-            <circle cx="9" cy="7" r="4"/>
-            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-          </svg>
-        </button>
+        <!-- 低频播放工具聚合：保留原功能，避免控制栏被同级图标挤满 -->
+        <div class="player-tools-control">
+          <button
+            type="button"
+            :class="['control-btn', 'tools-btn', { active: moreToolsActive, 'menu-open': showToolsMenu }]"
+            title="播放工具"
+            aria-label="播放工具"
+            :aria-expanded="showToolsMenu"
+            @click="toggleToolsMenu"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="2"/>
+              <rect x="14" y="3" width="7" height="7" rx="2"/>
+              <rect x="3" y="14" width="7" height="7" rx="2"/>
+              <rect x="14" y="14" width="7" height="7" rx="2"/>
+            </svg>
+            <span class="control-btn-label">工具</span>
+          </button>
+          <transition name="settings-pop">
+            <div v-if="showToolsMenu" class="player-tools-menu" @click.stop>
+              <div class="tools-menu-heading">
+                <strong>播放工具</strong>
+                <span>观影辅助</span>
+              </div>
+              <div class="tools-menu-grid">
+                <button type="button" :class="['tool-menu-item', { active: casting }]" @click="runToolAction('cast-toggle')">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/>
+                    <line x1="2" y1="20" x2="2.01" y2="20"/>
+                  </svg>
+                  <span>投屏</span>
+                  <small>{{ casting ? '投屏中' : 'DLNA' }}</small>
+                </button>
+                <button type="button" class="tool-menu-item" @click="runToolAction('picture-in-picture-toggle')">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="2" y="3" width="20" height="14" rx="2"/>
+                    <rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity="0.35"/>
+                  </svg>
+                  <span>画中画</span>
+                  <small>悬浮播放</small>
+                </button>
+                <button type="button" :class="['tool-menu-item', { active: notebookActive }]" @click="runToolAction('notebook-toggle')">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <span>樱月手帐</span>
+                  <small>时光签</small>
+                </button>
+                <button type="button" :class="['tool-menu-item', { active: dnaActive }]" @click="runToolAction('dna-toggle')">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 12h3l2-6 4 12 2-6h7"/>
+                  </svg>
+                  <span>剧集片段</span>
+                  <small>片头 / 片尾</small>
+                </button>
+                <button type="button" :class="['tool-menu-item', 'tool-menu-item-wide', { active: watchTogetherActive }]" @click="runToolAction('watch-together-toggle')">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                  </svg>
+                  <span>一起看</span>
+                  <small>{{ watchTogetherActive ? '房间已开启' : '邀请朋友同步观影' }}</small>
+                </button>
+              </div>
+            </div>
+          </transition>
+        </div>
 
         <!-- 字幕控制（开关 + 加载文件 + 在线搜索） -->
         <div class="subtitle-control">
@@ -633,6 +662,11 @@ export default {
     isMuted: {
       type: Boolean,
       default: false
+    },
+    // 是否展示“换源”（当前有可解析的番剧信息时）
+    canSwitchSource: {
+      type: Boolean,
+      default: false
     }
   },
   emits: [
@@ -640,6 +674,7 @@ export default {
     'seek',
     'seek-relative',
     'note-marker-click',
+    'source-switch',
     'volume-change',
     'toggle-mute',
     'fullscreen-toggle',
@@ -676,6 +711,7 @@ export default {
       showDanmakuMenu: false,
       showSubtitleMenu: false,
       showSettingsMenu: false,
+      showToolsMenu: false,
       isDragging: false,
       draftTime: 0,
       playbackRates: [0.5, 0.75, 1, 1.25, 1.5, 2],
@@ -713,6 +749,10 @@ export default {
     // 音量百分比（0-100）
     volumePercent() {
       return Math.round((this.isMuted ? 0 : this.volume) * 100);
+    },
+
+    moreToolsActive() {
+      return this.casting || this.notebookActive || this.dnaActive || this.watchTogetherActive;
     },
 
     // 音量滑块渐变背景
@@ -764,18 +804,20 @@ export default {
 
     hasOpenInteraction() {
       return this.isDragging || this.showRateMenu || this.showQualityMenu ||
-        this.showDanmakuMenu || this.showSubtitleMenu || this.showSettingsMenu;
+        this.showDanmakuMenu || this.showSubtitleMenu || this.showSettingsMenu || this.showToolsMenu;
     },
 
     /** 关闭全部菜单；返回是否有菜单被关闭（供 Escape 拦截判断） */
     closeAllMenus() {
       const hadOpen = this.showRateMenu || this.showQualityMenu ||
-        this.showDanmakuMenu || this.showSubtitleMenu || this.showSettingsMenu;
+        this.showDanmakuMenu || this.showSubtitleMenu || this.showSettingsMenu || this.showToolsMenu;
       this.showRateMenu = false;
       this.showQualityMenu = false;
       this.showDanmakuMenu = false;
       this.showSubtitleMenu = false;
       this.showSettingsMenu = false;
+        this.showToolsMenu = false;
+      this.showToolsMenu = false;
       return hadOpen;
     },
 
@@ -879,6 +921,7 @@ export default {
         this.showDanmakuMenu = false;
         this.showSubtitleMenu = false;
         this.showSettingsMenu = false;
+        this.showToolsMenu = false;
       }
     },
 
@@ -894,6 +937,7 @@ export default {
         this.showDanmakuMenu = false;
         this.showSubtitleMenu = false;
         this.showSettingsMenu = false;
+        this.showToolsMenu = false;
       }
     },
 
@@ -909,6 +953,7 @@ export default {
         this.showQualityMenu = false;
         this.showSubtitleMenu = false;
         this.showSettingsMenu = false;
+        this.showToolsMenu = false;
       }
     },
 
@@ -919,6 +964,7 @@ export default {
         this.showQualityMenu = false;
         this.showDanmakuMenu = false;
         this.showSettingsMenu = false;
+        this.showToolsMenu = false;
       }
     },
 
@@ -929,7 +975,24 @@ export default {
         this.showQualityMenu = false;
         this.showDanmakuMenu = false;
         this.showSubtitleMenu = false;
+        this.showToolsMenu = false;
       }
+    },
+
+    toggleToolsMenu() {
+      this.showToolsMenu = !this.showToolsMenu;
+      if (this.showToolsMenu) {
+        this.showRateMenu = false;
+        this.showQualityMenu = false;
+        this.showDanmakuMenu = false;
+        this.showSubtitleMenu = false;
+        this.showSettingsMenu = false;
+      }
+    },
+
+    runToolAction(eventName) {
+      this.showToolsMenu = false;
+      this.$emit(eventName);
     },
 
     formatTime(seconds) {
@@ -1777,6 +1840,138 @@ export default {
 .settings-pop-leave-to {
   opacity: 0;
   transform: translateY(5px) scale(0.97);
+}
+
+/* ===== 播放工具聚合菜单 ===== */
+.control-btn-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.source-switch-control,
+.danmaku-btn,
+.tools-btn {
+  gap: 6px;
+  padding-inline: 9px;
+}
+
+.player-tools-control {
+  position: relative;
+}
+
+.tools-btn.active,
+.tools-btn.menu-open {
+  color: var(--player-progress);
+  border-color: rgba(var(--primary-rgb), 0.34);
+  background: rgba(var(--primary-rgb), 0.12);
+}
+
+.player-tools-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 48px);
+  width: 304px;
+  max-height: calc(100vh - 132px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(17, 17, 30, 0.97);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+.player-tools-menu::-webkit-scrollbar {
+  width: 5px;
+}
+
+.player-tools-menu::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.tools-menu-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 2px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tools-menu-heading strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tools-menu-heading span {
+  color: var(--accent-cyan);
+  font-size: 10px;
+}
+
+.tools-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tool-menu-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 255, 255, 0.82);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease-smooth), background-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
+}
+
+.tool-menu-item svg {
+  grid-row: 1 / 3;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.tool-menu-item span {
+  align-self: end;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.tool-menu-item small {
+  align-self: start;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-menu-item:hover {
+  border-color: rgba(var(--primary-rgb), 0.3);
+  background: rgba(var(--primary-rgb), 0.1);
+  color: #fff;
+}
+
+.tool-menu-item.active {
+  border-color: rgba(var(--primary-rgb), 0.36);
+  background: rgba(var(--primary-rgb), 0.13);
+  color: var(--player-progress);
+}
+
+.tool-menu-item.active svg {
+  color: var(--player-progress);
+}
+
+.tool-menu-item-wide {
+  grid-column: 1 / -1;
 }
 
 /* ===== 过渡动画 ===== */
