@@ -11,7 +11,8 @@ const {
   YoukuDanmakuProvider,
   CustomDanmakuProvider,
   parseBilibiliXml,
-  extractEpisodeNumber
+  extractEpisodeNumber,
+  selectEpisodeForContext
 } = require('../src/main/services/danmaku/DanmakuProviderRegistry');
 
 function md5(input) {
@@ -27,6 +28,57 @@ test('episode parser handles Chinese, EP and season episode labels', () => {
   assert.equal(extractEpisodeNumber('第 12 集'), 12);
   assert.equal(extractEpisodeNumber('EP03'), 3);
   assert.equal(extractEpisodeNumber('S02E09_x264'), 9);
+});
+
+test('Dandanplay loads episodes when search results omit the episode list', async () => {
+  const registry = new DanmakuProviderRegistry();
+  let fetched = 0;
+  registry.setDandanplay({
+    getBangumi: async animeId => {
+      fetched += 1;
+      assert.equal(animeId, 17617);
+      return [{ episodeId: 176170001, episodeTitle: '第1话', episodeNumber: '1' }];
+    }
+  });
+  const match = await registry._selectDandanEpisode(
+    [{ animeId: 17617, title: '葬送的芙莉莲' }],
+    { animeName: '葬送的芙莉莲', episodeNumber: 1, seasonNumber: 0, seasonKeywords: [] }
+  );
+
+  assert.equal(fetched, 1);
+  assert.equal(match.animeId, 17617);
+  assert.equal(match.episodeId, 176170001);
+  assert.equal(match.episodeNumber, 1);
+});
+
+test('danmaku episode selection maps a merged season by air date and season keyword', () => {
+  const airDate = '2026-06-13';
+  const episodes = [
+    { id: 1, title: '1', long_title: '凡人风起天南1重制版' },
+    { id: 177, title: '177', long_title: '慕兰之战1', pub_time: Date.parse(`${airDate}T03:00:00Z`) / 1000 },
+    { id: 178, title: '178', long_title: '慕兰之战2', pub_time: Date.parse('2026-06-20T03:00:00Z') / 1000 }
+  ];
+  const byAirDate = selectEpisodeForContext(episodes, {
+    episodeNumber: 1,
+    episodeAirDate: airDate,
+    seasonNumber: 5,
+    seasonKeywords: ['慕兰之战']
+  }, { title: '凡人修仙传' });
+  assert.equal(byAirDate?.id, 177);
+
+  const byKeyword = selectEpisodeForContext(episodes, {
+    episodeNumber: 2,
+    seasonNumber: 5,
+    seasonKeywords: ['慕兰之战']
+  }, { title: '凡人修仙传' });
+  assert.equal(byKeyword?.id, 178);
+
+  const unsafeFallback = selectEpisodeForContext(episodes, {
+    episodeNumber: 1,
+    seasonNumber: 5,
+    seasonKeywords: []
+  }, { title: '凡人修仙传' });
+  assert.equal(unsafeFallback, null);
 });
 
 test('Bilibili provider resolves season, episode cid and comments', async () => {

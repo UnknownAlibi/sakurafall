@@ -139,15 +139,22 @@ export default {
   display: flex;
   align-items: center;
   gap: 1px;
-  padding: 2px;
-  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--bg-surface) 78%, transparent);
-  box-shadow: 0 4px 14px rgba(24, 24, 68, 0.07);
+  padding: 1px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-surface) 8%, transparent);
+  box-shadow: none;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
   -webkit-app-region: no-drag;
   /* UpdateCenter 沿用标题栏变量，这里覆盖成内容区文本色 */
   --titlebar-text: var(--text-secondary);
   --titlebar-bg: var(--bg-surface);
+}
+
+.window-chrome-controls:hover,
+.window-chrome-controls:focus-within {
+  background: color-mix(in srgb, var(--bg-surface) 24%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 34%, transparent);
 }
 
 .chrome-btn {

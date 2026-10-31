@@ -276,6 +276,11 @@ test('纯净模式守卫：禁用路由过渡但不能用全局选择器隐藏�
   assert.doesNotMatch(mainCss, /\[data-ui-effects="performance"\]\s+\*[,{]/, '纯净模式不能覆盖全部组件的过渡生命周期');
 });
 
+test('detail intro expanded state overrides the refined collapsed max-height', () => {
+  const refined = fs.readFileSync(path.join(root, 'src/renderer/assets/styles/refined-ui.css'), 'utf8');
+  assert.match(refined, /#app \.intro-text\.expanded\s*\{[^}]*max-height:\s*500px;/);
+});
+
 test('main window uses a borderless floating chrome instead of a title bar', () => {
   const app = fs.readFileSync(path.join(root, 'src/renderer/App.vue'), 'utf8');
   const chrome = fs.readFileSync(path.join(root, 'src/renderer/components/Common/WindowChrome.vue'), 'utf8');
@@ -288,6 +293,27 @@ test('main window uses a borderless floating chrome instead of a title bar', () 
   assert.match(chrome, /-webkit-app-region: drag/);
   assert.match(chrome, /window-chrome-controls[\s\S]*?-webkit-app-region: no-drag/);
   assert.match(chrome, /updateTheme\(this\.isDark \? 'light' : 'dark'\)/);
+});
+
+test('main window can be rebuilt while player windows stay open', () => {
+  const main = fs.readFileSync(path.join(root, 'src/main/index.js'), 'utf8');
+  const start = main.indexOf("secureIpcHandle('show-main-route'");
+  const handler = main.slice(start, start + 700);
+
+  assert.match(main, /app\.on\('second-instance'[\s\S]*?if \(!mainWindow \|\| mainWindow\.isDestroyed\(\)\) \{\s*createWindow\(\)/);
+  assert.match(main, /async function ensureMainWindow\(\)/);
+  assert.match(handler, /await ensureMainWindow\(\)/);
+});
+
+test('player episodes drawer scrolls internally without shifting the video', () => {
+  const playerWindow = fs.readFileSync(path.join(root, 'src/renderer/views/PlayerWindow.vue'), 'utf8');
+
+  // scrollIntoView 会连带滚动带 overflow:hidden 的播放器容器，展开抽屉时视频会向左抽动
+  assert.doesNotMatch(playerWindow, /\.scrollIntoView\s*\(/);
+  assert.match(playerWindow, /scrollCurrentIntoView\(\)\s*\{[\s\S]*?\$refs\.episodesListEl[\s\S]*?list\.scrollTop\s*=/);
+  // overflow: clip 不产生滚动容器，flex 子项必须显式允许收缩，否则内容会把控制栏顶出窗口
+  assert.match(playerWindow, /\.player-body\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*clip;/);
+  assert.match(playerWindow, /\.player-section\s*\{[\s\S]*?min-height:\s*0;/);
 });
 
 test('player pointer focus and fullscreen idle behavior stay independent', () => {

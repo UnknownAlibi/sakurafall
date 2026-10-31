@@ -130,7 +130,7 @@ class SourceProviderRegistry {
     const normalized = String(identity || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
     if (!normalized) return '';
     const digest = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 32);
-    return `playback:sources:v2:${digest}`;
+    return `playback:sources:v3:${digest}`;
   }
 
   getSearchSnapshot(identity, options = {}) {

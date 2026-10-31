@@ -2,6 +2,11 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const HttpClient = require('../../utils/HttpClient');
 const { scoreTitleMatch, normalizeTitle } = require('../cms/TitleMatcher');
+const {
+  extractEpisodeNumber,
+  selectEpisode,
+  selectEpisodeForContext
+} = require('./danmakuEpisodeMapping');
 
 const DEFAULT_PROVIDERS = Object.freeze({
   bilibili: true,
@@ -38,26 +43,6 @@ function stripHtml(value) {
     .replace(/&gt;/g, '>')
     .replace(/\\+$/g, '')
     .trim();
-}
-
-function extractEpisodeNumber(value) {
-  const raw = typeof value === 'object'
-    ? (value?.episodeNumber ?? value?.episode ?? value?.sort ?? value?.title ?? value?.longTitle ?? '')
-    : value;
-  const direct = Number(raw);
-  if (Number.isFinite(direct) && direct > 0) return direct;
-  const text = String(raw || '');
-  const patterns = [
-    /(?:第\s*)?(\d+(?:\.\d+)?)\s*[集话]/i,
-    /(?:S\d+\s*)?E(?:P)?\s*0*(\d+(?:\.\d+)?)/i,
-    /(?:EP|episode)\s*0*(\d+(?:\.\d+)?)/i,
-    /^\s*0*(\d+(?:\.\d+)?)(?:\s|$)/
-  ];
-  for (const pattern of patterns) {
-    const parsed = Number(text.match(pattern)?.[1]);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return 0;
 }
 
 function normalizeComment(comment, source) {
@@ -118,17 +103,6 @@ function titleScore(candidate, context) {
     return { ...best, score: Math.max(0, best.score - 0.2), exact: false };
   }
   return best;
-}
-
-function selectEpisode(episodes, episodeNumber) {
-  const list = Array.isArray(episodes) ? episodes : [];
-  const wanted = Number(episodeNumber) || 0;
-  if (wanted > 0) {
-    const exact = list.find(item => extractEpisodeNumber(item) === wanted);
-    if (exact) return exact;
-    if (Number.isInteger(wanted) && list[wanted - 1]) return list[wanted - 1];
-  }
-  return list[0] || null;
 }
 
 class BilibiliDanmakuProvider {
@@ -214,7 +188,7 @@ class BilibiliDanmakuProvider {
       : `season_id=${encodeURIComponent(candidate.seasonId)}`;
     const detail = await this._json(`https://api.bilibili.com/pgc/view/web/season?${seasonQuery}`);
     const episodes = detail?.result?.episodes || [];
-    const episode = selectEpisode(episodes, context.episodeNumber);
+    const episode = selectEpisodeForContext(episodes, context, candidate);
     if (!episode?.cid) {
       return { comments: [], match: { ...candidate, episodeNumber: context.episodeNumber }, candidates: [candidate] };
     }
@@ -308,10 +282,10 @@ class AcfunDanmakuProvider {
 
     const album = await this._loadAlbum(candidate.albumId);
     const content = album?.albumContent?.contentList || [];
-    const episode = selectEpisode(content.map(item => ({
+    const episode = selectEpisodeForContext(content.map(item => ({
       ...item,
       episodeNumber: extractEpisodeNumber(item.title)
-    })), context.episodeNumber);
+    })), context, candidate);
     const video = (episode?.videoList || []).sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0))[0];
     if (!video?.id) {
       return { comments: [], match: { ...candidate, episodeNumber: context.episodeNumber }, candidates: [candidate] };
@@ -474,7 +448,7 @@ class TencentDanmakuProvider {
     if (!candidate) return { comments: [], match: null, candidates: await this.search(context) };
 
     const episodes = await this._loadEpisodes(candidate.id);
-    const episode = selectEpisode(episodes, context.episodeNumber);
+    const episode = selectEpisodeForContext(episodes, context, candidate);
     if (!episode?.vid) {
       return { comments: [], match: { ...candidate, episodeNumber: context.episodeNumber }, candidates: [candidate] };
     }
@@ -686,7 +660,7 @@ class IqiyiDanmakuProvider {
     if (!candidate) return { comments: [], match: null, candidates: await this.search(context) };
 
     const episodes = await this._loadEpisodes(candidate.id);
-    const episode = selectEpisode(episodes, context.episodeNumber);
+    const episode = selectEpisodeForContext(episodes, context, candidate);
     if (!episode?.vid) {
       return { comments: [], match: { ...candidate, episodeNumber: context.episodeNumber }, candidates: [candidate] };
     }
@@ -992,7 +966,7 @@ class YoukuDanmakuProvider {
     if (!candidate) return { comments: [], match: null, candidates: await this.search(context) };
 
     const episodes = await this._loadEpisodes(candidate.id);
-    const episode = selectEpisode(episodes, context.episodeNumber);
+    const episode = selectEpisodeForContext(episodes, context, candidate);
     if (!episode?.vid) {
       return { comments: [], match: { ...candidate, episodeNumber: context.episodeNumber }, candidates: [candidate] };
     }
@@ -1288,7 +1262,7 @@ class DanmakuProviderRegistry {
         let candidates = [];
         if (!match) {
           candidates = await this.dandanplay.searchAnime(context.animeName);
-          match = this._selectDandanEpisode(candidates, context);
+          match = await this._selectDandanEpisode(candidates, context);
         }
         const comments = match?.episodeId ? await this.dandanplay.getComments(match.episodeId) : [];
         result = { comments: comments.map(item => normalizeComment(item, id)).filter(Boolean), match, candidates };
@@ -1317,7 +1291,7 @@ class DanmakuProviderRegistry {
   async _resolveProviderWithTimeout(id, context) {
     // 腾讯/爱奇艺/优酷分片请求多（单集约 25~50 个），单独放宽到 15 秒
     const timeoutMs = id === 'custom' ? 10000
-      : ['tencent', 'iqiyi', 'youku'].includes(id) ? 15000
+      : ['dandanplay', 'tencent', 'iqiyi', 'youku'].includes(id) ? 15000
         : 8000;
     let timeoutId;
     try {
@@ -1342,11 +1316,20 @@ class DanmakuProviderRegistry {
     }
   }
 
-  _selectDandanEpisode(candidates, context) {
+  async _selectDandanEpisode(candidates, context) {
     const ranked = (candidates || []).map(item => ({ item, ...titleScore(item.title || item.animeTitle, context) }))
       .sort((a, b) => b.score - a.score);
-    for (const entry of ranked) {
-      const episode = selectEpisode(entry.item.episodes, context.episodeNumber);
+    for (const entry of ranked.slice(0, 3)) {
+      let episodes = entry.item.episodes;
+      if (!Array.isArray(episodes) || episodes.length === 0) {
+        try {
+          episodes = await this.dandanplay.getBangumi(entry.item.animeId ?? entry.item.id);
+          entry.item.episodes = episodes;
+        } catch (_) {
+          episodes = [];
+        }
+      }
+      const episode = selectEpisodeForContext(episodes, context, entry.item);
       const episodeId = episode?.episodeId ?? episode?.id;
       if (episodeId) {
         return {
@@ -1396,7 +1379,9 @@ class DanmakuProviderRegistry {
   _cacheKey(context) {
     const overrideKey = JSON.stringify(context.overrides || {});
     const providerKey = (context.providerIds || []).join(',');
-    return `danmaku:merged:v2:${normalizeTitle(context.animeName)}:${context.episodeNumber}:${context.bgmId}:${providerKey}:${overrideKey}`;
+    const aliasKey = (context.aliases || []).map(normalizeTitle).filter(Boolean).slice(0, 12).join(',');
+    const seasonKey = `${context.seasonNumber || 0}:${context.episodeAirDate || ''}:${(context.seasonKeywords || []).join('|')}`;
+    return `danmaku:merged:v4:${normalizeTitle(context.animeName)}:${context.episodeNumber}:${context.bgmId}:${aliasKey}:${seasonKey}:${providerKey}:${overrideKey}`;
   }
 
   _readCache(key) {
@@ -1419,5 +1404,6 @@ module.exports = {
   parseBilibiliXml,
   normalizeComment,
   extractEpisodeNumber,
-  selectEpisode
+  selectEpisode,
+  selectEpisodeForContext
 };

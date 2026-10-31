@@ -88,13 +88,6 @@
       </div>
     </div>
 
-    <button v-if="!loading && !error && currentVideo?.anime?.name && controlsVisible" class="source-switch-btn" title="SakuraRoute 智能线路" @click.stop="switchToSameEpisode">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M7 7h11l-3-3"/><path d="M17 17H6l3 3"/><path d="M18 7l-5 5"/><path d="M6 17l5-5"/>
-      </svg>
-      <span>线路</span>
-    </button>
-
     <div v-show="!loading && !error && !autoRecovering && controlsVisible && (routeStatus.active || currentSourceLabel || playbackStatsLabel || anime4kRuntime.presenting)" class="source-status-pill">
       <span v-if="routeStatus.active" class="sakura-route-state" :class="`is-${routeStatus.phase}`" :title="routeStatus.detail">
         <i aria-hidden="true"></i>{{ routeStatus.label }}
@@ -354,8 +347,10 @@
       :ad-ranges="detectedAdRanges"
       :note-markers="noteMarkers"
       :is-muted="videoMuted"
+      :can-switch-source="!loading && !error && !!currentVideo?.anime?.name"
       @controls-hover="onControlsHover"
       @note-marker-click="handleSeek"
+      @source-switch="switchToSameEpisode"
       @toggle-play="togglePlay"
       @seek="handleSeek"
       @seek-relative="seekRelative"
@@ -466,6 +461,7 @@ import {
 import { collectHlsAdRanges, findActiveAdRange } from '../../utils/hlsAdMarkers.js';
 import { toIpcPlainObject } from '../../utils/ipcPayload.js';
 import { extractEpisodeNumber, formatLineName } from '../../utils/episodeList.js';
+import { buildDanmakuContext } from '../../utils/danmakuSearchContext.js';
 import { createEpisodeIdentity } from '../../utils/episodeIdentity.js';
 import {
   beginRouteProbe,
@@ -2640,22 +2636,11 @@ export default {
     },
 
     buildDanmakuSearchContext() {
-      const anime = this.danmakuAnimeMetadata || {};
-      return {
-        animeName: this.danmakuAnimeName,
-        aliases: [
-          anime.name_cn,
-          anime.nameCn,
-          anime.original_name,
-          anime.originalName,
-          anime.rawName,
-          ...(Array.isArray(anime.aliases) ? anime.aliases : []),
-          ...(Array.isArray(anime.alias) ? anime.alias : [])
-        ].filter(Boolean),
-        bgmId: anime.bgmId || anime.bgm_id || anime.subjectId || anime.id || '',
+      return buildDanmakuContext({
+        anime: this.danmakuAnimeMetadata || {},
         episodeNumber: this.danmakuEpisodeNumber,
         providerIds: this.enabledDanmakuProviderIds
-      };
+      });
     },
 
     async refreshDanmaku() {

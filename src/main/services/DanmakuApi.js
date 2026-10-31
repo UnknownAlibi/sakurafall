@@ -169,6 +169,38 @@ class DanmakuApi {
   }
 
   /**
+   * 获取番剧详情与分集列表（搜索接口不返回分集，必须单独查询）
+   * GET /api/v2/bangumi/{animeId}
+   * 返回: [{ episodeId, episodeTitle, episodeNumber, airDate, seasonId }]
+   */
+  async getBangumi(animeId) {
+    if (!animeId) return [];
+    const apiPath = `/api/v2/bangumi/${animeId}`;
+    const cacheKey = `danmaku:v2:bangumi:${animeId}`;
+    const cached = this._readCache(cacheKey);
+    if (cached) return cached;
+
+    const url = `${this.baseUrl}${apiPath}`;
+    console.log(`[DanmakuApi] 获取番剧分集: ${url}`);
+    try {
+      const data = await this.request(url, apiPath);
+      const rawEpisodes = data?.bangumi?.episodes || data?.Bangumi?.Episodes || [];
+      const result = rawEpisodes.map(ep => ({
+        episodeId: ep.episodeId ?? ep.EpisodeId ?? ep.id ?? '',
+        episodeTitle: ep.episodeTitle || ep.episodeName || ep.title || '',
+        episodeNumber: ep.episodeNumber ?? ep.episode ?? ep.sort ?? 0,
+        airDate: ep.airDate || ep.air_date || '',
+        seasonId: ep.seasonId ?? ep.season_id ?? null
+      })).filter(ep => ep.episodeId !== '' && ep.episodeId !== null);
+      this._writeCache(cacheKey, 'bangumi', result, 6 * 60 * 60 * 1000);
+      return result;
+    } catch (err) {
+      console.error('[DanmakuApi] 获取番剧分集失败:', err.message);
+      throw err;
+    }
+  }
+
+  /**
    * 获取某番剧的弹幕池（含相关分集）
    * GET /Comment/{animeId}?withRelated=true
    * 返回统一格式的弹幕数组: [{ time, color, text, type }]

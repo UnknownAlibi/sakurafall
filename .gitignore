@@ -149,10 +149,11 @@ anime.db.pre-v*.backup
 
 # Electron 构建产物
 dist-app/
-# dist-app-v2 / v3 是 S2 验收期间用 SAKURAFALL_BUILD_OUTPUT 指定的输出目录
+# dist-app-v2 / v3 / release* 是 S2 验收期间用 SAKURAFALL_BUILD_OUTPUT 指定的输出目录
 # （dist-app 被占用时绕开 EBUSY），均为临时产物，不入库。
 dist-app-v2/
 dist-app-v3/
+dist-app-release*/
 release/
 
 # 渲染层构建产物（打包前由 vite build 重新生成）

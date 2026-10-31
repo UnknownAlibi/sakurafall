@@ -1,6 +1,6 @@
 <template>
   <transition name="modal-fade">
-    <div class="anime-detail-modal" @click="handleBackdropClick">
+    <div class="anime-detail-modal" role="dialog" aria-modal="true" aria-labelledby="anime-detail-title" @click="handleBackdropClick">
       <div
         ref="modalContent"
         class="modal-content"
@@ -18,7 +18,7 @@
         </div>
 
         <!-- 关闭按钮 -->
-        <button class="close-btn" @click="$emit('close')">
+        <button class="close-btn" title="关闭详情" aria-label="关闭详情" @click="$emit('close')">
           <span class="close-icon">✕</span>
         </button>
 
@@ -57,7 +57,7 @@
 
               <div class="anime-details">
                 <div class="title-row">
-                <h2 class="anime-title">{{ anime.name }}</h2>
+                <h2 id="anime-detail-title" class="anime-title">{{ anime.name }}</h2>
                 <!-- 收藏按钮 -->
                 <button
                   class="fav-btn"
@@ -223,11 +223,16 @@
                     </template>
 
                     <div v-else-if="displayPlaySources.length === 0 && !backgroundSourceSearch" class="no-episodes-hint">
-                      <div v-if="sourceSearchNotice" class="source-search-notice source-search-notice-empty" role="status">
+                      <SourceMappingList
+                        v-if="mappingCandidates.length"
+                        :sources="mappingCandidates"
+                        @apply="applyManualSourceMapping"
+                      />
+                      <div v-if="sourceSearchNotice && !mappingCandidates.length" class="source-search-notice source-search-notice-empty" role="status">
                         <strong>{{ sourceSearchNotice.title }}</strong>
                         <span>{{ sourceSearchNotice.detail }}</span>
                       </div>
-                      <p class="no-ep-text">{{ emptySourceMessage }}</p>
+                      <p v-if="!mappingCandidates.length" class="no-ep-text">{{ emptySourceMessage }}</p>
                       <button class="source-search-btn" @click="retryPlaySources">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                         重新搜索播放源
@@ -524,6 +529,8 @@
 <script>
 import CachedImage from '../Common/CachedImage.vue';
 import LoadingMascot from '../Common/LoadingMascot.vue';
+import SourceMappingList from './SourceMappingList.vue';
+import sourceEpisodeMapping from '../../mixins/sourceEpisodeMapping.js';
 import { rankSourcesByMatch } from '../../utils/sourceMatch';
 import { buildSourceSearchQueries, mergeSourceSearchStatuses } from '../../utils/sourceSearchQueries.js';
 import { formatLineName, rankEpisodeLines } from '../../utils/episodeList.js';
@@ -572,7 +579,8 @@ function writePlaySourceCache(anime, sources, queries, complete = false) {
 
 export default {
   name: 'AnimeDetail',
-  components: { CachedImage, LoadingMascot },
+  components: { CachedImage, LoadingMascot, SourceMappingList },
+  mixins: [sourceEpisodeMapping],
   props: {
     anime: {
       type: Object,
@@ -1086,6 +1094,7 @@ export default {
         const cached = readPlaySourceCache(this.anime);
         if (cached) {
           this.playSources = this.decoratePlaySourceLines(cached.sources);
+          this.applySavedSourceMappings();
           this.sourceSearchQueriesTried = cached.queries;
           this.loadingSources = false;
           this.expandFirstPlayableSource();
@@ -1107,6 +1116,7 @@ export default {
           if (!isActiveSearch()) return;
           if (persisted && !persisted.stale && !options.refresh) {
             this.playSources = this.decoratePlaySourceLines(persisted.sources || []);
+            this.applySavedSourceMappings();
             this.sourceSearchQueriesTried = persisted.queries || [];
             writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried, true);
             this.expandFirstPlayableSource();
@@ -1168,7 +1178,7 @@ export default {
         this.expandFirstPlayableSource();
         writePlaySourceCache(this.anime, this.playSources, this.sourceSearchQueriesTried, true);
         if (hasPlayableSources && window.electronAPI?.sourceProviderSnapshotSet) {
-          const sources = this.playSources.map(source => {
+          const sources = this.playSources.filter(source => !source.manualMapped).map(source => {
             const snapshotSource = { ...source };
             delete snapshotSource.rankedLines;
             return snapshotSource;
@@ -1200,6 +1210,7 @@ export default {
 
     applyPlaySourceStatuses(statuses) {
       this.playSources = this.decoratePlaySourceLines(rankSourcesByMatch(this.anime, statuses || []));
+      this.applySavedSourceMappings();
       const latestEpisodeCount = this.playSources.reduce((max, source) => (
         source.status === 'success' && source.matchReliable
           ? Math.max(max, Number(source.playableEpisodeCount) || 0)
@@ -1400,50 +1411,6 @@ export default {
       const rect = card.getBoundingClientRect();
       card.style.setProperty('--glow-x', `${event.clientX - rect.left}px`);
       card.style.setProperty('--glow-y', `${event.clientY - rect.top}px`);
-    },
-
-    /**
-     * 点击某源的具体剧集：合并 Bangumi 元数据 + CMS 源播放信息后 emit
-     * 这样播放器拿到的是可直接播放的 m3u8，同时保留了 Bangumi 的 bgm_id 用于关联
-     */
-    onSourceEpisodeClick(sourceIdx, epIdx) {
-      if (this.openingEpisodeKey) return;
-      const source = this.playSources[sourceIdx];
-      if (!source || !source.animeList || source.animeList.length === 0) return;
-      const sourceAnime = source.animeList[0];
-      const lineId = this.sourceEpisodeLineId(sourceIdx);
-      const ep = this.currentSourceEpisodes(sourceIdx)[epIdx];
-      if (!ep) return;
-      this.stopBackgroundSourceSearch();
-
-      // 合并对象：Bangumi 元数据优先（封面/评分/简介/bgmid），CMS 源信息覆盖（source/id/episodes）
-      const mergedAnime = {
-        ...this.anime,
-        source: sourceAnime.source,
-        sourceId: sourceAnime.sourceId || source.sourceId,
-        sourceName: sourceAnime.sourceName || source.sourceName,
-        sourceType: sourceAnime.sourceType || source.sourceType || source.type,
-        providerId: sourceAnime.providerId || source.providerId,
-        id: sourceAnime.id,
-        episodes: sourceAnime.episodes,
-        episode_count: sourceAnime.episode_count,
-        available_episode_count: sourceAnime.episode_count || this.playableEpisodeCount,
-        planned_episode_count: this.plannedEpisodeCount,
-        total_episode_count: this.plannedEpisodeCount,
-        // 保留 Bangumi 的 bgm_id 用于阶段 2 的多源收藏合并
-        bgm_id: this.anime.bgm_id,
-        // 保留 CMS 源的 remarks 等
-        remarks: sourceAnime.remarks || this.anime.remarks
-      };
-
-      this.$emit('play-episode', {
-        anime: mergedAnime,
-        episode: ep,
-        episodeIndex: epIdx,
-        lineIndex: this.sourceLineOptions(sourceIdx).findIndex(line => line.lineId === lineId),
-        lineId,
-        requestKey: this.episodeRequestKey(ep, lineId, epIdx)
-      });
     },
 
     // ===== Bangumi Tab 相关方法 =====

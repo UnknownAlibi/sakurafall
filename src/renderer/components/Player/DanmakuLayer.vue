@@ -8,6 +8,7 @@ import DanmakuEngine from './DanmakuEngine.js';
 import { remapDanmakuComments } from '../../utils/danmakuAlignment.js';
 import { pickReferenceComments } from '../../utils/danmakuAnchors.js';
 import { normalizeIdentityText } from '../../utils/episodeIdentity.js';
+import { buildDanmakuContext } from '../../utils/danmakuSearchContext.js';
 import danmakuAlignmentModule from '../../store/modules/danmakuAlignment.js';
 
 export default {
@@ -257,15 +258,11 @@ export default {
 
       try {
         const metadata = this.animeMetadata || {};
-        const aliases = [
-          metadata.name_cn,
-          metadata.nameCn,
-          metadata.original_name,
-          metadata.originalName,
-          metadata.rawName,
-          ...(Array.isArray(metadata.aliases) ? metadata.aliases : []),
-          ...(Array.isArray(metadata.alias) ? metadata.alias : [])
-        ].filter(Boolean);
+        const context = buildDanmakuContext({
+          anime: { ...metadata, name: this.animeName },
+          episodeNumber: this.episodeNumber,
+          providerIds: this.providerIds
+        });
         const overrides = {
           ...JSON.parse(JSON.stringify(this.sourceOverrides || {})),
           ...JSON.parse(JSON.stringify(this.runtimeOverrides || {}))
@@ -274,12 +271,8 @@ export default {
           overrides.dandanplay = { ...(overrides.dandanplay || {}), episodeId: this.danmakuAnimeId };
         }
         const result = await window.electronAPI.danmakuResolve({
-          animeName: this.animeName,
-          aliases,
-          bgmId: metadata.bgmId || metadata.bgm_id || metadata.subjectId || metadata.id || '',
-          episodeNumber: this.episodeNumber,
+          ...context,
           duration: metadata.duration || 0,
-          providerIds: this.providerIds,
           overrides,
           forceRefresh
         });

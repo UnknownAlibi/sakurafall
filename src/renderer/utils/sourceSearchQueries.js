@@ -49,6 +49,11 @@ export function buildSourceSearchQueries(anime, options = {}) {
 
   const queries = [];
   const seen = new Set();
+  // 季番的“基础标题”必须优先进入搜索，否则 limit 会被完整季名和别名吃掉，
+  // 像“凡人修仙传 第五季”永远搜不到只收录了“凡人修仙传”的源站。
+  const primaryTitle = rawTitles[0] || '';
+  addQuery(queries, seen, primaryTitle);
+  addQuery(queries, seen, primaryTitle.replace(SEASON_SUFFIX, '').trim());
   rawTitles.forEach(title => addQuery(queries, seen, title));
   rawTitles.forEach(title => {
     addQuery(queries, seen, title.replace(SEASON_SUFFIX, '').trim());

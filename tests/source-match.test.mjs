@@ -6,7 +6,7 @@ const moduleSource = await readFile(
   new URL('../src/renderer/utils/sourceMatch.js', import.meta.url),
   'utf8'
 );
-const { rankSourcesByMatch, scoreSourceMatch } = await import(
+const { rankSourcesByMatch, scoreSourceMatch, buildSeasonSearchContext } = await import(
   `data:text/javascript;charset=utf-8,${encodeURIComponent(moduleSource)}`
 );
 
@@ -72,6 +72,82 @@ test('raw names and aliases can establish a reliable source match', () => {
   );
 
   assert.equal(match.reliable, true);
+});
+
+test('season-specific anime rejects same-name live action and other seasons', () => {
+  const anime = {
+    name: '凡人修仙传 第五季',
+    name_cn: '凡人修仙传 第五季',
+    aliases: ['凡人慕兰之战', '凡人修仙传 慕兰之战篇'],
+    air_date: '2026-06-13',
+    type: ['动漫'],
+    planned_episode_count: 52
+  };
+  const source = {
+    sourceId: 'cms:test',
+    status: 'success',
+    results: [
+      { id: 'live', name: '凡人修仙传真人版', year: '2025', type: ['奇幻', '古装'], episode_count: 30 },
+      { id: 's4', name: '凡人修仙传：外海风云', year: '2025', type: ['动画'], episode_count: 52 },
+      { id: 'base', name: '凡人修仙传', year: '2020', type: ['动画'], episode_count: 197 },
+      { id: 'remaster', name: '凡人修仙传重制版', year: '2023', type: ['动画'], episode_count: 21 },
+      { id: 's5', name: '凡人修仙传 慕兰之战', year: '2026', type: [], episode_count: 21 },
+      { id: 's5-explicit', name: '凡人修仙传 第五季', year: '2026', type: ['动画'], episode_count: 21 }
+    ]
+  };
+
+  const ranked = rankSourcesByMatch(anime, [source])[0];
+  assert.ok(['s5', 's5-explicit'].includes(ranked.results[0].id));
+  assert.ok(['s5', 's5-explicit'].includes(ranked.selectedResultId));
+  assert.equal(ranked.matchReliable, true);
+  assert.equal(ranked.requiresEpisodeMapping, false);
+
+  const liveMatch = scoreSourceMatch(anime, { status: 'success', results: [source.results[0]] });
+  assert.equal(liveMatch.reliable, false);
+  assert.equal(liveMatch.contentType, 'live-action');
+
+  const seasonFourMatch = scoreSourceMatch(anime, { status: 'success', results: [source.results[1]] });
+  assert.equal(seasonFourMatch.reliable, false);
+  assert.match(seasonFourMatch.reasons.join(' '), /篇名不一致/);
+
+  const baseMatch = scoreSourceMatch(anime, { status: 'success', results: [source.results[2]] });
+  assert.equal(baseMatch.reliable, false);
+  assert.equal(baseMatch.requiresMapping, true);
+  assert.match(baseMatch.reasons.join(' '), /缺少季信息/);
+
+  const seasonContext = buildSeasonSearchContext(anime);
+  assert.equal(seasonContext.seasonNumber, 5);
+  assert.ok(seasonContext.keywords.includes('慕兰之战'));
+});
+
+test('live action is rejected when the anime type arrives as a tag array', () => {
+  const match = scoreSourceMatch(
+    { name: '测试番剧', type: ['动漫'], year: '2026' },
+    {
+      status: 'success',
+      results: [{ id: 'live', name: '测试番剧真人版', year: '2026', type: ['古装', '奇幻'], episode_count: 30 }]
+    }
+  );
+
+  assert.equal(match.reliable, false);
+  assert.equal(match.contentType, 'live-action');
+  assert.match(match.reasons.join(' '), /真人版/);
+});
+
+test('explicit season candidate is reliable when its alias subtitle matches', () => {
+  const anime = {
+    name: '凡人修仙传 第四季',
+    aliases: ['凡人修仙传 外海风云篇', '凡人修仙传 重返天南篇'],
+    air_date: '2025-01-18',
+    planned_episode_count: 52
+  };
+  const match = scoreSourceMatch(anime, {
+    status: 'success',
+    results: [{ id: 's4', name: '凡人修仙传：外海风云', year: '2025', type: ['动画'], episode_count: 52 }]
+  });
+
+  assert.equal(match.reliable, true);
+  assert.equal(match.seasonMatch, 1);
 });
 
 test('equally matched playable sources prefer proven playback health', () => {

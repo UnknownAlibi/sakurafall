@@ -471,7 +471,12 @@ if (!hasSingleInstanceLock) {
     app.quit();
 } else {
     app.on('second-instance', () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
+        // 主窗口可能在播放窗口仍打开时被单独关闭；再次启动应用时应重建，
+        // 而不是静默退出，否则用户会失去回到主界面的入口。
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            createWindow();
+            return;
+        }
         if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.show();
         mainWindow.focus();
@@ -679,6 +684,12 @@ async function applyNetworkConfig(config = {}) {
 // ===== Phase 9: 窗口状态持久化 → 已抽离至 window-state.js =====
 
 function createWindow() {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        return;
+    }
     const appIcon = loadAppIcon();
 
     // 创建浏览器窗口
@@ -770,6 +781,29 @@ function createWindow() {
 
     // 设置菜单
     createMenu();
+}
+
+/**
+ * 主窗口可能在播放窗口仍打开时被单独关闭。
+ * 重新打开主窗口时等待首屏加载完成，避免路由消息丢失。
+ */
+async function ensureMainWindow() {
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return null;
+    if (win.webContents.isLoadingMainFrame()) {
+        await new Promise(resolve => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                resolve();
+            };
+            win.webContents.once('did-finish-load', finish);
+            setTimeout(finish, 10000);
+        });
+    }
+    return win.isDestroyed() ? null : win;
 }
 
 /**
@@ -1142,10 +1176,12 @@ app.on('window-all-closed', () => {
     }
 });
 
-app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-    }
+app.on('activate', async () => {
+    const win = await ensureMainWindow();
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
 });
 
 // IPC 通信处理
@@ -1630,11 +1666,13 @@ secureIpcHandle('image-cache-batch-lookup', async (event, urls, options) => {
 });
 
 secureIpcHandle('show-main-route', async (event, route = '/settings') => {
-    if (!mainWindow || mainWindow.isDestroyed()) return { success: false };
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.webContents.send('navigate-main-route', String(route || '/settings'));
+    // 播放窗口仍在时，主窗口可能已被关闭；这里按需重建，作为回主界面的兜底入口。
+    const win = await ensureMainWindow();
+    if (!win) return { success: false };
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    win.webContents.send('navigate-main-route', String(route || '/settings'));
     return { success: true };
 });
 

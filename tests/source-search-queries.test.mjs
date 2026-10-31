@@ -25,6 +25,15 @@ test('source queries include display name, raw title, aliases and seasonless var
   assert.ok(queries.includes('SPY×FAMILY'));
 });
 
+test('season titles keep the seasonless base title before compact variants', () => {
+  const queries = buildSourceSearchQueries({
+    name: '凡人修仙传 第五季',
+    aliases: ['凡人慕兰之战', '凡人修仙传 慕兰之战篇']
+  }, { limit: 3 });
+
+  assert.deepEqual(queries, ['凡人修仙传 第五季', '凡人修仙传', '凡人慕兰之战']);
+});
+
 test('source statuses merge alias results per provider without duplicates', () => {
   const merged = mergeSourceSearchStatuses(
     [{ providerId: 'cms:a', status: 'noResult', keyword: '中文名', results: [], elapsedMs: 10 }],

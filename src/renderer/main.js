@@ -106,7 +106,7 @@ app.use(store);
 app.use(router);
 
 // 挂载应用
-app.mount('#app');
+app.mount('#app-root');
 
 function removeInitialLoading() {
   setTimeout(() => {

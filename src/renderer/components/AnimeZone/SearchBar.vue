@@ -6,9 +6,10 @@
       @keyup.enter="$emit('search')"
       type="text"
       :placeholder="placeholder"
+      :aria-label="placeholder || '搜索番剧'"
       class="search-input"
     />
-    <button @click="$emit('search')" class="search-btn" :disabled="!value || !value.trim()">
+    <button @click="$emit('search')" class="search-btn" title="搜索" aria-label="搜索" :disabled="!value || !value.trim()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     </button>
     <button v-if="hasKeyword" @click="$emit('clear')" class="clear-btn" title="清除搜索">✕</button>
