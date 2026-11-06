@@ -71,6 +71,8 @@ class DanmakuAlignmentStore {
         cuts: parseJsonArray(row.cuts),
         inserts: parseJsonArray(row.inserts)
       },
+      // auto = 系统推导（可被后续检测刷新）；manual = 用户调整（不再自动覆盖）
+      origin: row.origin === 'auto' ? 'auto' : (row.origin === 'manual' ? 'manual' : ''),
       updatedAt: row.updated_at || 0
     };
   }
@@ -92,7 +94,7 @@ class DanmakuAlignmentStore {
   }
 
   /** 保存（upsert）一份校准；alignment 全空时等价于删除，避免留下无意义记录 */
-  save({ episodeKey, workKey = '', bgmId = null, episodeNumber = null, sourceId = '', providerId = '', alignment } = {}) {
+  save({ episodeKey, workKey = '', bgmId = null, episodeNumber = null, sourceId = '', providerId = '', alignment, origin = 'manual' } = {}) {
     if (!this.db) return { ok: false, error: '数据库未就绪' };
     const key = normalizeKey(episodeKey);
     if (!key) return { ok: false, error: '缺少剧集身份' };
@@ -103,11 +105,12 @@ class DanmakuAlignmentStore {
     const now = Date.now();
     const sid = normalizeKey(sourceId);
     const pid = normalizeKey(providerId);
+    const cleanOrigin = origin === 'auto' ? 'auto' : 'manual';
     try {
       this.db.prepare(`
         INSERT INTO danmaku_alignments
-          (episode_key, work_key, bgm_id, episode_number, source_id, provider_id, offset, cuts, inserts, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (episode_key, work_key, bgm_id, episode_number, source_id, provider_id, offset, cuts, inserts, origin, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(episode_key, source_id, provider_id) DO UPDATE SET
           work_key = excluded.work_key,
           bgm_id = excluded.bgm_id,
@@ -115,6 +118,7 @@ class DanmakuAlignmentStore {
           offset = excluded.offset,
           cuts = excluded.cuts,
           inserts = excluded.inserts,
+          origin = excluded.origin,
           updated_at = excluded.updated_at
       `).run(
         key,
@@ -126,6 +130,7 @@ class DanmakuAlignmentStore {
         clean.offset,
         JSON.stringify(clean.cuts),
         JSON.stringify(clean.inserts),
+        cleanOrigin,
         now,
         now
       );
@@ -172,6 +177,46 @@ class DanmakuAlignmentStore {
       return { offset: Math.round(median * 10) / 10, sampleCount: offsets.length };
     } catch (error) {
       console.error('[DanmakuAlignment] 历史偏移统计失败:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * 作品级片头长度模板：从其他集已确认的 intro 片段取中位数，
+   * 当作「标准版片头长度」的代理值。
+   *
+   * 用途：当前集没有弹幕锚点（冷门番常见）时，仍能判断本视频片头是否被剪短：
+   * 模板 90 秒、本视频无片头 → 推出 0-90 秒属于被删区间，弹幕整体前移 90 秒。
+   *
+   * 必须排除当前集：否则「本集片头被删」会把自己的 0 秒算进模板。
+   * @param {{ bgmId?: number|string, workKey?: string, excludeEpisodeKey?: string }} params
+   * @returns {{ introLength: number, samples: number } | null}
+   */
+  getWorkIntroTemplate({ bgmId = 0, workKey = '', excludeEpisodeKey = '' } = {}) {
+    if (!this.db) return null;
+    const id = Math.max(0, Number(bgmId) || 0);
+    const work = normalizeKey(workKey);
+    if (!id && !work) return null;
+    try {
+      const rows = this.db.prepare(`
+        SELECT start, end FROM episode_segments
+        WHERE kind = 'intro' AND confirmed = 1
+          AND episode_key != ?
+          AND ((? > 0 AND bgm_id = ?) OR (work_key != '' AND work_key = ?))
+      `).all(normalizeKey(excludeEpisodeKey), id, id, work);
+      const lengths = rows
+        .map(row => toFiniteNumber(row.end, 0) - toFiniteNumber(row.start, 0))
+        .filter(length => length >= 5)
+        .sort((a, b) => a - b);
+      if (lengths.length < 2) return null;
+      const median = lengths[Math.floor(lengths.length / 2)];
+      const spread = Math.max(...lengths.map(value => Math.abs(value - median)));
+      // 各集片头差异过大说明数据不可信（不同源/不同剪辑），宁可不给模板
+      if (spread > 10) return null;
+      return { introLength: Math.round(median * 10) / 10, samples: lengths.length };
+    } catch (error) {
+      // episode_segments 表缺失（旧库）等情况按「无模板」处理
+      console.warn('[DanmakuAlignment] 片头模板统计失败:', error.message);
       return null;
     }
   }

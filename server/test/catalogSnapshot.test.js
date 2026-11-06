@@ -84,7 +84,75 @@ test('warm scans use actual page lengths and publish only after every category c
   assert.ok(catalog.lastFullWarmAt > 0);
 });
 
-test('incomplete or unstable scans leave the published version and disk unchanged', async t => {
+test('单页抓取失败会重试，不会让整轮预热作废', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-retry-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const catalog = new CatalogSnapshotService({
+    dataDir,
+    warmEnabled: false,
+    warmDelayMs: 25,
+    warmFetchAttempts: 3,
+    warmRetryDelayMs: 20
+  });
+  t.after(() => catalog.close());
+
+  let failures = 0;
+  const result = await catalog.warm(async ({ category, offset }) => {
+    if (category !== 0) return { total: 0, data: [] };
+    if (offset === 0 && failures < 2) {
+      failures += 1;
+      throw new Error('fetch failed');
+    }
+    return { total: 1, data: offset === 0 ? [{ id: 1, type: 2, name: 'x' }] : [] };
+  });
+
+  assert.equal(failures, 2, '前两次失败都应在同一页被重试掉');
+  assert.equal(result.total, 1);
+});
+
+test('补图游标轮转：每轮从上次结束的位置继续，避免总是重试同一批', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-cursor-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const catalog = new CatalogSnapshotService({
+    dataDir,
+    warmEnabled: false,
+    coverRefillLimit: 2,
+    coverRefillDelayMs: 50
+  });
+  t.after(() => catalog.close());
+
+  catalog.ingest([
+    { id: 1, type: 2, name: 'a', images: {} },
+    { id: 2, type: 2, name: 'b', images: {} },
+    { id: 3, type: 2, name: 'c', images: {} }
+  ]);
+
+  const firstRun = [];
+  await catalog._refillMissingCovers(async id => {
+    firstRun.push(id);
+    return { id, type: 2, name: `n${id}`, images: {} };
+  });
+  assert.deepEqual(firstRun, [1, 2]);
+
+  const secondRun = [];
+  await catalog._refillMissingCovers(async id => {
+    secondRun.push(id);
+    return { id, type: 2, name: `n${id}`, images: {} };
+  });
+  assert.deepEqual(secondRun, [3, 1], '第二轮应从游标之后继续并绕回开头');
+
+  // 上游真的有图时才计数并写入
+  const refilled = await catalog._refillMissingCovers(async id => ({
+    id,
+    type: 2,
+    name: `n${id}`,
+    images: { common: `https://lain.bgm.tv/${id}.jpg` }
+  }));
+  assert.equal(refilled, 2);
+  assert.equal(catalog.records.get(2).subject.images.common, 'https://lain.bgm.tv/2.jpg');
+});
+
+test('incomplete scans leave the published version and disk unchanged', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-failure-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   const catalog = new CatalogSnapshotService({ dataDir, warmEnabled: false, warmDelayMs: 25 });
@@ -93,17 +161,33 @@ test('incomplete or unstable scans leave the published version and disk unchange
   catalog.flush();
   const version = catalog.generatedAt;
   const original = await fs.readFile(catalog.filePath, 'utf8');
-  for (const second of [
-    { total: 2, data: [] },
-    { total: 3, data: [{ id: 2, type: 2, name: 'new' }] },
-    { total: 2, data: [{ id: 1, type: 2, name: 'duplicate' }] }
-  ]) {
-    await assert.rejects(catalog.warm(async ({ offset }) => offset ? second : { total: 2, data: [{ id: 1, type: 2, name: 'first' }] }));
-    assert.equal(catalog.records.size, 1);
-    assert.equal(catalog.generatedAt, version);
-    assert.equal(catalog.lastFullWarmAt, 0);
-    assert.equal(await fs.readFile(catalog.filePath, 'utf8'), original);
-  }
+
+  // 末页返回空但 total 还没扫完 → 数据不完整，整轮作废
+  await assert.rejects(catalog.warm(async ({ offset }) => (offset
+    ? { total: 2, data: [] }
+    : { total: 2, data: [{ id: 1, type: 2, name: 'first' }] })));
+  assert.equal(catalog.records.size, 1);
+  assert.equal(catalog.generatedAt, version);
+  assert.equal(catalog.lastFullWarmAt, 0);
+  assert.equal(await fs.readFile(catalog.filePath, 'utf8'), original);
+});
+
+test('长扫描期间的 total 增长与跨页重复属于正常抖动，不应让预热失败', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sakurafall-catalog-drift-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const catalog = new CatalogSnapshotService({ dataDir, warmEnabled: false, warmDelayMs: 25 });
+  t.after(() => catalog.close());
+
+  const result = await catalog.warm(async ({ category, offset }) => {
+    if (category !== 0) return { total: 0, data: [] };
+    if (offset === 0) return { total: 2, data: [{ id: 1, type: 2, name: 'a' }] };
+    // 第二页：total 增长到 3，且第一条与第一页重复（分页位移）
+    return { total: 3, data: [{ id: 1, type: 2, name: 'a' }, { id: 2, type: 2, name: 'b' }] };
+  });
+
+  assert.equal(result.total, 2, '重复条目应被去重，页面位移不产生脏数据');
+  assert.equal(catalog.records.has(1), true);
+  assert.equal(catalog.records.has(2), true);
 });
 
 test('payload cache is bounded by bytes as well as entries', async t => {

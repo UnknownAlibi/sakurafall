@@ -25,6 +25,20 @@
     </transition>
 
     <transition name="fade">
+      <button
+        v-if="skippableIntroRange"
+        type="button"
+        class="skip-intro-capsule"
+        title="点击跳过片头"
+        @click="skipCurrentIntro"
+      >
+        <span class="skip-intro-icon" aria-hidden="true">⏭</span>
+        <span>跳过片头</span>
+        <span class="skip-intro-countdown">{{ Math.max(1, Math.round(skippableIntroRange.end - currentTime)) }}s</span>
+      </button>
+    </transition>
+
+    <transition name="fade">
       <div v-if="danmakuNotice" class="danmaku-notice" :class="`is-${danmakuNoticeTone}`">
         {{ danmakuNotice }}
       </div>
@@ -126,22 +140,28 @@
             未找到可用候选源
           </div>
           <div v-else class="source-candidate-list">
-            <button v-for="(candidate, index) in sourceCandidates" :key="`${candidate.sourceId}-${candidate.lineId}-${candidate.url}`" class="source-candidate" :class="{ recommended: index === 0, resolving: sourcePanelResolving === candidate }" @click="playSourceCandidate(candidate)">
+            <button
+              v-for="(candidate, index) in sourceCandidates"
+              :key="`${candidate.sourceId}-${candidate.lineId}-${candidate.url}`"
+              class="source-candidate"
+              :class="{ recommended: index === 0, resolving: sourcePanelResolving === candidate }"
+              :title="candidateTooltip(candidate)"
+              @click="playSourceCandidate(candidate)"
+            >
               <span class="candidate-main">
                 <span class="candidate-source">
-                  {{ candidate.sourceName || candidate.sourceId }}
+                  <span class="candidate-name">{{ candidate.sourceName || candidate.sourceId }}</span>
                   <em v-if="index === 0">推荐</em>
                   <em v-if="sourceLineCounts[candidate.sourceId] > 1 && candidate.lineId" class="line-badge">{{ formatLineName(candidate.lineId) }}</em>
                 </span>
                 <span class="candidate-episode">{{ candidate.episodeTitle || candidate.episode?.title }}</span>
               </span>
               <span class="candidate-meta">
-                <span class="candidate-chip quality">{{ formatCandidateQuality(candidate) }}</span>
-                <span class="candidate-chip" :class="candidateHealthClass(candidate)">健康 {{ candidate.healthScore ?? '--' }}</span>
-                <span v-if="candidate.health?.playbackSessionCount" class="candidate-chip" :title="candidateHealthTitle(candidate)">首帧 {{ formatCandidateStartup(candidate) }}</span>
-                <span v-if="candidate.health?.playbackSessionCount" class="candidate-chip" :class="candidateStallClass(candidate)">卡顿 {{ formatCandidateRatio(candidate.health.averageStallRatio) }}</span>
-                <span v-if="candidate.health?.advertisingReportCount" class="candidate-chip issue-ad">广告反馈 {{ candidate.health.advertisingReportCount }}</span>
-                <span class="candidate-chip">{{ formatMatchType(candidate.matchType) }}</span>
+                <span v-if="hasCandidateQuality(candidate)" class="candidate-chip quality">{{ formatCandidateQuality(candidate) }}</span>
+                <span v-if="candidate.health?.advertisingReportCount" class="candidate-chip issue-ad">广告 {{ candidate.health.advertisingReportCount }}</span>
+                <span class="candidate-health" :class="candidateHealthClass(candidate)">
+                  <i aria-hidden="true"></i>{{ candidate.healthScore ?? '--' }}
+                </span>
               </span>
             </button>
           </div>
@@ -450,7 +470,7 @@ import CastDialog from './CastDialog.vue';
 import ViewingNotebookPanel from './ViewingNotebookPanel.vue';
 import EpisodeDnaPanel from './EpisodeDnaPanel.vue';
 import { EpisodeDnaCollector } from '../../player/episodeDnaCollector.js';
-import { analyzeIntroFeatures, destroyIntroAnalyzer } from '../../player/episodeDnaClient.js';
+import { destroyIntroAnalyzer } from '../../player/episodeDnaClient.js';
 import {
   classifyPlaybackFailure
 } from '../../utils/playbackDiagnostics.js';
@@ -474,7 +494,8 @@ import {
   updateSakuraRoute
 } from '../../utils/sakuraRouteSession.js';
 import { formatCandidateQuality, formatMatchType, candidateHealthClass, candidateStallClass,
-  formatCandidateStartup, formatCandidateRatio, candidateHealthTitle } from '../../utils/sourceCandidatePresentation.js';
+  formatCandidateStartup, formatCandidateRatio, candidateHealthTitle, hasCandidateQuality,
+  candidateTooltip } from '../../utils/sourceCandidatePresentation.js';
 import { formatAnime4kPreset, formatAnime4kRuntimeTitle } from '../../utils/anime4kPresentation.js';
 import { applyRuntimeHlsBufferPolicy, toHlsBufferConfig } from '../../utils/hlsBufferPolicy.js';
 import { isHlsStream, formatQualityLabel } from '../../utils/hlsStreamPresentation.js';
@@ -619,16 +640,6 @@ export default {
       // 当前进集的手帐时光签（进度条标记数据源）
       noteMarkers: [],
       _noteMarkersToken: 0,
-      // ===== Episode DNA P1 =====
-      // DNA 面板是否可见
-      dnaVisible: false,
-      // Worker 产出的片头候选（仅建议，用户在面板中确认后生效）
-      dnaCandidates: [],
-      // 作品级自动跳过规则（三集稳定确认后由数据库升级）
-      dnaAutoSkipRule: null,
-      // 本集已应用过自动跳过的标记（identity.key），避免重复 seek
-      dnaAutoSkippedKey: '',
-      _dnaRuleToken: 0,
       qualityLevels: [], // hls.js 可用画质列表
       currentQuality: -1, // -1=自动, 0..n=指定画质索引
       _timeUpdateFrame: null,
@@ -770,7 +781,7 @@ export default {
       return describeSakuraRoute(this.sakuraRoute);
     },
     danmakuAnimeMetadata() {
-      return this.currentVideo?.anime || {};
+      return { ...(this.currentVideo?.anime || {}), duration: Number(this.duration) || 0 };
     },
     enabledDanmakuProviderIds() {
       const configured = this.danmakuProviders || {};
@@ -821,6 +832,8 @@ export default {
     formatCandidateStartup,
     formatCandidateRatio,
     candidateHealthTitle,
+    hasCandidateQuality,
+    candidateTooltip,
     ...mapActions('player', [
       'playVideo',
       'setPlaying',
@@ -1168,18 +1181,15 @@ export default {
       }
     },
 
-    // ===== Episode DNA P1：特征采集 → Worker 分析 → 候选确认 =====
-
-    /** 播放开始后启动低频被动采集（每集仅一次，采集 4 分钟窗口） */
+    // ===== Episode DNA P1：特征采集 =====
     startDnaCollection() {
       const video = this.$refs.videoElement;
       if (this._dnaCollector || !video || !this.currentEpisodeIdentity?.key) return;
-      if (this.casting || this.watchTogetherActive) return; // 投屏/同步播放时不采集
+      if (this.casting || this.watchTogetherActive) return;
       try {
         this._dnaCollector = new EpisodeDnaCollector(video, {
           windowMs: 500,
           maxSeconds: 240,
-          // 增强时避开 captureStream（原因见 episodeDnaCollector.js 头注释）
           allowCaptureStream: !this.anime4kEnabled,
           onDone: (features) => this.onDnaCollectionDone(features)
         });
@@ -1189,74 +1199,12 @@ export default {
       }
     },
 
-    /** 采集完成（或超窗）后交给 Worker 分析片头候选 */
     stopDnaCollection(silent = false) {
       if (!this._dnaCollector) return;
       const collector = this._dnaCollector;
       this._dnaCollector = null;
       if (silent) collector.destroy();
       else collector.stop();
-    },
-
-    async onDnaCollectionDone(features) {
-      if (this._dnaCollector) {
-        this._dnaCollector = null;
-      }
-      if (!features) return; // 数据不足或全降级，静默放弃
-      const episodeKey = this.currentEpisodeIdentity?.key;
-      try {
-        const candidates = await analyzeIntroFeatures(features);
-        if (!episodeKey || episodeKey !== this.currentEpisodeIdentity?.key) return; // 已切集，丢弃
-        this.dnaCandidates = Array.isArray(candidates) ? candidates : [];
-      } catch (_) {
-        // Worker 异常不影响播放，候选保持为空
-      }
-    },
-
-    /** 加载作品级自动跳过规则（三集稳定确认后生效） */
-    async loadDnaAutoSkipRule() {
-      const identity = this.currentEpisodeIdentity;
-      if (!identity?.workKey) {
-        this.dnaAutoSkipRule = null;
-        return;
-      }
-      const token = ++this._dnaRuleToken;
-      try {
-        const rule = await window.electronAPI?.episodeSegmentAutoSkipRule?.(identity.bgmId, identity.workKey);
-        if (token !== this._dnaRuleToken) return;
-        this.dnaAutoSkipRule = rule || null;
-      } catch (_) {
-        if (token === this._dnaRuleToken) this.dnaAutoSkipRule = null;
-      }
-    },
-
-    /** 面板保存后规则升级（达到 3 集稳定）时立即生效 */
-    onDnaRuleUpdated(rule) {
-      this.dnaAutoSkipRule = rule || null;
-      this.dnaAutoSkippedKey = '';
-    },
-
-    /** 三集稳定确认后的片头自动跳过（timeupdate 驱动） */
-    maybeAutoSkipDnaIntro(currentTime) {
-      const rule = this.dnaAutoSkipRule;
-      const episodeKey = this.currentEpisodeIdentity?.key;
-      if (!rule || !episodeKey || this.dnaAutoSkippedKey === episodeKey) return;
-      // 一起看同步中不自动跳，避免破坏房间时钟
-      if (this.watchTogetherActive || this.casting) return;
-      const start = Number(rule.start) || 0;
-      const end = Number(rule.end) || 0;
-      if (end <= start || currentTime < start || currentTime >= end - 0.5) return;
-      const video = this.$refs.videoElement;
-      if (!video) return;
-      this.dnaAutoSkippedKey = episodeKey;
-      this.markIntentionalSeek?.();
-      video.currentTime = Math.min(end + 0.05, video.duration || end + 0.05);
-      this.adSkipNotice = `已自动跳过片头 ${Math.max(1, Math.round(end - currentTime))} 秒`;
-      if (this._adSkipNoticeTimer) clearTimeout(this._adSkipNoticeTimer);
-      this._adSkipNoticeTimer = setTimeout(() => {
-        this._adSkipNoticeTimer = null;
-        this.adSkipNotice = '';
-      }, 2200);
     },
 
     getCurrentProviderId() {

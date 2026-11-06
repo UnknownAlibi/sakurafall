@@ -12,6 +12,10 @@ function registerDanmakuIpc({ handle, danmakuApi, alignmentStore }) {
   handle('danmaku-alignment-work-suggestion', async (_event, payload = {}) => (
     alignmentStore ? alignmentStore.getWorkSuggestion(payload || {}) : null
   ));
+  // 作品级片头长度模板：没有弹幕锚点时用来判断「本视频片头是否被剪短」
+  handle('danmaku-alignment-work-template', async (_event, payload = {}) => (
+    alignmentStore ? alignmentStore.getWorkIntroTemplate(payload || {}) : null
+  ));
 
   handle('danmaku-set-credentials', async (_event, appId, appSecret) => {
     try {

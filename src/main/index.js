@@ -7,7 +7,7 @@ const { applyFullscreenCompatFlags, registerWindowFullscreenIpc, bindFullscreenS
 const { loadWindowState, applyWindowState, bindWindowStatePersistence } = require('./window-state');
 // GPU 合成偏好（设置页开关落盘到 userData）
 const { resolveGpuCompositingPreferenceFile } = require('./utils/gpuCompositingPreference');
-const { isPathInside, isMpvExecutablePath, isSupportedImagePath } = require('./utils/pathGuards');
+const { isSupportedImagePath } = require('./utils/pathGuards');
 const { registerGpuIpc } = require('./ipc/gpu');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -117,6 +117,13 @@ const { registerSettingsSecretsIpc } = require('./ipc/settingsSecrets');
 const { registerPlaybackHealthIpc } = require('./ipc/playbackHealth');
 const { registerSourceProviderIpc } = require('./ipc/sourceProviders');
 const { registerUpdateIpc } = require('./ipc/update');
+const { registerPlayerWindowIpc } = require('./ipc/playerWindow');
+const { registerEnhancedPlayerIpc } = require('./ipc/enhancedPlayer');
+const { registerDownloadsIpc } = require('./ipc/downloads');
+const { registerUpdateReminderIpc } = require('./ipc/updateReminder');
+const { registerSubtitlesIpc } = require('./ipc/subtitles');
+const { registerDlnaIpc } = require('./ipc/dlna');
+const { registerWatchTogetherIpc } = require('./ipc/watchTogether');
 const playerSvc = require('./services/LazyPlayerServices');
 const videoStreamProxy = require('./services/VideoStreamProxyService');
 
@@ -224,6 +231,19 @@ process.on('uncaughtException', (error) => {
 
 // 番剧下载器实例（在 app.whenReady 中初始化，需要 userData 路径）
 let downloader = null;
+function attachDownloadPlayUrl(task) {
+    if (!task) return task;
+    if (task.status === 'completed' && task.filePath && fs.existsSync(task.filePath)) {
+        try {
+            const playUrl = mediaLibraryService?.createMediaUrl?.('downloads', task.filePath) || '';
+            return { ...task, playUrl };
+        } catch (_) {
+            return task;
+        }
+    }
+    return task;
+}
+
 
 // 番剧更新提醒实例（在 app.whenReady 中初始化，需要 animeDb 和 cmsApiService）
 let updateReminder = null;
@@ -273,39 +293,6 @@ function openExternalUrl(rawUrl) {
 
 // 以图搜番：只读取常见位图，且限制单文件大小，避免渲染器传入任意大文件/非图片。
 const MAX_TRACE_MOE_IMAGE_BYTES = 20 * 1024 * 1024;
-
-/**
- * 增强播放器选项来自渲染器，mpvPath 不允许指向任意可执行文件。
- * 合法值：mpv.exe / mpvnet.exe / mpv-x86_64.exe 等以 mpv 开头的绝对 .exe 路径。
- */
-function normalizeEnhancedPlayerOptions(options = {}) {
-    if (!options || typeof options !== 'object' || Array.isArray(options)) return {};
-    const mpvPath = String(options.mpvPath || '').trim();
-    if (mpvPath && !isMpvExecutablePath(mpvPath)) {
-        throw new Error('mpv 路径无效：请选择 mpv.exe、mpvnet.exe 或其变体');
-    }
-    // 播放器内部地址可能是 sakurafall-media://proxy/...，外部 mpv 无法识别；
-    // 统一还原为原始 HTTP(S) 地址，并保留代理 URL 里的 Referer。
-    const target = videoStreamProxy.resolveProxyTarget(options.url, options.headers);
-    return { ...options, mpvPath, url: target.url, headers: target.headers };
-}
-
-/**
- * 下载器相关路径只允许当前下载目录或已知任务的路径/父目录，
- * 避免渲染器把任意文件交给 shell.openPath / showItemInFolder。
- */
-function isManagedDownloadPath(target) {
-    if (!downloader) return false;
-    const resolved = path.resolve(String(target || ''));
-    const root = String(downloader.downloadDir || '').trim();
-    if (root && isPathInside(root, resolved)) return true;
-    for (const task of downloader.tasks.values()) {
-        if (!task?.filePath) continue;
-        const taskPath = path.resolve(task.filePath);
-        if (taskPath === resolved || path.dirname(taskPath) === resolved) return true;
-    }
-    return false;
-}
 
 function secureIpcHandle(channel, listener) {
     registerIpcHandler(channel, (event, ...args) => {
@@ -491,6 +478,7 @@ const playerWindows = new Set();
 const playbackPressure = require('./utils/playbackPressure')(playerWindows, () => mainWindow);
 // 待传递给各播放窗口的视频数据，按 webContents.id 隔离（播放窗口加载后通过 IPC 拉取）
 const pendingPlayerDataMap = new Map();
+const playerPreMiniBounds = new Map();
 
 // 全局网络/缓存配置
 const appConfig = {
@@ -1084,7 +1072,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
                 const windows = BrowserWindow.getAllWindows();
                 for (const win of windows) {
                     if (!win.isDestroyed()) {
-                        win.webContents.send('on-download-progress', task);
+                        win.webContents.send('on-download-progress', attachDownloadPlayUrl(task));
                     }
                 }
             } catch (_) { /* ignore */ }
@@ -1255,131 +1243,13 @@ secureIpcHandle('is-maximized', (event) => {
 // 窗口全屏 IPC（切换/查询）见 window-fullscreen.js
 registerWindowFullscreenIpc(secureIpcHandle);
 
-// 独立播放窗口：打开
-secureIpcHandle('background-playback-pressure', () => playerWindows.size > 0);
-
-secureIpcHandle('open-player-window', (event, videoData) => {
-    try {
-        const win = createPlayerWindow(videoData);
-        return { success: true, windowId: win.webContents.id };
-    } catch (error) {
-        console.error('[PlayerWindow] 创建播放窗口失败:', error);
-        return { success: false, error: error?.message || String(error) };
-    }
-});
-
-// 独立播放窗口：拉取待播放数据
-// 按窗口的 webContents.id 隔离，支持多窗口同时打开各自拿各自的数据
-// 注意：event.sender 本身就是 webContents，不需要再 .webContents
-secureIpcHandle('player-get-data', (event) => {
-    const id = event.sender.id;
-    return pendingPlayerDataMap.get(id);
-});
-
-// 独立播放窗口：将后台解析完成的数据推送到已打开的准备窗口
-secureIpcHandle('update-player-window', (event, windowId, videoData) => {
-    const targetId = Number(windowId);
-    const win = Array.from(playerWindows).find(item => (
-        !item.isDestroyed() && item.webContents.id === targetId
-    ));
-    if (!win) return { success: false, error: '播放窗口已关闭' };
-    pendingPlayerDataMap.set(targetId, videoData || null);
-    if (!win.webContents.isLoading()) {
-        win.webContents.send('player-load-new', videoData || null);
-    }
-    return { success: true };
-});
-
-secureIpcHandle('close-player-window', (event, windowId) => {
-    const targetId = Number(windowId);
-    const win = Array.from(playerWindows).find(item => (
-        !item.isDestroyed() && item.webContents.id === targetId
-    ));
-    if (!win) return false;
-    win.close();
-    return true;
-});
-
-// 独立播放窗口：切换置顶
-secureIpcHandle('player-toggle-top', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return false;
-    const newState = !win.isAlwaysOnTop();
-    win.setAlwaysOnTop(newState);
-    return newState;
-});
-
-// 独立播放窗口：查询当前置顶状态
-secureIpcHandle('player-is-top', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    return win ? win.isAlwaysOnTop() : false;
-});
-
-// Phase 9: 迷你模式（缩小窗口 + 置顶 + 跳过任务栏可选）
-// 迷你模式：400x225（16:9），始终置顶，不在任务栏显示（仅托盘区）
-// 退出迷你模式：恢复为持久化的播放窗口尺寸
-const PLAYER_MINI_SIZE = { width: 400, height: 225 };
-const playerPreMiniBounds = new Map(); // webContentsId -> 上一次的 bounds
-
-secureIpcHandle('player-toggle-mini', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return false;
-    const bounds = win.getBounds();
-    const isMini = bounds.width <= PLAYER_MINI_SIZE.width + 10;
-    console.log(`[MiniMode] toggle-mini 被调用, current bounds=${JSON.stringify(bounds)}, isMini=${isMini}`);
-    if (isMini) {
-        // 退出迷你模式：恢复持久化尺寸
-        const id = event.sender.id;
-        const saved = playerPreMiniBounds.get(id);
-        console.log(`[MiniMode] 退出迷你模式, saved=${saved ? JSON.stringify(saved) : 'null'}`);
-        try {
-            // 先恢复最小尺寸限制
-            win.setMinimumSize(480, 360);
-            if (saved) {
-                win.setBounds(saved);
-                playerPreMiniBounds.delete(id);
-            } else {
-                const state = loadWindowState().playerWindow;
-                if (state && Number.isFinite(state.width) && Number.isFinite(state.height)) {
-                    win.setBounds({
-                        width: Math.max(480, state.width),
-                        height: Math.max(360, state.height)
-                    });
-                } else {
-                    win.setSize(1000, 620);
-                }
-            }
-            win.setAlwaysOnTop(false);
-            win.setSkipTaskbar(false);
-            console.log(`[MiniMode] 退出完成, new bounds=${JSON.stringify(win.getBounds())}`);
-        } catch (e) {
-            console.error(`[MiniMode] 退出失败:`, e);
-        }
-        return false;
-    } else {
-        // 进入迷你模式：先保存当前尺寸
-        try {
-            playerPreMiniBounds.set(event.sender.id, win.getBounds());
-            // 取消最小尺寸限制，否则 400x225 会被强制为 480x360，导致退出时判断失败
-            win.setMinimumSize(1, 1);
-            win.setBounds({
-                width: PLAYER_MINI_SIZE.width,
-                height: PLAYER_MINI_SIZE.height
-            });
-            win.setAlwaysOnTop(true);
-            win.setSkipTaskbar(false); // 保留任务栏便于用户找回
-            console.log(`[MiniMode] 进入完成, new bounds=${JSON.stringify(win.getBounds())}`);
-        } catch (e) {
-            console.error(`[MiniMode] 进入失败:`, e);
-        }
-        return true;
-    }
-});
-
-secureIpcHandle('player-is-mini', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return false;
-    return win.getBounds().width <= PLAYER_MINI_SIZE.width + 10;
+registerPlayerWindowIpc({
+    handle: secureIpcHandle,
+    playerWindows,
+    pendingPlayerDataMap,
+    createPlayerWindow,
+    loadWindowState,
+    BrowserWindow
 });
 
 // 文件对话框
@@ -1492,32 +1362,10 @@ secureIpcHandle('trace-moe-search-data-url', async (event, dataUrl) => {
     }
 });
 
-// Phase 6: 增强播放（mpv + Anime4K）— 委托给 EnhancedPlayerService
-secureIpcHandle('enhanced-player-check', async (event, options = {}) => {
-    try {
-        return playerSvc.enhanced().check(normalizeEnhancedPlayerOptions(options));
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
-secureIpcHandle('enhanced-player-open', async (event, options = {}) => {
-    try {
-        return playerSvc.enhanced().open(normalizeEnhancedPlayerOptions(options));
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
-});
-
-secureIpcHandle('enhanced-player-install', async () => {
-    return playerSvc.enhanced().install();
-});
-
-secureIpcHandle('enhanced-player-presets', async () => {
-    return {
-        presets: playerSvc.enhanced().getPresets(),
-        defaultPresetId: playerSvc.enhanced().defaultPresetId
-    };
+registerEnhancedPlayerIpc({
+    handle: secureIpcHandle,
+    playerSvc,
+    videoStreamProxy
 });
 
 // ===== 设置页 GPU 合成开关（已抽离至 ipc/gpu.js）=====
@@ -1784,473 +1632,35 @@ btStreamService = registerBtIpc({
 
 registerLibraryIpc({ handle: secureIpcHandle, animeDb, dialog, BrowserWindow });
 
-// ======
-// 番剧下载 IPC 处理
-// ======
-
-// 添加下载任务
-// payload: { anime, episode, url }，anime/episode 字段同播放器 videoData
-secureIpcHandle('download-add', async (event, payload) => {
-    if (!downloader) return { error: '下载器未初始化' };
-    try {
-        if (!payload || !payload.url) {
-            return { error: '下载地址为空' };
-        }
-        const task = downloader.addTask({
-            anime: payload.anime || {},
-            episode: payload.episode || {},
-            url: payload.url
-        });
-        return { success: true, task };
-    } catch (error) {
-        console.error('[Download] 添加下载任务失败:', error);
-        return { error: error.message };
-    }
+registerDownloadsIpc({
+    handle: secureIpcHandle,
+    getDownloader: () => downloader,
+    attachDownloadPlayUrl,
+    dialog,
+    shell,
+    BrowserWindow
 });
 
-// 取消下载（停止任务但保留记录）
-secureIpcHandle('download-cancel', async (event, id) => {
-    if (!downloader) return { error: '下载器未初始化' };
-    const task = downloader.cancel(id);
-    return { success: !!task, task };
+registerUpdateReminderIpc({
+    handle: secureIpcHandle,
+    getUpdateReminder: () => updateReminder
 });
 
-// 暂停下载
-secureIpcHandle('download-pause', async (event, id) => {
-    if (!downloader) return { error: '下载器未初始化' };
-    const task = downloader.pause(id);
-    return { success: !!task, task };
+registerSubtitlesIpc({
+    handle: secureIpcHandle,
+    playerSvc,
+    dialog,
+    BrowserWindow
 });
 
-// 恢复下载
-secureIpcHandle('download-resume', async (event, id) => {
-    if (!downloader) return { error: '下载器未初始化' };
-    const task = downloader.resume(id);
-    return { success: !!task, task };
+registerDlnaIpc({
+    handle: secureIpcHandle,
+    playerSvc,
+    videoStreamProxy
 });
 
-// 获取下载列表
-secureIpcHandle('download-list', async () => {
-    if (!downloader) return { tasks: [], downloadDir: '' };
-    return {
-        tasks: downloader.list(),
-        downloadDir: downloader.downloadDir || ''
-    };
-});
-
-// 删除下载记录和文件
-secureIpcHandle('download-remove', async (event, id) => {
-    if (!downloader) return { error: '下载器未初始化' };
-    const ok = downloader.remove(id);
-    return { success: ok };
-});
-
-// 选择下载目录
-secureIpcHandle('download-select-dir', async (event) => {
-    try {
-        const win = BrowserWindow.fromWebContents(event.sender);
-        const result = await dialog.showOpenDialog(win, {
-            properties: ['openDirectory', 'createDirectory'],
-            title: '选择下载目录'
-        });
-        if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-            return { canceled: true };
-        }
-        const dir = result.filePaths[0];
-        if (downloader) downloader.setDownloadDir(dir);
-        return { canceled: false, dir };
-    } catch (error) {
-        console.error('[Download] 选择下载目录失败:', error);
-        return { canceled: true, error: error.message };
-    }
-});
-
-// 在系统文件管理器中打开下载目录（便利操作，复用 shell.openPath）
-secureIpcHandle('download-open-dir', async (event, dirPath) => {
-    try {
-        const target = path.resolve(String(dirPath || (downloader ? downloader.downloadDir : '') || ''));
-        if (!target) return { success: false, error: '下载目录未设置' };
-        if (!isManagedDownloadPath(target)) {
-            return { success: false, error: '只能打开下载目录或已知任务所在目录' };
-        }
-        if (!fs.statSync(target).isDirectory()) {
-            return { success: false, error: '目标不是目录' };
-        }
-        const errMsg = await shell.openPath(target);
-        return { success: !errMsg, error: errMsg || null };
-    } catch (error) {
-        console.error('[Download] 打开下载目录失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 在系统文件管理器中定位已下载文件（便利操作）
-secureIpcHandle('download-open-file', async (event, filePath) => {
-    try {
-        if (!filePath) return { success: false, error: '文件路径为空' };
-        const target = path.resolve(String(filePath));
-        if (!isManagedDownloadPath(target) || !fs.statSync(target).isFile()) {
-            return { success: false, error: '只能定位下载目录内已下载的文件' };
-        }
-        shell.showItemInFolder(target);
-        return { success: true };
-    } catch (error) {
-        console.error('[Download] 定位文件失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// ======
-// 番剧更新提醒 IPC 处理
-// ======
-
-// 手动触发一次检查
-secureIpcHandle('update-reminder-check', async () => {
-    if (!updateReminder) return { error: '提醒服务未初始化' };
-    try {
-        return await updateReminder.checkNow();
-    } catch (error) {
-        console.error('[UpdateReminder] 手动检查失败:', error);
-        return { error: error.message };
-    }
-});
-
-// 获取提醒列表 + 上次检查时间
-secureIpcHandle('update-reminder-list', async () => {
-    if (!updateReminder) return { reminders: [], lastCheckTime: 0 };
-    return updateReminder.getReminders();
-});
-
-// 标记指定番剧的提醒为已读
-secureIpcHandle('update-reminder-mark-read', async (event, animeId, source) => {
-    if (!updateReminder) return { success: false };
-    updateReminder.markAsRead(animeId, source);
-    return { success: true };
-});
-
-// 清空所有提醒
-secureIpcHandle('update-reminder-clear', async () => {
-    if (!updateReminder) return { success: false };
-    updateReminder.clear();
-    return { success: true };
-});
-
-// 配置提醒服务（启用/禁用、检查间隔）
-secureIpcHandle('update-reminder-configure', async (event, options = {}) => {
-    if (!updateReminder) return { success: false };
-    updateReminder.configure(options);
-    return { success: true };
-});
-
-// ======
-// 字幕（SRT/VTT/ASS 解析 + OpenSubtitles 搜索）IPC 处理
-// ======
-
-/**
- * 选择并解析本地字幕文件
- * 弹出文件选择对话框，读取文件内容并自动检测编码 + 解析为 cue 数组
- * 返回: { success, cues, format, filePath, error? }
- */
-secureIpcHandle('subtitle-parse-file', async (event) => {
-    try {
-        const win = BrowserWindow.fromWebContents(event.sender);
-        const result = await dialog.showOpenDialog(win, {
-            properties: ['openFile'],
-            title: '选择字幕文件',
-            filters: [
-                { name: '字幕文件', extensions: ['srt', 'vtt', 'ass', 'ssa'] },
-                { name: 'All Files', extensions: ['*'] }
-            ]
-        });
-        if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-            return { success: false, canceled: true };
-        }
-        const filePath = result.filePaths[0];
-        const parsed = await playerSvc.subtitle().parseFile(filePath);
-        return {
-            success: true,
-            cues: parsed.cues,
-            format: parsed.format,
-            filePath
-        };
-    } catch (error) {
-        console.error('[Subtitle] 解析字幕文件失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-/**
- * 解析字幕内容字符串（用于在线下载后的字幕或直接传入的内容）
- * 参数: (content, [filePath])，filePath 可选用于辅助判断格式
- * 返回: { success, cues, format, error? }
- */
-secureIpcHandle('subtitle-parse-content', async (event, content, filePath) => {
-    try {
-        if (!content) return { success: false, error: '字幕内容为空' };
-        const cues = playerSvc.subtitle().parseAuto(content, filePath);
-        const ext = filePath ? path.extname(filePath).toLowerCase().replace('.', '') : '';
-        let format = ext;
-        if (!format) {
-            if (/^WEBVTT/i.test(content.trim())) format = 'vtt';
-            else if (/\[SCRIPT INFO\]/i.test(content)) format = 'ass';
-            else format = 'srt';
-        }
-        return { success: true, cues, format };
-    } catch (error) {
-        console.error('[Subtitle] 解析字幕内容失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-/**
- * 在线搜索字幕（OpenSubtitles，需要用户配置 API Key）
- * 参数: (keyword, language='zh')
- * 返回: { success, results, error? }
- */
-secureIpcHandle('subtitle-search', async (event, keyword, language = 'zh') => {
-    try {
-        if (!playerSvc.subtitle().isReady()) {
-            return {
-                success: false,
-                error: '未配置 OpenSubtitles API Key，请在设置中填写'
-            };
-        }
-        const results = await playerSvc.subtitle().searchOnline(keyword, language);
-        return { success: true, results };
-    } catch (error) {
-        console.error('[Subtitle] 在线搜索字幕失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-/**
- * 下载在线字幕文件内容（通过 file_id）
- * 参数: fileId
- * 返回: { success, content, error? }
- */
-secureIpcHandle('subtitle-download', async (event, fileId) => {
-    try {
-        if (!playerSvc.subtitle().isReady()) {
-            return { success: false, error: '未配置 OpenSubtitles API Key' };
-        }
-        const content = await playerSvc.subtitle().downloadSubtitle(fileId);
-        return { success: true, content };
-    } catch (error) {
-        console.error('[Subtitle] 下载字幕失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-/**
- * 设置 OpenSubtitles API Key
- */
-secureIpcHandle('subtitle-set-api-key', async (event, apiKey) => {
-    try {
-        playerSvc.subtitle().setApiKey(apiKey || '');
-        return { success: true };
-    } catch (error) {
-        console.error('[Subtitle] 设置 API Key 失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// ======
-// DLNA 投屏 IPC 处理
-// ======
-
-// 搜索局域网内的 DLNA 设备
-secureIpcHandle('dlna-discover', async (event, options = {}) => {
-    try {
-        const devices = await playerSvc.dlna().discoverDevices(options);
-        return { success: true, devices };
-    } catch (error) {
-        console.error('[DLNA] 搜索设备失败:', error);
-        return { success: false, error: error.message, devices: [] };
-    }
-});
-
-// 投屏播放：自动启动本地代理服务器并设置代理目标
-// payload: { deviceId, url, title, headers?, mime? }
-secureIpcHandle('dlna-cast', async (event, payload = {}) => {
-    try {
-        if (!payload.deviceId) return { success: false, error: '未指定投屏设备' };
-        if (!payload.url) return { success: false, error: '视频地址为空' };
-
-        // 播放器内部可能是 sakurafall-media://proxy/...，DLNA 代理必须拿到原始 HTTP(S) 地址
-        const target = videoStreamProxy.resolveProxyTarget(payload.url, payload.headers);
-        // 启动本地代理服务器（DLNA 设备可能无法直接访问 https / 带 header 的源）
-        await playerSvc.dlna().startProxyServer();
-        playerSvc.dlna().setProxyTarget({
-            url: target.url,
-            headers: target.headers,
-            title: payload.title || '',
-            mime: payload.mime || ''
-        });
-
-        const proxyUrl = playerSvc.dlna().getProxyStreamUrl();
-        if (!proxyUrl) {
-            return { success: false, error: '本地代理服务器未就绪' };
-        }
-
-        await playerSvc.dlna().cast(payload.deviceId, proxyUrl, payload.title || '视频');
-        return { success: true };
-    } catch (error) {
-        console.error('[DLNA] 投屏失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 暂停投屏
-secureIpcHandle('dlna-pause', async (event, deviceId) => {
-    try {
-        await playerSvc.dlna().pause(deviceId);
-        return { success: true };
-    } catch (error) {
-        console.error('[DLNA] 暂停失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 恢复投屏
-secureIpcHandle('dlna-resume', async (event, deviceId) => {
-    try {
-        await playerSvc.dlna().resume(deviceId);
-        return { success: true };
-    } catch (error) {
-        console.error('[DLNA] 恢复播放失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 停止投屏
-secureIpcHandle('dlna-stop', async (event, deviceId) => {
-    try {
-        await playerSvc.dlna().stop(deviceId);
-        return { success: true };
-    } catch (error) {
-        console.error('[DLNA] 停止失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 跳转到指定秒数
-secureIpcHandle('dlna-seek', async (event, deviceId, seconds) => {
-    try {
-        await playerSvc.dlna().seek(deviceId, seconds);
-        return { success: true };
-    } catch (error) {
-        console.error('[DLNA] 跳转失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 获取当前播放位置和总时长
-secureIpcHandle('dlna-get-position', async (event, deviceId) => {
-    try {
-        const info = await playerSvc.dlna().getPosition(deviceId);
-        return { success: true, ...info };
-    } catch (error) {
-        console.error('[DLNA] 获取播放位置失败:', error);
-        return { success: false, error: error.message, position: 0, duration: 0 };
-    }
-});
-
-// ======
-// 一起看（同步播放）IPC 处理
-// ======
-
-// 在主进程注册消息回调，收到消息后向所有窗口的渲染进程推送
-// 多窗口场景下：主窗口 + 播放窗口都可能需要接收消息
-watchTogetherService.onMessage((msg) => {
-    try {
-        for (const win of BrowserWindow.getAllWindows()) {
-            if (!win.isDestroyed()) {
-                win.webContents.send('on-wt-message', msg);
-            }
-        }
-    } catch (_) { /* ignore */ }
-});
-
-// 创建房间（主机模式）
-// payload: { roomName, videoInfo }
-secureIpcHandle('wt-create-room', async (event, payload = {}) => {
-    try {
-        const result = await watchTogetherService.createRoom(
-            payload.roomName,
-            payload.videoInfo
-        );
-        return result;
-    } catch (error) {
-        console.error('[WatchTogether] 创建房间失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 加入房间（成员模式）
-// payload: { roomCode }
-secureIpcHandle('wt-join-room', async (event, payload = {}) => {
-    try {
-        if (!payload.roomCode) {
-            return { success: false, error: '房间号不能为空' };
-        }
-        const result = await watchTogetherService.joinRoom(
-            payload.roomCode,
-            payload.hostAddress,
-            { forceLocal: !!payload.forceLocal, port: payload.port }
-        );
-        return result;
-    } catch (error) {
-        console.error('[WatchTogether] 加入房间失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 离开房间
-secureIpcHandle('wt-leave-room', async () => {
-    try {
-        return watchTogetherService.leaveRoom();
-    } catch (error) {
-        console.error('[WatchTogether] 离开房间失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 广播播放状态（仅主机）
-secureIpcHandle('wt-broadcast-state', async (event, state) => {
-    try {
-        return watchTogetherService.broadcastState(state);
-    } catch (error) {
-        console.error('[WatchTogether] 广播状态失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 发送聊天消息
-secureIpcHandle('wt-send-chat', async (event, text) => {
-    try {
-        return watchTogetherService.sendChat(text);
-    } catch (error) {
-        console.error('[WatchTogether] 发送消息失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 成员：发送 RTT 探测（单调时钟时间戳由渲染进程生成并原样回显）
-secureIpcHandle('wt-send-ping', async (event, ts) => {
-    try {
-        return watchTogetherService.sendPing(ts);
-    } catch (error) {
-        console.error('[WatchTogether] 发送 ping 失败:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// 查询当前房间信息
-secureIpcHandle('wt-get-room-info', async () => {
-    try {
-        return Object.assign({ success: true }, watchTogetherService.getRoomInfo());
-    } catch (error) {
-        console.error('[WatchTogether] 获取房间信息失败:', error);
-        return { success: false, error: error.message };
-    }
+registerWatchTogetherIpc({
+    handle: secureIpcHandle,
+    watchTogetherService,
+    BrowserWindow
 });

@@ -212,12 +212,14 @@
                           :key="`${currentLine}-${i}`"
                           :class="['episode-btn', {
                             active: selectedEpisode === i,
-                            loading: isEpisodeOpening(ep, episodeLines[currentLine], i)
+                            loading: isEpisodeOpening(ep, episodeLines[currentLine], i),
+                            'is-downloaded': isEpisodeDownloaded(ep, i)
                           }]"
                           @click="onEpisodeClick(i)"
                           :disabled="!!openingEpisodeKey"
                         >
                           <span class="ep-number">{{ ep.title }}</span>
+                          <span v-if="isEpisodeDownloaded(ep, i)" class="ep-downloaded-tag" title="本地离线已就绪，秒开播放">✓</span>
                         </button>
                       </div>
                     </template>
@@ -293,12 +295,14 @@
                               v-for="(ep, ei) in visibleSourceEpisodes(playSourceIndex(source))"
                               :key="ei"
                               :class="['episode-btn', {
-                                loading: isEpisodeOpening(ep, sourceEpisodeLineId(playSourceIndex(source)), ei)
+                                loading: isEpisodeOpening(ep, sourceEpisodeLineId(playSourceIndex(source)), ei),
+                                'is-downloaded': isEpisodeDownloaded(ep, ei)
                               }]"
                               @click="onSourceEpisodeClick(playSourceIndex(source), ei)"
                               :disabled="!!openingEpisodeKey"
                             >
                               <span class="ep-number">{{ ep.title }}</span>
+                              <span v-if="isEpisodeDownloaded(ep, ei)" class="ep-downloaded-tag" title="本地离线已就绪，秒开播放">✓</span>
                             </button>
                           </div>
                         </div>
@@ -499,7 +503,8 @@
                     :key="`${currentLine}-${i}`"
                     :class="['episode-btn', {
                       active: selectedEpisode === i,
-                      loading: isEpisodeOpening(ep, episodeLines[currentLine], i)
+                      loading: isEpisodeOpening(ep, episodeLines[currentLine], i),
+                      'is-downloaded': isEpisodeDownloaded(ep, i)
                     }]"
                     @click="onEpisodeClick(i)"
                     :disabled="!!openingEpisodeKey"
@@ -1005,13 +1010,25 @@ export default {
       this.selectedEpisode = index;
       this.stopBackgroundSourceSearch();
       const lineId = this.episodeLines[this.currentLine];
+      const downloadedTask = this.getDownloadedTaskForEpisode?.(ep, index);
+      const playableEp = downloadedTask ? {
+        ...ep,
+        url: downloadedTask.playUrl,
+        isLocalDownload: true,
+        originalOnlineUrl: ep.url
+      } : ep;
+      const animePayload = downloadedTask ? {
+        ...this.anime,
+        source: 'downloads',
+        sourceName: `${this.anime.sourceName || '本地'} (离线就绪)`
+      } : this.anime;
       this.$emit('play-episode', {
-        anime: this.anime,
-        episode: ep,
+        anime: animePayload,
+        episode: playableEp,
         episodeIndex: index,
         lineIndex: this.currentLine,
         lineId,
-        requestKey: this.episodeRequestKey(ep, lineId, index)
+        requestKey: this.episodeRequestKey(playableEp, lineId, index)
       });
     },
 

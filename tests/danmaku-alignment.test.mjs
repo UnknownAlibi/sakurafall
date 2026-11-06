@@ -217,11 +217,50 @@ test('describeAlignment: 生成中文摘要', () => {
   assert.match(text, /删减段 00:00–01:30/);
 });
 
+test('DanmakuAlignmentStore: origin 区分自动推导与手动校准', () => {
+  const { store } = createStore();
+  const base = { episodeKey: 'bgm:1|ep:1', workKey: 'bgm:1', sourceId: 'cms-a' };
+  store.save({ ...base, alignment: { offset: -90, cuts: [], inserts: [] }, origin: 'auto' });
+  assert.equal(store.get({ episodeKey: 'bgm:1|ep:1', sourceId: 'cms-a' }).origin, 'auto');
+
+  store.save({ ...base, alignment: { offset: -80, cuts: [], inserts: [] }, origin: 'manual' });
+  assert.equal(store.get({ episodeKey: 'bgm:1|ep:1', sourceId: 'cms-a' }).origin, 'manual');
+
+  // 未显式指定按手动处理，避免自动结果被误标
+  store.save({ ...base, alignment: { offset: -70, cuts: [], inserts: [] } });
+  assert.equal(store.get({ episodeKey: 'bgm:1|ep:1', sourceId: 'cms-a' }).origin, 'manual');
+});
+
+test('DanmakuAlignmentStore: 作品片头模板取中位数、排除当前集、拒绝差异过大的样本', () => {
+  const segments = [
+    { episode_key: 'bgm:2|ep:1', work_key: 'bgm:2', bgm_id: 2, kind: 'intro', confirmed: 1, start: 0, end: 90 },
+    { episode_key: 'bgm:2|ep:2', work_key: 'bgm:2', bgm_id: 2, kind: 'intro', confirmed: 1, start: 0, end: 92 },
+    { episode_key: 'bgm:2|ep:3', work_key: 'bgm:2', bgm_id: 2, kind: 'intro', confirmed: 1, start: 0, end: 88 },
+    // 当前集（片头被剪，只剩 10 秒）不能参与模板
+    { episode_key: 'bgm:2|ep:4', work_key: 'bgm:2', bgm_id: 2, kind: 'intro', confirmed: 1, start: 0, end: 10 },
+    // 未确认 / 非 intro 的片段忽略
+    { episode_key: 'bgm:2|ep:5', work_key: 'bgm:2', bgm_id: 2, kind: 'intro', confirmed: 0, start: 0, end: 90 },
+    { episode_key: 'bgm:2|ep:6', work_key: 'bgm:2', bgm_id: 2, kind: 'ad', confirmed: 1, start: 0, end: 60 }
+  ];
+  const { store } = createStore({ segments });
+  const template = store.getWorkIntroTemplate({ bgmId: 2, workKey: 'bgm:2', excludeEpisodeKey: 'bgm:2|ep:4' });
+  assert.equal(template.introLength, 90);
+  assert.equal(template.samples, 3);
+
+  // 单集不足以给模板
+  assert.equal(store.getWorkIntroTemplate({ bgmId: 2, workKey: 'bgm:2', excludeEpisodeKey: 'bgm:2|ep:1' }), null);
+
+  // 样本差异过大（不同源/不同剪辑）宁可不给
+  segments.push({ episode_key: 'bgm:2|ep:7', work_key: 'bgm:2', bgm_id: 2, kind: 'intro', confirmed: 1, start: 0, end: 200 });
+  assert.equal(store.getWorkIntroTemplate({ bgmId: 2, workKey: 'bgm:2', excludeEpisodeKey: 'bgm:2|ep:4' }), null);
+});
+
 // ── 持久层：内存 mock 模拟 danmaku_alignments 表 ─────────────────
 class MockStatement {
-  constructor(rows, sql) {
+  constructor(rows, sql, segments = []) {
     this.rows = rows;
     this.sql = sql;
+    this.segments = segments;
   }
 
   get(...params) {
@@ -239,17 +278,23 @@ class MockStatement {
       return this.rows.filter(row => row.work_key === workKey
         && row.source_id === sourceId && row.episode_key !== excludeKey);
     }
+    if (/FROM episode_segments/.test(this.sql)) {
+      const [excludeKey, bgmId, bgmIdAgain, workKey] = params;
+      return this.segments.filter(row => row.episode_key !== excludeKey
+        && row.kind === 'intro' && row.confirmed === 1
+        && ((bgmId > 0 && row.bgm_id === bgmIdAgain) || (Boolean(workKey) && row.work_key === workKey)));
+    }
     return [];
   }
 
   run(...params) {
     if (/INSERT INTO danmaku_alignments/.test(this.sql)) {
-      const [episodeKey, workKey, bgmId, episodeNumber, sourceId, providerId, offset, cuts, inserts, createdAt, updatedAt] = params;
+      const [episodeKey, workKey, bgmId, episodeNumber, sourceId, providerId, offset, cuts, inserts, origin, createdAt, updatedAt] = params;
       const idx = this.rows.findIndex(row => row.episode_key === episodeKey
         && row.source_id === sourceId && row.provider_id === providerId);
       const row = {
         episode_key: episodeKey, work_key: workKey, bgm_id: bgmId, episode_number: episodeNumber,
-        source_id: sourceId, provider_id: providerId, offset, cuts, inserts,
+        source_id: sourceId, provider_id: providerId, offset, cuts, inserts, origin,
         created_at: createdAt, updated_at: updatedAt
       };
       if (idx >= 0) this.rows[idx] = row;
@@ -271,10 +316,10 @@ class MockStatement {
   }
 }
 
-function createStore() {
+function createStore({ segments = [] } = {}) {
   const rows = [];
   const store = new DanmakuAlignmentStore();
-  store.setDatabase({ prepare: sql => new MockStatement(rows, sql) });
+  store.setDatabase({ prepare: sql => new MockStatement(rows, sql, segments) });
   return { store, rows };
 }
 

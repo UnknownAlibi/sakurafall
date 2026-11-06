@@ -160,10 +160,11 @@
             :key="episode.id || index"
             :ref="el => { if (isCurrentEpisode(episode)) currentEpisodeEl = el }"
             @click="playEpisode(episode)"
-            :class="['episode-btn', { active: isCurrentEpisode(episode) }]"
+            :class="['episode-btn', { active: isCurrentEpisode(episode), 'is-downloaded': isDownloaded(episode, index) }]"
             :title="episode.title || episode.name || `${index + 1}`"
           >
-            {{ episode.title || episode.name || `${index + 1}` }}
+            <span>{{ episode.title || episode.name || `${index + 1}` }}</span>
+            <span v-if="isDownloaded(episode, index)" class="ep-dl-indicator" title="本地离线就绪">✓</span>
           </button>
           <div v-if="filteredEpisodes.length === 0" class="no-match">无匹配集数</div>
         </div>
@@ -190,6 +191,7 @@ import {
 } from '../utils/episodeList.js';
 import { isPlayableVideoUrl, resolveEpisodeVideoUrl } from '../utils/episodePlayback.js';
 import { toIpcPlainObject } from '../utils/ipcPayload.js';
+import { findDownloadedTask, wrapEpisodeWithLocalDownload } from '../utils/downloadedEpisodeMatch.js';
 
 export default {
   name: 'PlayerWindow',
@@ -309,6 +311,11 @@ export default {
     }
   },
   methods: {
+    isDownloaded(episode, index) {
+      const list = this.$store?.getters?.['download/downloadList'] || [];
+      return !!findDownloadedTask(list, this.currentVideo?.anime, episode, index);
+    },
+
     async applyIncomingPlayerData(videoData) {
       // 新数据（含切线路/切集）到达时，取消上一集结束后的自动连播倒计时
       if (this.autoPlayTimer) {
@@ -509,6 +516,27 @@ export default {
       try {
         let videoUrl = '';
         let resolvedVideo = null;
+
+        const downloadList = this.$store?.getters?.['download/downloadList'] || [];
+        const downloadedTask = findDownloadedTask(downloadList, this.currentVideo?.anime, episode);
+        if (downloadedTask && downloadedTask.playUrl) {
+          const lineEpisodes = getLineEpisodes(this.episodes, lineId);
+          const epIndex = lineEpisodes.indexOf(episode);
+          const playableEp = wrapEpisodeWithLocalDownload(episode, downloadedTask);
+          await this.$store.dispatch('player/playVideo', {
+            title: `${this.currentVideo.anime.name} - ${episode.title}`,
+            url: downloadedTask.playUrl,
+            anime: { ...this.currentVideo.anime, source: 'downloads', sourceName: '本地离线' },
+            episode: { ...playableEp, index: epIndex, lineId },
+            episodeId: episode.id,
+            sourceId: 'downloads',
+            sourceName: '本地离线',
+            providerId: 'downloads',
+            lineId,
+            resolvedVideo: { url: downloadedTask.playUrl, isLocalDownload: true }
+          });
+          return;
+        }
 
         // 优先使用 PlaybackResolverService（主进程，带短期缓存和 token 取消）
         if (window.electronAPI?.playbackResolve) {

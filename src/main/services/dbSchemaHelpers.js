@@ -77,11 +77,18 @@ function createDanmakuAlignmentsTable(db) {
                 offset REAL NOT NULL DEFAULT 0,
                 cuts TEXT NOT NULL DEFAULT '[]',
                 inserts TEXT NOT NULL DEFAULT '[]',
+                origin TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(episode_key, source_id, provider_id)
             )
         `);
+  // 旧库补列：origin 记录这份校准是「自动推导」还是「用户手动调整」，
+  // 自动推导的结果允许被后续检测刷新，手动结果永不覆盖。
+  const columns = db.prepare('PRAGMA table_info(danmaku_alignments)').all();
+  if (!columns.some(column => column.name === 'origin')) {
+    db.exec("ALTER TABLE danmaku_alignments ADD COLUMN origin TEXT NOT NULL DEFAULT ''");
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_danmaku_alignments_work ON danmaku_alignments(work_key, source_id)');
 }
 

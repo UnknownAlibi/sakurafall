@@ -473,6 +473,17 @@
   transition: background 0.2s, border-color 0.2s;
 }
 
+/* 候选行：左侧「源名 + 线路 + 集名」，右侧只留画质/广告/健康三枚信息，
+   其余指标（首帧、卡顿、样本数）收进整行的 title 提示，避免每行六七枚小标签挤成两行 */
+.source-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 9px 12px;
+}
+
 .source-candidate:hover,
 .subtitle-search-item:hover {
   background: rgba(var(--primary-rgb), 0.13);
@@ -503,9 +514,19 @@
 }
 
 .candidate-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 14px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.94);
+}
+
+.candidate-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .candidate-source em {
@@ -552,6 +573,10 @@
   gap: 6px;
 }
 
+.candidate-meta {
+  flex-wrap: nowrap;
+}
+
 .candidate-chip,
 .subtitle-item-chip {
   padding: 3px 8px;
@@ -588,6 +613,34 @@
   background: rgba(255, 157, 72, 0.15);
 }
 
+/* 健康分：圆点 + 数值，替代「健康 69」这种带字的胶囊 */
+.candidate-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.candidate-health i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.candidate-health.health-good { color: #7ee8b0; }
+.candidate-health.health-warn { color: #ffcc66; }
+.candidate-health.health-bad { color: #ff8a9c; }
+
 .source-skipped {
   margin-top: 10px;
   color: rgba(255, 255, 255, 0.46);
@@ -607,7 +660,15 @@
     padding: 14px;
   }
 
-  .source-candidate,
+  .source-candidate {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: flex-start;
+  }
+
+  .source-candidate .candidate-meta {
+    justify-content: flex-start;
+  }
+
   .subtitle-search-item {
     align-items: flex-start;
     flex-direction: column;
@@ -899,4 +960,52 @@
 .wt-switch-fade-leave-to {
   opacity: 0;
   transform: translateX(-50%) translateY(-8px);
+}
+
+
+.skip-intro-capsule {
+  position: absolute;
+  right: 24px;
+  bottom: 92px;
+  z-index: 95;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(20, 19, 29, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 650;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition: transform 0.18s var(--ease-smooth), background-color 0.18s var(--ease-smooth), border-color 0.18s var(--ease-smooth);
+}
+
+.skip-intro-capsule:hover {
+  background: rgba(var(--primary-rgb), 0.88);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: translateY(-2px) scale(1.03);
+}
+
+.skip-intro-capsule:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.skip-intro-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.skip-intro-countdown {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.92;
 }

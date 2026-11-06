@@ -35,6 +35,15 @@ export default {
     pendingInsertStart: null,
     // 弹幕侧推断的锚点（来自弹幕文本，如「空降/正片开始」簇）
     danmakuAnchors: { contentStart: null, confidence: 0, samples: 0 },
+    // 作品级片头长度模板：没有弹幕锚点时判断「本视频片头是否被剪短」
+    template: { introLength: 0, samples: 0 },
+    // 已保存校准的来源：manual 之后不再被自动结果覆盖
+    savedOrigin: '',
+    // 本次自动对齐的状态（用于面板提示与撤销）
+    autoApplied: false,
+    autoReason: '',
+    // 用户撤销过自动对齐：本集+本源不再自动应用，直到重新进入
+    autoSuppressed: false,
     // 暂停时的候选弹幕窗口（供「弹幕对照校准」点选）
     referenceWindow: { videoTime: 0, items: [] },
     loadToken: 0,
@@ -43,6 +52,10 @@ export default {
 
   getters: {
     alignment: state => state.alignment,
+    autoApplied: state => state.autoApplied,
+    autoReason: state => state.autoReason,
+    template: state => state.template,
+    savedOrigin: state => state.savedOrigin,
     summary: state => describeAlignment(state.alignment),
     isCalibrated: state => !isAlignmentEmpty(state.alignment),
     hasUnsavedChange: state => JSON.stringify(state.alignment) !== JSON.stringify(state.savedAlignment),
@@ -70,10 +83,26 @@ export default {
       state.alignment = normalizeAlignment(alignment);
     },
 
-    SET_SAVED(state, { alignment, updatedAt = 0 }) {
+    SET_SAVED(state, { alignment, updatedAt = 0, origin = '' }) {
       state.savedAlignment = normalizeAlignment(alignment);
       state.alignment = normalizeAlignment(alignment);
       state.savedAt = updatedAt;
+      state.savedOrigin = origin === 'auto' ? 'auto' : (origin === 'manual' ? 'manual' : '');
+    },
+
+    SET_TEMPLATE(state, template = null) {
+      state.template = template && Number(template.introLength) > 0
+        ? { introLength: Number(template.introLength), samples: Number(template.samples) || 0 }
+        : { introLength: 0, samples: 0 };
+    },
+
+    SET_AUTO_APPLIED(state, { applied = false, reason = '' } = {}) {
+      state.autoApplied = !!applied;
+      state.autoReason = applied ? String(reason || '') : '';
+    },
+
+    SET_AUTO_SUPPRESSED(state, suppressed = false) {
+      state.autoSuppressed = !!suppressed;
     },
 
     SET_DETECTIONS(state, { videoIntro = null, adRanges = [], canonicalIntroLength = 0 } = {}) {
@@ -131,11 +160,13 @@ export default {
       commit('SET_REFERENCE_WINDOW', {});
       commit('SET_ALIGNMENT', createEmptyAlignment());
       commit('SET_SAVED', { alignment: createEmptyAlignment() });
+      commit('SET_AUTO_APPLIED', {});
+      commit('SET_TEMPLATE', null);
       if (!state.episodeKey) return;
       const token = state.loadToken;
 
       try {
-        const [record, suggestion] = await Promise.all([
+        const [record, suggestion, template] = await Promise.all([
           window.electronAPI?.danmakuAlignmentGet?.({
             episodeKey: state.episodeKey,
             sourceId: state.sourceId
@@ -146,11 +177,27 @@ export default {
                 sourceId: state.sourceId,
                 excludeEpisodeKey: state.episodeKey
               }) || null)
+            : null,
+          state.workKey
+            ? (window.electronAPI?.danmakuAlignmentWorkTemplate?.({
+                bgmId: state.bgmId,
+                workKey: state.workKey,
+                excludeEpisodeKey: state.episodeKey
+              }) || null)
             : null
         ]);
         if (token !== state.loadToken) return;
+        commit('SET_TEMPLATE', template);
         if (record?.alignment) {
-          commit('SET_SAVED', { alignment: record.alignment, updatedAt: record.updatedAt });
+          commit('SET_SAVED', { alignment: record.alignment, updatedAt: record.updatedAt, origin: record.origin });
+        } else if (suggestion) {
+          // 本集还没有校准时，直接沿用同作品同源的历史偏移（自动应用，可在面板撤销）
+          commit('SET_ALIGNMENT', { ...createEmptyAlignment(), offset: suggestion.offset });
+          commit('SET_AUTO_APPLIED', {
+            applied: true,
+            reason: `沿用同作品同源历史对齐 ${suggestion.offset > 0 ? '+' : ''}${suggestion.offset} 秒（${suggestion.sampleCount} 集一致）`
+          });
+          dispatch('persist');
         }
         commit('SET_SUGGESTION', suggestion);
       } catch (error) {
@@ -162,18 +209,22 @@ export default {
 
     /** 手动偏移：正数=弹幕往后挪（延迟显示） */
     setOffset({ commit, state, dispatch }, offset) {
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', { ...state.alignment, offset });
       dispatch('schedulePersist');
     },
 
     shiftOffset({ commit, state, dispatch }, delta) {
       const next = Math.max(-60, Math.min(60, Number(state.alignment.offset || 0) + Number(delta || 0)));
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', { ...state.alignment, offset: Math.round(next * 10) / 10 });
       dispatch('schedulePersist');
     },
 
-    /** 清空全部校准（含分段锚点） */
+    /** 清空全部校准（含分段锚点）；用户主动归零后本集不再自动应用 */
     reset({ commit, dispatch }) {
+      commit('SET_AUTO_SUPPRESSED', true);
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', createEmptyAlignment());
       commit('SET_NOTES', []);
       dispatch('schedulePersist');
@@ -184,13 +235,70 @@ export default {
       const { alignment, notes } = deriveAlignmentFromDetections({
         videoIntro: state.detections.videoIntro,
         adRanges: state.detections.adRanges,
-        canonicalIntroLength: state.detections.canonicalIntroLength,
+        canonicalIntroLength: state.template.introLength || state.detections.canonicalIntroLength,
         danmakuContentStart: state.danmakuAnchors.contentStart,
         base: state.alignment
       });
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', alignment);
       commit('SET_NOTES', notes);
       dispatch('schedulePersist');
+    },
+
+    /**
+     * 自动对齐：检测结果到位后由弹幕层触发，无需用户点按钮。
+     *
+     * 只在「证据明确」时应用，避免把弹幕整体搬错：
+     *  - 弹幕锚点 + 视频片头（DNA）都在 → 直接算整体偏移；
+     *  - 有 HLS 明确广告标记 → 补插入区间；
+     *  - 有作品片头模板 + 视频片头 → 判断本集片头是否被剪短/加长。
+     * 没有片头检测、只靠锚点时，用「弹幕最晚时间 vs 视频时长」校验确实少了约 anchor 秒，
+     * 否则宁可不自动（DNA 漏检时也不会误移）。
+     * 用户手动校准过（savedOrigin=manual）或已撤销（autoSuppressed）时不覆盖。
+     */
+    autoAlignFromDetections({ commit, state, dispatch }, { videoDuration = 0, maxCommentTime = 0 } = {}) {
+      if (!state.episodeKey || state.autoSuppressed) return false;
+      if (state.savedOrigin === 'manual') return false;
+      const anchor = state.danmakuAnchors.contentStart;
+      const intro = state.detections.videoIntro;
+      const adRanges = state.detections.adRanges || [];
+      const templateLength = state.template.introLength || 0;
+      if (anchor === null && !intro && adRanges.length === 0) return false;
+
+      if (anchor !== null && !intro) {
+        const gap = Number(maxCommentTime) - Number(videoDuration);
+        const expected = Number(anchor) || 0;
+        if (!(expected > 5 && gap > expected * 0.5)) return false;
+      }
+
+      const { alignment, notes } = deriveAlignmentFromDetections({
+        videoIntro: intro,
+        adRanges,
+        // 模板只在「视频片头确实检测到」时参与比较，否则无法区分剪短与漏检
+        canonicalIntroLength: intro ? templateLength : 0,
+        danmakuContentStart: anchor,
+        base: state.alignment
+      });
+      if (isAlignmentEmpty(alignment)) return false;
+      if (JSON.stringify(alignment) === JSON.stringify(state.alignment)) return false;
+
+      commit('SET_ALIGNMENT', alignment);
+      commit('SET_NOTES', notes);
+      commit('SET_AUTO_APPLIED', {
+        applied: true,
+        reason: notes.join('；') || '按检测结果自动对齐'
+      });
+      dispatch('persist');
+      return true;
+    },
+
+    /** 撤销自动对齐：清空本集校准并抑制后续自动应用 */
+    undoAutoAlign({ commit, dispatch }) {
+      commit('SET_AUTO_SUPPRESSED', true);
+      commit('SET_AUTO_APPLIED', {});
+      commit('SET_ALIGNMENT', createEmptyAlignment());
+      commit('SET_NOTES', []);
+      dispatch('persist');
     },
 
     /** 记录弹幕侧锚点（弹幕加载完成后调用；不自动改动用户已有校准） */
@@ -206,6 +314,7 @@ export default {
       const contentStart = state.danmakuAnchors.contentStart;
       if (contentStart === null || contentStart === undefined) return false;
       const offset = Math.round((Number(videoTime) - contentStart) * 10) / 10;
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', { ...state.alignment, offset });
       commit('SET_NOTES', [
         `已按「此刻画面 = 正片开始」校准：弹幕整体${offset >= 0 ? '后' : '前'}移 ${Math.abs(offset)} 秒（弹幕版正片起点 ${formatClock(contentStart)}）`
@@ -223,6 +332,7 @@ export default {
       const current = Number(videoTime);
       if (!Number.isFinite(canonical) || !Number.isFinite(current)) return false;
       const offset = Math.round((current - canonical) * 10) / 10;
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', { ...state.alignment, offset });
       commit('SET_NOTES', [
         `已按对照弹幕校准：把 ${formatClock(canonical)} 的弹幕对齐到画面 ${formatClock(current)}，弹幕整体${offset >= 0 ? '后' : '前'}移 ${Math.abs(offset)} 秒`
@@ -234,6 +344,7 @@ export default {
     /** 沿用同源历史偏移（只取偏移值，锚点仍按当前集检测） */
     applySuggestion({ commit, state, dispatch }) {
       if (!state.suggestion) return;
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', { ...state.alignment, offset: state.suggestion.offset });
       dispatch('schedulePersist');
     },
@@ -248,6 +359,7 @@ export default {
       const next = addInsertRange(state.alignment, state.pendingInsertStart, time);
       commit('SET_PENDING_INSERT_START', null);
       if (isAlignmentEmpty(next) || next.inserts.length === state.alignment.inserts.length) return;
+      commit('SET_AUTO_APPLIED', {});
       commit('SET_ALIGNMENT', next);
       dispatch('schedulePersist');
     },
@@ -267,6 +379,7 @@ export default {
 
     async persist({ state, commit }) {
       if (!state.episodeKey) return null;
+      const origin = state.autoApplied ? 'auto' : 'manual';
       try {
         const result = await window.electronAPI?.danmakuAlignmentSave?.({
           episodeKey: state.episodeKey,
@@ -274,10 +387,15 @@ export default {
           bgmId: state.bgmId,
           episodeNumber: state.episodeNumber,
           sourceId: state.sourceId,
-          alignment: state.alignment
+          alignment: state.alignment,
+          origin
         });
         if (result?.record) {
-          commit('SET_SAVED', { alignment: result.record.alignment, updatedAt: result.record.updatedAt });
+          commit('SET_SAVED', {
+            alignment: result.record.alignment,
+            updatedAt: result.record.updatedAt,
+            origin: result.record.origin
+          });
         } else {
           // 空配置等价于删除
           commit('SET_SAVED', { alignment: createEmptyAlignment() });

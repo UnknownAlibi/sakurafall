@@ -44,3 +44,22 @@ export function candidateHealthTitle(candidate) {
   if (health.lastPlaybackAt) parts.push(`最近播放 ${new Date(health.lastPlaybackAt).toLocaleString()}`);
   return parts.join(' · ');
 }
+
+/** 只有真的解析出画质才显示画质标签，避免整列都是「未知」 */
+export function hasCandidateQuality(candidate) {
+  const quality = candidate?.quality || {};
+  return Boolean(quality.height || quality.bitrate);
+}
+
+/** 候选行只展示画质/广告/健康，其余指标收进整行的悬停提示 */
+export function candidateTooltip(candidate) {
+  const health = candidate?.health || {};
+  const parts = [`匹配：${formatMatchType(candidate?.matchType)}`];
+  if (health.playbackSessionCount) {
+    parts.push(`首帧 ${formatCandidateStartup(candidate)}`);
+    parts.push(`卡顿 ${formatCandidateRatio(health.averageStallRatio)}`);
+  }
+  if (health.advertisingReportCount) parts.push(`广告反馈 ${health.advertisingReportCount} 次`);
+  parts.push(candidateHealthTitle(candidate));
+  return parts.join('\n');
+}

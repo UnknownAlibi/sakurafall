@@ -24,6 +24,15 @@
         >
         <span class="source-mapping-unit">集</span>
         <button
+          v-if="item.suggestedStart > 0 && drafts[item.key] !== item.suggestedStart"
+          type="button"
+          class="source-mapping-suggest"
+          title="点击填入智能建议起始集"
+          @click="useSuggestion(item)"
+        >
+          建议: {{ item.suggestedStart }}
+        </button>
+        <button
           type="button"
           class="source-mapping-apply"
           :disabled="!isValid(item)"
@@ -51,7 +60,23 @@ export default {
       drafts: {}
     };
   },
+  watch: {
+    sources: {
+      immediate: true,
+      handler(list) {
+        for (const item of list || []) {
+          if (item?.suggestedStart > 0 && this.drafts[item.key] === undefined) {
+            this.drafts[item.key] = item.suggestedStart;
+          }
+        }
+      }
+    }
+  },
   methods: {
+    useSuggestion(item) {
+      if (!item?.suggestedStart) return;
+      this.drafts[item.key] = item.suggestedStart;
+    },
     startValue(item) {
       const value = Number(this.drafts[item.key]);
       return Number.isInteger(value) ? value : 0;
@@ -98,8 +123,8 @@ export default {
 
 .source-mapping-head span {
   color: var(--text-tertiary);
-  font-size: 11.5px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .source-mapping-row {
@@ -107,91 +132,119 @@ export default {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 9px 0;
-  border-top: 1px solid var(--border-subtle);
+  padding: 10px 0;
+  border-top: 1px dashed var(--border-subtle);
 }
 
 .source-mapping-row:first-of-type {
-  border-top: 0;
+  border-top: none;
 }
 
 .source-mapping-info {
   display: flex;
   flex-direction: column;
+  gap: 3px;
   min-width: 0;
-  gap: 2px;
 }
 
 .source-mapping-source {
-  color: var(--text-primary);
-  font-size: 12.5px;
+  color: var(--accent-cyan);
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.source-mapping-title,
-.source-mapping-meta {
+.source-mapping-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
   overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.source-mapping-controls {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-}
-
-.source-mapping-hint,
-.source-mapping-unit {
+.source-mapping-meta {
   color: var(--text-tertiary);
   font-size: 11px;
 }
 
+.source-mapping-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.source-mapping-hint,
+.source-mapping-unit {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .source-mapping-input {
-  width: 76px;
+  width: 72px;
   height: 30px;
   padding: 0 8px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--bg-input);
+  background: var(--bg-surface);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
   text-align: center;
+  outline: none;
+  transition: border-color 0.15s var(--ease-smooth);
+}
+
+.source-mapping-input:focus {
+  border-color: var(--primary);
+}
+
+.source-mapping-suggest {
+  padding: 3px 8px;
+  border: 1px dashed rgba(var(--primary-rgb), 0.5);
+  border-radius: 999px;
+  background: rgba(var(--primary-rgb), 0.1);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.source-mapping-suggest:hover {
+  background: rgba(var(--primary-rgb), 0.2);
+  border-style: solid;
 }
 
 .source-mapping-apply {
   height: 30px;
-  padding: 0 11px;
-  border: 0;
+  padding: 0 12px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--primary-color);
+  background: var(--primary);
   color: #fff;
-  font-size: 11.5px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
-  transition: opacity 0.15s ease;
-}
-
-.source-mapping-apply:hover:not(:disabled) {
-  opacity: 0.86;
+  transition: opacity 0.15s var(--ease-smooth), transform 0.15s var(--ease-smooth);
 }
 
 .source-mapping-apply:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
-  opacity: 0.4;
 }
 
-@media (max-width: 720px) {
-  .source-mapping-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+.source-mapping-apply:not(:disabled):hover {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
 
-  .source-mapping-controls {
-    width: 100%;
+@media (max-width: 680px) {
+  .source-mapping-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

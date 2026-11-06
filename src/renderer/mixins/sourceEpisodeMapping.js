@@ -1,8 +1,13 @@
 import {
+  findDownloadedTask,
+  wrapEpisodeWithLocalDownload
+} from '../utils/downloadedEpisodeMatch.js';
+import {
   applySourceEpisodeMapping,
   getSourceMapping,
   saveSourceMapping,
-  sourceMappingKey
+  sourceMappingKey,
+  suggestSourceMappingStart
 } from '../utils/sourceEpisodeMapping.js';
 
 export default {
@@ -23,7 +28,8 @@ export default {
             sourceName: source.sourceName || source.sourceId || '片源',
             title: top.name || '',
             totalEpisodes: source.playableEpisodeCount,
-            lineCount: source.rankedLines?.length || 0
+            lineCount: source.rankedLines?.length || 0,
+            suggestedStart: suggestSourceMappingStart(source, this.anime)
           };
         });
     }
@@ -51,9 +57,19 @@ export default {
       this.expandedSource = index;
     },
 
+    getDownloadedTaskForEpisode(episode, epIndex) {
+      const downloadList = this.$store?.getters?.['download/downloadList'] || [];
+      return findDownloadedTask(downloadList, this.anime, episode, epIndex);
+    },
+
+    isEpisodeDownloaded(episode, epIndex) {
+      return !!this.getDownloadedTaskForEpisode(episode, epIndex);
+    },
+
     /**
      * 点击某源的具体剧集：合并 Bangumi 元数据 + CMS 源播放信息后 emit。
      * 手动映射过的合集源此时 episode.title 已经是季内编号。
+     * 若已完成本地离线下载，自动切换为本地安全媒体流秒开。
      */
     onSourceEpisodeClick(sourceIdx, epIdx) {
       if (this.openingEpisodeKey) return;
@@ -65,13 +81,16 @@ export default {
       if (!ep) return;
       this.stopBackgroundSourceSearch();
 
+      const downloadedTask = this.getDownloadedTaskForEpisode(ep, epIdx);
+      const playableEp = wrapEpisodeWithLocalDownload(ep, downloadedTask);
+
       const mergedAnime = {
         ...this.anime,
-        source: sourceAnime.source,
-        sourceId: sourceAnime.sourceId || source.sourceId,
-        sourceName: sourceAnime.sourceName || source.sourceName,
-        sourceType: sourceAnime.sourceType || source.sourceType || source.type,
-        providerId: sourceAnime.providerId || source.providerId,
+        source: downloadedTask ? 'downloads' : sourceAnime.source,
+        sourceId: downloadedTask ? 'downloads' : (sourceAnime.sourceId || source.sourceId),
+        sourceName: downloadedTask ? `${sourceAnime.sourceName || '本地'} (离线就绪)` : (sourceAnime.sourceName || source.sourceName),
+        sourceType: downloadedTask ? 'local' : (sourceAnime.sourceType || source.sourceType || source.type),
+        providerId: downloadedTask ? 'downloads' : (sourceAnime.providerId || source.providerId),
         id: sourceAnime.id,
         episodes: sourceAnime.episodes,
         episode_count: sourceAnime.episode_count,
@@ -84,11 +103,11 @@ export default {
 
       this.$emit('play-episode', {
         anime: mergedAnime,
-        episode: ep,
+        episode: playableEp,
         episodeIndex: epIdx,
         lineIndex: this.sourceLineOptions(sourceIdx).findIndex(line => line.lineId === lineId),
         lineId,
-        requestKey: this.episodeRequestKey(ep, lineId, epIdx)
+        requestKey: this.episodeRequestKey(playableEp, lineId, epIdx)
       });
     }
   }

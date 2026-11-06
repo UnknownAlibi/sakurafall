@@ -242,6 +242,10 @@ class MediaLibraryService {
     return `sakurafall-media://asset/${token}`;
   }
 
+  createMediaUrl(libraryId, filePath) {
+    return this._mediaUrl(libraryId, filePath);
+  }
+
   async _scanLocalLibrary(library) {
     const groups = new Map();
     let visited = 0;

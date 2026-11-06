@@ -78,10 +78,16 @@ class CatalogSnapshotService {
     this.warmEnabled = options.warmEnabled === true;
     this.warmIntervalMs = Math.max(60_000, Number(options.warmIntervalMs) || 24 * 60 * 60_000);
     this.warmDelayMs = Math.max(25, Number(options.warmDelayMs) || 180);
+    // 公网镜像单页可能要几秒，偶发超时不该让整轮预热作废：单页重试 + 退避
+    this.warmFetchAttempts = Math.max(1, Number(options.warmFetchAttempts) || 3);
+    this.warmRetryDelayMs = Math.max(200, Number(options.warmRetryDelayMs) || 1200);
     // 每轮预热顺带用详情接口重抓多少个"无封面"条目（0 = 关闭）。
     // 列表接口对新建条目的 images 常为空，只靠列表页永远补不上封面。
     this.coverRefillLimit = Math.max(0, Number(options.coverRefillLimit) || 200);
     this.coverRefillDelayMs = Math.max(50, Number(options.coverRefillDelayMs) || 350);
+    // 补图游标：每轮从上次结束的位置继续，避免"永远重试最前面那 200 条"，
+    // 让真正有图的条目在有限轮次内都能被覆盖到。
+    this._coverRefillCursorId = 0;
     this.pageSize = Math.max(20, Math.min(100, Number(options.pageSize) || 100));
     this.records = new Map();
     this.generatedAt = 0;
@@ -278,9 +284,37 @@ class CatalogSnapshotService {
     return this._warming;
   }
 
+  /** 单页抓取失败时重试：镜像偶发超时不应让整轮预热作废 */
+  async _fetchPageWithRetry(fetchPage, category, offset) {
+    const attempts = this.warmFetchAttempts;
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await fetchPage({ category, limit: this.pageSize, offset });
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) {
+          await new Promise(resolve => setTimeout(resolve, this.warmRetryDelayMs * attempt));
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async _runWarm(fetchPage, fetchDetail) {
     // Keep published data unchanged until every category has a complete scan.
     const staged = new Map();
+    // 慢镜像一轮要跑 20 分钟以上，期间目录会新增条目：分页位移会造成
+    // 同一 id 跨页重复、total 变大。这些属于正常抖动，记录下来继续跑；
+    // 只有"页数据不完整/非法条目"才让整轮作废。
+    let duplicateCount = 0;
+    let totalDriftCount = 0;
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'catalog-warm-start',
+      records: this.records.size,
+      generatedAt: this.generatedAt
+    }));
     for (const category of DEFAULT_CATEGORIES) {
       let offset = 0;
       let total = Number.POSITIVE_INFINITY;
@@ -288,21 +322,29 @@ class CatalogSnapshotService {
       while (offset < total && offset <= 10_000) {
         if (this._closed) return { skipped: true };
         const observedAt = this.generatedAt;
-        const page = await fetchPage({ category, limit: this.pageSize, offset });
+        const page = await this._fetchPageWithRetry(fetchPage, category, offset);
         if (this._closed) return { skipped: true };
         const items = Array.isArray(page?.data)
           ? page.data.map(item => ({ ...item, platform: item.platform || CATEGORY_PLATFORM[category] || '' }))
           : [];
         const nextTotal = Number(page?.total);
         if (!Number.isSafeInteger(nextTotal) || nextTotal < 0) throw new Error('Catalog returned an invalid total');
-        if (Number.isFinite(total) && nextTotal !== total) throw new Error('Catalog total changed during scan');
+        if (Number.isFinite(total) && nextTotal !== total) {
+          // 扫描期间新条目入库会让 total 增长；只拒绝"缩到已扫位置以下"的异常情况
+          if (nextTotal < offset) throw new Error('Catalog total shrank below scanned offset');
+          totalDriftCount += 1;
+        }
         total = nextTotal;
         if (total > 10_000 + this.pageSize) throw new Error('Catalog category exceeds scan range');
         if (items.length === 0 && offset < total) throw new Error('Catalog returned an incomplete page');
-        if (offset + items.length > total) throw new Error('Catalog page exceeds reported total');
+        if (offset + items.length > total) items.length = Math.max(0, total - offset);
         for (const item of items) {
           const id = Number(item.id || item.bgm_id || item.bgmId);
-          if (!isSubject(item) || !Number.isSafeInteger(id) || seen.has(id)) throw new Error('Catalog returned an invalid or repeated subject');
+          if (!isSubject(item) || !Number.isSafeInteger(id)) throw new Error('Catalog returned an invalid subject');
+          if (seen.has(id)) {
+            duplicateCount += 1;
+            continue;
+          }
           seen.add(id);
           staged.set(id, { subject: item, observedAt });
         }
@@ -333,6 +375,8 @@ class CatalogSnapshotService {
       event: 'catalog-warm',
       total: this.records.size,
       refilled,
+      duplicates: duplicateCount,
+      totalDrift: totalDriftCount,
       generatedAt: this.generatedAt
     }));
     return { total: this.records.size, generatedAt: this.generatedAt, refilled };
@@ -348,28 +392,57 @@ class CatalogSnapshotService {
   async _refillMissingCovers(fetchDetail) {
     if (this._closed || !this.enabled || this.coverRefillLimit <= 0) return 0;
     if (typeof fetchDetail !== 'function') return 0;
-    const pending = [];
+    const emptyIds = [];
     for (const [id, record] of this.records) {
-      if (pending.length >= this.coverRefillLimit) break;
-      if (!hasUsableImages(record.subject)) pending.push(id);
+      if (!hasUsableImages(record.subject)) emptyIds.push(id);
     }
+    if (emptyIds.length === 0) return 0;
+    emptyIds.sort((a, b) => a - b);
+    // 从游标处继续（到尾再绕回开头）：否则每轮都重试最前面那批无图条目，
+    // 排在后面的条目永远等不到补图机会。
+    let startIndex = 0;
+    if (this._coverRefillCursorId > 0) {
+      const found = emptyIds.findIndex(id => id > this._coverRefillCursorId);
+      startIndex = found >= 0 ? found : 0;
+    }
+    const ordered = startIndex > 0
+      ? [...emptyIds.slice(startIndex), ...emptyIds.slice(0, startIndex)]
+      : emptyIds;
+    const pending = ordered.slice(0, this.coverRefillLimit);
+
     let updated = 0;
+    let failed = 0;
+    let noImage = 0;
     for (const id of pending) {
       if (this._closed) break;
       try {
         const detail = await fetchDetail(id);
         const subject = collectSubjects(detail)[0];
-        if (subject && hasUsableImages(subject)) {
-          updated += this.ingest(subject) > 0 ? 1 : 0;
+        if (!subject || !hasUsableImages(subject)) {
+          // 上游本身就没有封面（大量冷门条目属于这种），换下一条
+          noImage += 1;
+        } else if (this.ingest(subject) > 0) {
+          updated += 1;
         }
       } catch (_error) {
-        // 单条失败忽略，下一轮预热再试
+        failed += 1;
       }
       if (this.coverRefillDelayMs > 0) {
         await new Promise(resolve => setTimeout(resolve, this.coverRefillDelayMs));
       }
     }
+    this._coverRefillCursorId = pending[pending.length - 1] || 0;
     if (updated > 0) this.flush();
+    console.log(JSON.stringify({
+      level: 'info',
+      event: 'catalog-cover-refill',
+      empty: emptyIds.length,
+      scanned: pending.length,
+      updated,
+      noImage,
+      failed,
+      cursor: this._coverRefillCursorId
+    }));
     return updated;
   }
 

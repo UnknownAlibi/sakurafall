@@ -140,6 +140,12 @@
           >✕</button>
           <button
             v-if="task.status === 'completed'"
+            class="dl-action-btn dl-action-play"
+            title="播放离线视频"
+            @click="onPlay(task)"
+          >▶</button>
+          <button
+            v-if="task.status === 'completed'"
             class="dl-action-btn dl-action-open"
             title="在文件夹中显示"
             @click="onOpenFile(task)"
@@ -275,6 +281,37 @@ export default {
             });
             if (!confirmed) return;
             await this.withTaskAction(task, '已删除', () => this.removeDownload(task.id));
+        },
+
+        async onPlay(task) {
+            if (!task || !task.playUrl) {
+                this.$notify?.warning('无法播放', '该离线文件尚未生成本地播放流');
+                return;
+            }
+            const videoData = {
+                anime: {
+                    id: task.anime?.id || '',
+                    name: task.anime?.name || '离线下载',
+                    cover: task.anime?.cover || '',
+                    source: 'downloads',
+                    sourceName: '本地离线',
+                    sourceType: 'local'
+                },
+                episode: {
+                    title: task.episode?.title || task.fileName || '第1集',
+                    url: task.playUrl,
+                    isLocalDownload: true
+                },
+                url: task.playUrl
+            };
+            if (window.electronAPI?.openPlayerWindow) {
+                try {
+                    await window.electronAPI.openPlayerWindow(videoData);
+                    return;
+                } catch (_) { /* fallback to route */ }
+            }
+            await this.$store.dispatch('player/playVideo', videoData);
+            this.$router.push('/video-player');
         },
 
         async onOpenFile(task) {
@@ -691,6 +728,16 @@ export default {
     color: var(--danger-color);
     border-color: var(--danger-color);
     background: rgba(255, 71, 87, 0.08);
+}
+
+.dl-action-play {
+  color: var(--primary);
+  background: rgba(var(--primary-rgb), 0.12);
+  font-size: 13px;
+}
+.dl-action-play:hover {
+  background: var(--primary);
+  color: #fff;
 }
 
 .dl-action-open:hover {

@@ -290,6 +290,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     danmakuAlignmentSave: (payload) => ipcRenderer.invoke('danmaku-alignment-save', toIpcSafeValue(payload || {})),
     danmakuAlignmentRemove: (payload) => ipcRenderer.invoke('danmaku-alignment-remove', toIpcSafeValue(payload || {})),
     danmakuAlignmentWorkSuggestion: (payload) => ipcRenderer.invoke('danmaku-alignment-work-suggestion', toIpcSafeValue(payload || {})),
+    danmakuAlignmentWorkTemplate: (payload) => ipcRenderer.invoke('danmaku-alignment-work-template', toIpcSafeValue(payload || {})),
 
     // Compatibility catalog backed by whichever installed source pack declares fallback-catalog.
     playbackSourceGetCategories: () => ipcRenderer.invoke('playback-source-categories'),

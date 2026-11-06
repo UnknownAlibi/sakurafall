@@ -366,6 +366,12 @@ export default {
     this.$watch('bootstrapped', (ready) => {
       if (ready) stopPhraseTimer();
     });
+    if (window.electronAPI?.downloadList) {
+      this.$store.dispatch('download/loadDownloadList').catch(() => {});
+      // 下载进度监听由下面的 bindProgressListener 统一绑定；
+      // 这里原有一个 'download/subscribeProgress'（不存在的 action），
+      // dispatch 返回 undefined 导致 .catch 抛错、每次启动弹「页面操作失败」。
+    }
     // Alt+1..7 快速切换页面（与 TabNavigation 顺序一致，仅主窗口）
     this._handleAltTab = (event) => {
       if (this.isPlayerWindow || !event.altKey || event.ctrlKey || event.metaKey) return;

@@ -145,6 +145,10 @@ export default {
       handler() {
         this.ingestDetections();
       }
+    },
+    // 时长决定「锚点 + 无片头」这条自动对齐是否可信，变化后重新判定
+    animeMetadata() {
+      this.scheduleAutoAlign();
     }
   },
   mounted() {
@@ -166,6 +170,10 @@ export default {
   },
   beforeUnmount() {
     this.loadToken += 1;
+    if (this._autoAlignTimer) {
+      clearTimeout(this._autoAlignTimer);
+      this._autoAlignTimer = null;
+    }
     if (this._refWindowTimer) {
       clearTimeout(this._refWindowTimer);
       this._refWindowTimer = null;
@@ -194,11 +202,31 @@ export default {
         adRanges: Array.isArray(this.adRanges) ? this.adRanges : [],
         canonicalIntroLength: 0
       });
+      this.scheduleAutoAlign();
     },
 
     /** 从弹幕文本推断「弹幕版正片起点」锚点，供自动对齐与一键打点使用 */
     publishDanmakuAnchors() {
       this.$store.dispatch('danmakuAlignment/ingestDanmakuComments', this.rawComments);
+      this.scheduleAutoAlign();
+    },
+
+    /**
+     * 检测结果/锚点变化后延迟触发自动对齐（合并短时间内的多次更新）。
+     * 是否真的应用由 store 判断：证据不足或用户手动校准过时不会改动。
+     */
+    scheduleAutoAlign() {
+      if (this._autoAlignTimer) clearTimeout(this._autoAlignTimer);
+      this._autoAlignTimer = setTimeout(() => {
+        this._autoAlignTimer = null;
+        const times = (this.rawComments || [])
+          .map(comment => Number(comment?.time))
+          .filter(Number.isFinite);
+        this.$store.dispatch('danmakuAlignment/autoAlignFromDetections', {
+          videoDuration: Number(this.animeMetadata?.duration) || 0,
+          maxCommentTime: times.length ? Math.max(...times) : 0
+        });
+      }, 1200);
     },
 
     /**

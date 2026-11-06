@@ -15,7 +15,11 @@ const combined = `${episodeListSource}\n${mappingSource.replace(
   "import { extractEpisodeNumber, rankEpisodeLines } from './episodeList.js';",
   ''
 )}`;
-const { applySourceEpisodeMapping, sourceMappingKey } = await import(dataUrl(combined));
+const {
+  applySourceEpisodeMapping,
+  sourceMappingKey,
+  suggestSourceMappingStart
+} = await import(dataUrl(combined));
 
 test('manual mapping slices a continuous collection into season episodes', () => {
   const episodes = Array.from({ length: 197 }, (_, index) => ({
@@ -52,4 +56,41 @@ test('source mapping key is stable per work, provider and result', () => {
     { providerId: 'cms:zy360', selectedResultId: '99260' }
   );
   assert.equal(key, '607915|cms:zy360|99260');
+});
+
+test('suggestSourceMappingStart infers start episode from season keyword or season ep label', () => {
+  const episodes = Array.from({ length: 200 }, (_, index) => {
+    let title = `第${index + 1}集`;
+    if (index === 176) {
+      title = '第177集 慕兰之战 第1集';
+    }
+    return {
+      id: `ep-${index + 1}`,
+      title,
+      url: `https://example.test/${index + 1}.m3u8`
+    };
+  });
+  const source = {
+    rankedLines: [{ lineId: 'line1', episodes }]
+  };
+
+  // 通过季篇名别名（慕兰之战）匹配
+  const suggestedByKeyword = suggestSourceMappingStart(source, {
+    name: '凡人修仙传 第五季',
+    aliases: ['慕兰之战', '凡人修仙传 年番2']
+  });
+  assert.equal(suggestedByKeyword, 177);
+
+  // 通过“第5季 01”标签匹配
+  episodes[176].title = '第177集 第5季 01';
+  const suggestedBySeason = suggestSourceMappingStart(source, {
+    name: '凡人修仙传 第5季'
+  });
+  assert.equal(suggestedBySeason, 177);
+
+  // 无匹配时返回 0
+  const none = suggestSourceMappingStart(source, {
+    name: '某完全不相干的作品'
+  });
+  assert.equal(none, 0);
 });

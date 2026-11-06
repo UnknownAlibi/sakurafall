@@ -658,6 +658,33 @@ body {
   background: var(--accent-gradient);
 }
 
+#app .anime-detail-modal .episode-btn.is-downloaded {
+  border-color: rgba(var(--primary-rgb), 0.35);
+}
+
+#app .anime-detail-modal .ep-downloaded-tag {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font-size: 9.5px;
+  font-weight: 800;
+  color: var(--accent-cyan);
+  line-height: 1;
+  pointer-events: none;
+}
+
+#app .player-window-page .ep-dl-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(var(--primary-rgb), 0.16);
+  color: var(--accent-cyan);
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: auto;
+}
+
 #app .anime-detail-modal .ep-number {
   font-size: 13px;
   font-weight: 650;

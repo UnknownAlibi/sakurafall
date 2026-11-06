@@ -99,6 +99,11 @@
           </button>
           <button type="button" class="danmaku-settings-action" @click="resetAlignment">归零</button>
         </div>
+        <div v-if="autoApplied" class="danmaku-align-auto">
+          <span class="danmaku-align-auto-badge">已自动对齐</span>
+          <small>{{ autoReason }}</small>
+          <button type="button" class="danmaku-settings-action" @click="undoAutoAlign">撤销</button>
+        </div>
         <ul v-if="alignmentNotes.length" class="danmaku-align-notes">
           <li v-for="(note, index) in alignmentNotes" :key="index">{{ note }}</li>
         </ul>
@@ -134,7 +139,7 @@
           </template>
         </div>
         <p class="danmaku-align-hint">
-          推荐顺序：① 先点「自动对齐」——用弹幕里的「空降/正片开始」标记 + 本视频片头/广告段自动算偏移；② 若不准，暂停在任一画面，从上方「弹幕对照校准」里点一条明显属于此刻画面的弹幕（台词梗/高能反应），系统据此反推偏移；③ 仍要细微修正时用「−/+」或「这里就是正片开始」。中段广告（无 HLS 标记）用「标记广告起点/终点」。校准按「本集 + 当前播放源」记住，画面与弹幕的时间对照见上方。
+          一般无需操作：识别到弹幕里的「空降/正片开始」标记、本视频片头或明确广告标记时会自动对齐，面板顶部会显示依据并可一键撤销。若不准：暂停在任一画面，从上方「弹幕对照校准」里点一条明显属于此刻画面的弹幕（台词梗/高能反应）反推偏移；仍要微调时用「−/+」或「这里就是正片开始」。中段广告（无 HLS 标记）用「标记广告起点/终点」。校准按「本集 + 当前播放源」记住，画面与弹幕的时间对照见上方。
         </p>
       </div>
       <div class="danmaku-settings-row is-block">
@@ -253,6 +258,8 @@ export default {
       hasDetections: 'hasDetections',
       alignmentNotes: 'notes',
       suggestion: 'suggestion',
+      autoApplied: 'autoApplied',
+      autoReason: 'autoReason',
       pendingInsertStart: 'pendingInsertStart',
       danmakuContentStart: 'danmakuContentStart',
       referenceWindow: 'referenceWindow'
@@ -317,6 +324,11 @@ export default {
 
     resetAlignment() {
       this.$store.dispatch('danmakuAlignment/reset');
+    },
+
+    undoAutoAlign() {
+      this.$store.dispatch('danmakuAlignment/undoAutoAlign');
+      this.$emit('notice', '已撤销自动对齐，本集不再自动应用', 'info');
     },
 
     // 滑杆实时写入 store（action 自带防抖保存）
@@ -523,6 +535,38 @@ export default {
   font-size: 11px;
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.62);
+}
+
+/* 自动对齐状态条：说明依据 + 一键撤销 */
+.danmaku-align-auto {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(97, 229, 160, 0.2);
+  border-radius: 9px;
+  background: rgba(97, 229, 160, 0.07);
+}
+
+.danmaku-align-auto-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(97, 229, 160, 0.16);
+  color: #9bf0c4;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.danmaku-align-auto small {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.66);
+  word-break: break-word;
 }
 
 .danmaku-align-mark {

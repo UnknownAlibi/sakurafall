@@ -37,13 +37,13 @@
       },
       {
         "path": "src/renderer/components/Player/VideoPlayer.vue",
-        "maxLines": 2906,
-        "maxBytes": 116981
+        "maxLines": 2840,
+        "maxBytes": 114000
       },
       {
         "path": "src/main/index.js",
-        "maxLines": 2905,
-        "maxBytes": 114500
+        "maxLines": 1680,
+        "maxBytes": 73000
       },
       {
         "path": "src/renderer/views/AnimeZone.vue",
@@ -52,8 +52,8 @@
       },
       {
         "path": "src/renderer/components/Player/ControlBar.vue",
-        "maxLines": 1862,
-        "maxBytes": 56000
+        "maxLines": 980,
+        "maxBytes": 38000
       },
       {
         "path": "src/renderer/views/SourceManager.vue",

@@ -1,9 +1,11 @@
+import playerEpisodeDna from './playerEpisodeDna.js';
 import {
   buildPlayerMediaMetadata,
   createPlayerMediaSession
 } from '../utils/playerMediaSession.js';
 
 export default {
+  mixins: [playerEpisodeDna],
   computed: {
     mediaSessionMetadataKey() {
       const video = this.currentVideo;
