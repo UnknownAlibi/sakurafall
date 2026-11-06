@@ -4,6 +4,11 @@
 
 ## Unreleased（基于 1.4.5）
 
+### 新增
+
+- XPath 源支持「一集一页」站点：规则没有 `detail` 时，详情页直接作为唯一一集，播放走 webview 嗅探（内置新增 Anime1，实测搜索 14 条、详情可解析）。
+- 新增 `scripts/probe-sources.js` 片源体检脚本：只读探测源包里的 CMS 接口与 XPath 站点，输出可用/不可用清单，支持 `--json`、`--concurrency`、`--timeout`。
+
 ### 变更
 
 - 安装包不再内置片源：默认源包含真实站点端点，只在本地开发时存在，打包时从 `resources/extensions` 排除；用户按需自行导入源包。

@@ -159,6 +159,39 @@ class SourceRuleEngine {
      * 在上下文节点上求值 XPath，返回字符串
      * 支持文本节点和属性节点
      */
+    /**
+     * 没有 detail 规则时的兜底：把详情页本身当成唯一一集。
+     * 用于「一集一页」的站点（Anime1 这类），播放交给 webview 嗅探。
+     */
+    async _parseSinglePageRule(rule, pageUrl, start) {
+        try {
+            const html = await this._fetch(pageUrl, { method: 'GET', headers: rule.headers });
+            const doc = this._parseHtml(html);
+            const title = this._evalString('//title', doc) || '正片';
+            const elapsedMs = Date.now() - start;
+            this._markSuccess(rule.id, elapsedMs);
+            return {
+                success: true,
+                name: title,
+                cover: '',
+                episodes: [{
+                    id: `${rule.id}_0_1`,
+                    title,
+                    url: this._resolveUrl(rule.baseUrl, pageUrl),
+                    lineName: '线路1',
+                    playbackMode: rule.playback?.mode || '',
+                    useLegacyParser: rule.playback?.useLegacyParser === true,
+                    adBlocker: rule.adBlocker === true
+                }],
+                elapsedMs
+            };
+        } catch (error) {
+            const elapsedMs = Date.now() - start;
+            this._markFailure(rule.id, error);
+            return { success: false, error: error.message, elapsedMs };
+        }
+    }
+
     _evalString(expr, context) {
         if (!expr || !context) return '';
         try {
@@ -267,11 +300,9 @@ class SourceRuleEngine {
     async parseDetail(rule, pageUrl) {
         const start = Date.now();
         if (!rule.detail) {
-            return {
-                success: false,
-                error: '该源未配置 detail 规则，无法解析详情页',
-                elapsedMs: 0
-            };
+            // 一集一页的站点（如 Anime1）：详情页本身就是播放页，没有分集列表。
+            // 直接把该 URL 当作唯一一集返回，播放走 webview 嗅探。
+            return this._parseSinglePageRule(rule, pageUrl, start);
         }
 
         try {
