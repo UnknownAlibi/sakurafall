@@ -206,3 +206,20 @@ test('built-in theme assets are loaded from sidecar files while user packs stay 
   assert.equal(pack.content.assetFiles, undefined);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('随包提供的示例片源包结构有效，可被直接导入', () => {
+  const { service } = createService();
+  const dir = path.join(__dirname, '..', 'extensions', 'examples');
+  const files = fs.readdirSync(dir).filter(name => name.endsWith('.sourcepack.json'));
+  assert.ok(files.length >= 2, '示例目录应至少包含 CMS 与 XPath 两个示例');
+
+  for (const file of files) {
+    const raw = fs.readFileSync(path.join(dir, file), 'utf8');
+    const pack = service.validateSourcePack(raw);
+    assert.equal(pack.kind, SOURCE_PACK_KIND, `${file} 类型不正确`);
+    assert.equal(pack.apiVersion, 1, `${file} apiVersion 不正确`);
+    const count = pack.content.cmsSources.length + pack.content.xpathRules.length
+      + pack.content.resolvers.length + pack.content.mediaLibraries.length;
+    assert.ok(count > 0, `${file} 没有任何配置`);
+  }
+});

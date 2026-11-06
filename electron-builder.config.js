@@ -42,7 +42,14 @@ module.exports = {
     },
     {
       from: 'extensions/bundled',
-      to: 'extensions'
+      to: 'extensions',
+      // 安装包不带任何片源：默认源包含真实站点端点，只在本地开发时存在。
+      // 用户需要自己导入源包（示例见 extensions/examples）。
+      filter: ['**/*', '!sources/*.sourcepack.json']
+    },
+    {
+      from: 'extensions/examples',
+      to: 'examples'
     },
     {
       from: 'resources/anime4k',

@@ -1,0 +1,34 @@
+{
+  "kind": "sakurafall.source-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "example.cms",
+    "name": "CMS 源示例",
+    "version": "1.0.0",
+    "author": "Your Name",
+    "description": "把 api 换成你自己采集站的接口地址即可；categories 用站点返回的 type_id",
+    "homepage": "",
+    "updateUrl": "",
+    "license": "MIT",
+    "minAppVersion": "1.0.0",
+    "tags": ["example"]
+  },
+  "content": {
+    "cmsSources": [
+      {
+        "id": "example-cms",
+        "name": "示例资源站",
+        "api": "https://example.com/api.php/provide/vod/",
+        "categories": [
+          { "id": "30", "name": "日韩动漫" },
+          { "id": "29", "name": "国产动漫" }
+        ],
+        "defaultCategory": "30",
+        "roles": ["fallback-catalog"]
+      }
+    ],
+    "xpathRules": [],
+    "resolvers": [],
+    "mediaLibraries": []
+  }
+}

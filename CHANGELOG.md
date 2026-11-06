@@ -2,6 +2,14 @@
 
 更早版本仍以 `docs/release-notes-*.md` 归档；本文件从 1.4.2 之后开始汇总改动。
 
+## Unreleased（基于 1.4.5）
+
+### 变更
+
+- 安装包不再内置片源：默认源包含真实站点端点，只在本地开发时存在，打包时从 `resources/extensions` 排除；用户按需自行导入源包。
+- 随包新增 `resources/examples` 示例目录（CMS、XPath 两份可直接导入的源包 + README），片源管理页增加「格式示例」按钮直接打开。
+- 片源管理页提示与示例保持同步，说明源包只认 `cmsSources/xpathRules/resolvers/mediaLibraries` 四类字段。
+
 ## 1.4.5（2026-11-06）
 
 ### 修复

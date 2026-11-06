@@ -14,6 +14,9 @@
         <button class="sm-btn sm-btn-secondary" :disabled="importing" @click="onImportFile">
           {{ importing ? '导入中...' : '安装片源包' }}
         </button>
+        <button class="sm-btn sm-btn-ghost" title="打开片源包格式示例目录" @click="onOpenExamples">
+          格式示例
+        </button>
         <button class="sm-btn sm-btn-secondary" :disabled="exporting || sources.length === 0" @click="onExportFile">
           {{ exporting ? '导出中...' : '导出片源包' }}
         </button>
@@ -846,6 +849,15 @@ export default {
         this.$notify?.error('错误', '导出失败: ' + error.message);
       } finally {
         this.exporting = false;
+      }
+    },
+
+    async onOpenExamples() {
+      try {
+        const result = await window.electronAPI?.sourcePackOpenExampleDir?.();
+        if (result && result.success === false) throw new Error(result.error || '无法打开示例目录');
+      } catch (error) {
+        this.$notify?.warning('提示', '示例目录不可用：' + error.message);
       }
     },
 

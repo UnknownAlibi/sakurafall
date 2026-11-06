@@ -1,0 +1,58 @@
+{
+  "kind": "sakurafall.source-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "example.xpath",
+    "name": "XPath 源示例",
+    "version": "1.0.0",
+    "author": "Your Name",
+    "description": "把 baseUrl / search.url / 各选择器换成目标站点真实结构即可",
+    "homepage": "",
+    "updateUrl": "",
+    "license": "MIT",
+    "minAppVersion": "1.0.0",
+    "tags": ["example"]
+  },
+  "content": {
+    "cmsSources": [],
+    "xpathRules": [
+      {
+        "id": "example-xpath",
+        "name": "示例网页源",
+        "type": "xpath",
+        "version": "1.0",
+        "enabled": true,
+        "baseUrl": "https://example.com",
+        "headers": {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        "search": {
+          "url": "https://example.com/search?query=@keyword",
+          "method": "GET",
+          "list": "//div[@class='result-item']",
+          "name": ".//h3/a",
+          "urlPath": ".//h3/a/@href",
+          "cover": ".//img/@src"
+        },
+        "detail": {
+          "episodeGroups": "//div[@class='episode-group']",
+          "episodeList": ".//ul/li/a",
+          "episodeTitle": ".",
+          "episodeUrl": "./@href"
+        },
+        "adBlocker": false,
+        "playback": {
+          "mode": "webview-sniff",
+          "useLegacyParser": false
+        },
+        "compatibility": {
+          "family": "xpath",
+          "api": "1",
+          "originalName": "Example"
+        }
+      }
+    ],
+    "resolvers": [],
+    "mediaLibraries": []
+  }
+}

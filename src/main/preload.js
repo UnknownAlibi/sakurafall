@@ -205,6 +205,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 可分享的片源包与界面主题包
     sourcePackImportFile: (options) => ipcRenderer.invoke('source-pack-import-file', options),
+    sourcePackOpenExampleDir: () => ipcRenderer.invoke('source-pack-open-example-dir'),
     sourcePackExportFile: (metadata) => ipcRenderer.invoke('source-pack-export-file', metadata),
     sourcePackList: () => ipcRenderer.invoke('source-pack-list'),
     sourcePackGet: (id) => ipcRenderer.invoke('source-pack-get', id),

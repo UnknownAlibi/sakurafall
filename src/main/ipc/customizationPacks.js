@@ -5,7 +5,8 @@
 // 避免主窗口关闭后弹窗崩溃。
 
 const fs = require('fs');
-const { BrowserWindow, dialog } = require('electron');
+const path = require('path');
+const { app, BrowserWindow, dialog, shell } = require('electron');
 const { MAX_PACK_BYTES, MAX_THEME_PACK_BYTES } = require('../services/CustomizationPackService');
 
 function registerCustomizationPackIpc({ handle, customizationPackService, httpClient }) {
@@ -40,6 +41,20 @@ function registerCustomizationPackIpc({ handle, customizationPackService, httpCl
             if (result.canceled || !result.filePath) return { success: false, canceled: true };
             fs.writeFileSync(result.filePath, exported.json, 'utf8');
             return { success: true, filePath: result.filePath, count: exported.count };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // 安装包不带片源，模板与示例单独放在 resources/examples，用户可直接打开参考
+    handle('source-pack-open-example-dir', async () => {
+        try {
+            const dir = app.isPackaged
+                ? path.join(process.resourcesPath, 'examples')
+                : path.join(__dirname, '..', '..', '..', 'extensions', 'examples');
+            if (!fs.existsSync(dir)) return { success: false, error: '示例目录不存在' };
+            const failed = await shell.openPath(dir);
+            return failed ? { success: false, error: failed } : { success: true, dir };
         } catch (error) {
             return { success: false, error: error.message };
         }
