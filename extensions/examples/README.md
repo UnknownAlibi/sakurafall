@@ -3,6 +3,12 @@
 安装包**不自带任何片源**（真实站点端点不随仓库/安装包分发），需要自己导入。
 这个目录里的文件可以直接拿去改，也可以作为格式参考。
 
+| 文件 | 内容 |
+|---|---|
+| `example-cms.sourcepack.json` | 采集站（`api.php/provide/vod/`） |
+| `example-xpath.sourcepack.json` | 网页 XPath 规则源 |
+| `example-media-library.sourcepack.json` | 本地目录 / Jellyfin / Emby |
+
 ## 怎么用
 
 1. 复制一个示例文件，改 `metadata.id`（全局唯一，建议 `作者.名称`）、`metadata.name` 和内容

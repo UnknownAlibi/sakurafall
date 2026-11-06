@@ -1,0 +1,51 @@
+{
+  "kind": "sakurafall.source-pack",
+  "apiVersion": 1,
+  "metadata": {
+    "id": "example.media",
+    "name": "媒体库示例",
+    "version": "1.0.0",
+    "author": "Your Name",
+    "description": "本地目录与 Jellyfin 的接入示例；enabled=false 表示导入后不立即生效，填好地址和账号再改成 true",
+    "homepage": "",
+    "updateUrl": "",
+    "license": "MIT",
+    "minAppVersion": "1.0.0",
+    "tags": ["example"]
+  },
+  "content": {
+    "cmsSources": [],
+    "xpathRules": [],
+    "resolvers": [],
+    "mediaLibraries": [
+      {
+        "id": "example-local",
+        "name": "本地动画目录",
+        "type": "local",
+        "enabled": false,
+        "preference": 15,
+        "roots": ["D:/Anime"]
+      },
+      {
+        "id": "example-jellyfin",
+        "name": "我的 Jellyfin",
+        "type": "jellyfin",
+        "enabled": false,
+        "preference": 15,
+        "baseUrl": "http://127.0.0.1:8096",
+        "userId": "YOUR_USER_ID",
+        "apiKey": "YOUR_API_KEY"
+      },
+      {
+        "id": "example-emby",
+        "name": "我的 Emby",
+        "type": "emby",
+        "enabled": false,
+        "preference": 15,
+        "baseUrl": "http://127.0.0.1:8096",
+        "userId": "YOUR_USER_ID",
+        "apiKey": "YOUR_API_KEY"
+      }
+    ]
+  }
+}
