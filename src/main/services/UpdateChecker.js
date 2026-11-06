@@ -514,17 +514,49 @@ class UpdateChecker {
       // 用户选择的安装目录，即使 NSIS 注册表信息丢失也不会装到默认 C 盘。
       // NSIS 的 /D 必须是最后一个参数且不能带引号（路径含空格时也一样），
       // 否则含空格的安装目录（如用户名带空格）会被当成带引号的字面路径。
+      //
+      // 实测坑：只等主进程退出不够。Electron 的渲染/GPU 子进程会晚几秒退出，
+      // 此时静默安装会「以 0 退出但不覆盖任何文件」，脚本接着又把旧版拉起来，
+      // 用户看到的就是「程序没了，然后没反应」。所以必须：
+      //   1) 等到同名进程全部消失；2) 用可执行文件签名变化自证真的装上了；
+      //   3) 没装成功就写日志并把旧版拉回来，而不是留下一个空桌面。
       const runner = [
         "$ErrorActionPreference = 'Stop'",
+        'function Wait-NoAppProcess([string]$name, [int]$timeoutSec) {',
+        '  $deadline = (Get-Date).AddSeconds($timeoutSec)',
+        '  while ((Get-Date) -lt $deadline) {',
+        '    if (@(Get-Process -Name $name -ErrorAction SilentlyContinue).Count -eq 0) { return $true }',
+        '    Start-Sleep -Milliseconds 300',
+        '  }',
+        '  return $false',
+        '}',
+        'function Get-ExeSignature([string]$exePath) {',
+        '  $item = Get-Item -LiteralPath $exePath -ErrorAction SilentlyContinue',
+        "  if (-not $item) { return '' }",
+        "  return ('{0}|{1}|{2}' -f $item.Length, $item.LastWriteTimeUtc.Ticks, $item.VersionInfo.FileVersion)",
+        '}',
         'try {',
         '  Wait-Process -Id ([int]$env:SAKURAFALL_UPDATE_PARENT_PID) -Timeout 120 -ErrorAction SilentlyContinue',
+        "  if (-not (Wait-NoAppProcess $env:SAKURAFALL_UPDATE_PROCESS_NAME 60)) { throw 'App processes did not exit before install' }",
+        '  Start-Sleep -Milliseconds 1200',
+        '  $before = Get-ExeSignature $env:SAKURAFALL_UPDATE_EXECUTABLE',
         "  $installerArgs = '/S /D=' + $env:SAKURAFALL_UPDATE_INSTALL_DIR",
         '  $installer = Start-Process -FilePath $env:SAKURAFALL_UPDATE_INSTALLER -ArgumentList $installerArgs -WindowStyle Hidden -PassThru -Wait',
-        "  if ($installer.ExitCode -ne 0) { throw ('Installer exited with code ' + $installer.ExitCode) }",
-        '  if (-not (Test-Path -LiteralPath $env:SAKURAFALL_UPDATE_EXECUTABLE)) { throw \'Updated executable is missing\' }',
+        "  if ($env:SAKURAFALL_UPDATE_EXPECT_CHANGE -eq '1') {",
+        '    $deadline = (Get-Date).AddSeconds(90)',
+        '    $replaced = $false',
+        '    while ((Get-Date) -lt $deadline) {',
+        '      if ((Get-ExeSignature $env:SAKURAFALL_UPDATE_EXECUTABLE) -ne $before) { $replaced = $true; break }',
+        '      Start-Sleep -Milliseconds 500',
+        '    }',
+        "    if (-not $replaced) { throw ('Installer exited ' + $installer.ExitCode + ' but did not replace files') }",
+        '  }',
+        '  Start-Sleep -Milliseconds 800',
         '  Start-Process -FilePath $env:SAKURAFALL_UPDATE_EXECUTABLE',
+        "  ('ok exit=' + $installer.ExitCode) | Set-Content -LiteralPath $env:SAKURAFALL_UPDATE_LOG -Encoding UTF8",
         '} catch {',
         "  ($_ | Out-String) | Set-Content -LiteralPath $env:SAKURAFALL_UPDATE_LOG -Encoding UTF8",
+        '  if (Test-Path -LiteralPath $env:SAKURAFALL_UPDATE_EXECUTABLE) { Start-Process -FilePath $env:SAKURAFALL_UPDATE_EXECUTABLE }',
         '}'
       ].join('\n');
       const child = spawn('powershell.exe', [
@@ -544,6 +576,10 @@ class UpdateChecker {
           SAKURAFALL_UPDATE_INSTALLER: resolved,
           SAKURAFALL_UPDATE_INSTALL_DIR: installDirectory,
           SAKURAFALL_UPDATE_EXECUTABLE: executablePath,
+          SAKURAFALL_UPDATE_PROCESS_NAME: path.basename(executablePath, '.exe'),
+          // 目标版本与当前版本不同才必须看到文件被替换；同版本重装允许签名不变
+          SAKURAFALL_UPDATE_EXPECT_CHANGE: (this._managed.latestVersion
+            && this._managed.latestVersion === app.getVersion()) ? '0' : '1',
           SAKURAFALL_UPDATE_LOG: handoffLog
         }
       });
