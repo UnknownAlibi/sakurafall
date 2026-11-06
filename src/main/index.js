@@ -1,6 +1,5 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog, session, shell, nativeImage, protocol, clipboard } = require('electron');
 const processStartedAt = Date.now();
-
 // 窗口全屏管理（GPU 合成兼容开关 + 全屏 IPC + 状态同步）抽离至独立模块
 const { applyFullscreenCompatFlags, registerWindowFullscreenIpc, bindFullscreenStateSync } = require('./window-fullscreen');
 // 窗口状态持久化（尺寸/位置/最大化）抽离至独立模块
@@ -8,6 +7,7 @@ const { loadWindowState, applyWindowState, bindWindowStatePersistence } = requir
 // GPU 合成偏好（设置页开关落盘到 userData）
 const { resolveGpuCompositingPreferenceFile } = require('./utils/gpuCompositingPreference');
 const { isSupportedImagePath } = require('./utils/pathGuards');
+const { isolateDevUserData } = require('./utils/devUserData');
 const { registerGpuIpc } = require('./ipc/gpu');
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -51,6 +51,9 @@ const isSmokeOffline = process.argv.includes('--smoke-offline');
 if (isSmokeOffline) process.env.SAKURAFALL_OFFLINE_MODE = '1';
 const smokeReportArg = process.argv.find(arg => arg.startsWith('--smoke-report='));
 const smokeReportPath = smokeReportArg ? path.resolve(smokeReportArg.slice('--smoke-report='.length)) : '';
+
+// 开发模式使用独立数据目录（避免与打包版共用 %APPDATA%/sakurafall 互相干扰）
+if (!smokeUserDataArg) isolateDevUserData({ app });
 
 // GPU 合成偏好（设置页开关）：必须在 app ready 前读取并决定是否禁用 GPU 合成。
 // 文件路径只解析一次，保证启动读取与运行时写入指向同一个 userData。

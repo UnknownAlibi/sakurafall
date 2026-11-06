@@ -452,7 +452,7 @@
       :dna-candidates="dnaCandidates"
       @close="dnaVisible = false"
       @seek="handleSeek"
-      @changed="loadDnaAutoSkipRule"
+      @changed="onDnaSegmentsChanged"
       @rule-updated="onDnaRuleUpdated"
     />
   </div>
@@ -1827,6 +1827,7 @@ export default {
         if (current > 0 && !this.$refs.videoElement?.paused) this.markPlaybackSessionPlaying();
         this.maybeAutoSkipMarkedAd(current);
         this.maybeAutoSkipDnaIntro(current);
+        this.maybeAutoSkipDnaAd(current);
         if (Math.abs(current - this._lastCommittedTime) < 0.22 && this.isPlaying) return;
         this._lastCommittedTime = current;
         this.setCurrentTime(current);
