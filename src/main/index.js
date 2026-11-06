@@ -399,13 +399,14 @@ function configureSmokeTest(win) {
                 while (!document.documentElement.hasAttribute('data-theme-pack') && Date.now() < deadline) {
                     await new Promise(resolve => setTimeout(resolve, 50));
                 }
-                const [version, providers, themes, defaultTheme, databaseHealth, diagnostics] = await Promise.all([
+                const [version, providers, themes, defaultTheme, databaseHealth, diagnostics, sourcePacks] = await Promise.all([
                     api?.appVersion?.(),
                     api?.sourceProviderList?.({ includeDisabled: true }),
                     api?.themePackList?.(),
                     api?.themePackGet?.('sakurafall-default'),
                     api?.databaseHealth?.(),
-                    api?.runtimeDiagnosticsSummary?.()
+                    api?.runtimeDiagnosticsSummary?.(),
+                    api?.sourcePackList?.()
                 ]);
                 const rootStyle = document.documentElement.style;
                 return {
@@ -415,6 +416,13 @@ function configureSmokeTest(win) {
                     route: location.hash,
                     version,
                     providerCount: Array.isArray(providers) ? providers.length : 0,
+                    // 内置「默认片源包」因含真实站点端点，不入库（见 .gitignore），
+                    // CI 构建时天然没有它——此时 0 个片源是预期结果，不能判失败；
+                    // 但只要装了带片源的包，就必须真的注册出 provider（防止回归）。
+                    sourcePackCount: Array.isArray(sourcePacks) ? sourcePacks.length : 0,
+                    sourcePackSourceCount: Array.isArray(sourcePacks)
+                        ? sourcePacks.reduce((total, pack) => total + (Number(pack?.sourceCount) || 0), 0)
+                        : 0,
                     themeCount: Array.isArray(themes) ? themes.length : 0,
                     themePackId: document.documentElement.getAttribute('data-theme-pack'),
                     themeAssetCount: Object.keys(defaultTheme?.content?.assets || {}).length,
@@ -425,7 +433,9 @@ function configureSmokeTest(win) {
                 };
             })()`, true);
             const database = animeDb.getHealthStatus();
-            const success = renderer.mounted && renderer.hasBridge && renderer.providerCount > 0 && renderer.themeCount > 0 &&
+            // 只有装到带片源的源包时才要求 provider > 0（CI 无内置默认源包）
+            const providersOk = renderer.sourcePackSourceCount > 0 ? renderer.providerCount > 0 : true;
+            const success = renderer.mounted && renderer.hasBridge && providersOk && renderer.themeCount > 0 &&
                 renderer.themePackId === 'sakurafall-default' && renderer.themeAssetCount >= 8 &&
                 renderer.brandAssetApplied && renderer.loadingAssetApplied &&
                 renderer.diagnosticFileCount > 0 && renderer.databaseHealth?.integrity === 'ok' && database.integrity === 'ok' &&
