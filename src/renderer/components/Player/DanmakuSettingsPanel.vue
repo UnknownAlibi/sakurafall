@@ -104,8 +104,29 @@
           <small>{{ autoReason }}</small>
           <button type="button" class="danmaku-settings-action" @click="undoAutoAlign">撤销</button>
         </div>
+        <div v-if="showDurationHint" class="danmaku-align-duration">
+          <span class="danmaku-align-duration-badge">时长差</span>
+          <small v-if="durationHint.gap > 0">本视频比弹幕覆盖范围短 {{ durationHint.gap }} 秒，可能是片头或片尾被剪</small>
+          <small v-else>本视频比弹幕覆盖范围长 {{ Math.abs(durationHint.gap) }} 秒，可能插入了内容</small>
+          <button v-if="durationHint.gap > 0" type="button" class="danmaku-settings-action" @click="applyDurationGap">按删片头对齐</button>
+          <button type="button" class="danmaku-settings-action" @click="dismissDurationHint">忽略</button>
+        </div>
         <ul v-if="alignmentNotes.length" class="danmaku-align-notes">
           <li v-for="(note, index) in alignmentNotes" :key="index">{{ note }}</li>
+        </ul>
+        <ul v-if="alignment.cuts.length || alignment.inserts.length" class="danmaku-align-ranges">
+          <li v-for="(range, index) in alignment.cuts" :key="`cut-${index}`">
+            <span class="range-kind">删减</span>
+            <span class="range-time">{{ formatClock(range.start) }}–{{ formatClock(range.end) }}</span>
+            <span class="range-len">{{ Math.round(range.end - range.start) }}s</span>
+            <button type="button" class="range-remove" @click="removeRange('cuts', index)">删除</button>
+          </li>
+          <li v-for="(range, index) in alignment.inserts" :key="`insert-${index}`">
+            <span class="range-kind is-insert">插入</span>
+            <span class="range-time">{{ formatClock(range.start) }}–{{ formatClock(range.end) }}</span>
+            <span class="range-len">{{ Math.round(range.end - range.start) }}s</span>
+            <button type="button" class="range-remove" @click="removeRange('inserts', index)">删除</button>
+          </li>
         </ul>
         <div class="danmaku-align-reference">
           <div class="danmaku-align-reference-head">
@@ -137,6 +158,20 @@
             </button>
             <button type="button" class="danmaku-settings-action" @click="cancelPendingInsert">取消</button>
           </template>
+        </div>
+        <div class="danmaku-settings-actions danmaku-align-mark">
+          <template v-if="pendingCutStart === null">
+            <button type="button" class="danmaku-settings-action" @click="markCutStart">
+              标记删减起点
+            </button>
+          </template>
+          <template v-else>
+            <button type="button" class="danmaku-settings-action active" @click="markCutEnd">
+              删减起点 {{ formatClock(pendingCutStart) }} → 点此记录终点（当前 {{ formatClock(currentTime) }}）
+            </button>
+            <button type="button" class="danmaku-settings-action" @click="cancelPendingCut">取消</button>
+          </template>
+          <small class="danmaku-align-mark-hint">「删减」= 官方有、本片源删掉的段落（片头结尾、中段剪辑）</small>
         </div>
         <p class="danmaku-align-hint">
           一般无需操作：识别到弹幕里的「空降/正片开始」标记、本视频片头或明确广告标记时会自动对齐，面板顶部会显示依据并可一键撤销。若不准：暂停在任一画面，从上方「弹幕对照校准」里点一条明显属于此刻画面的弹幕（台词梗/高能反应）反推偏移；仍要微调时用「−/+」或「这里就是正片开始」。中段广告（无 HLS 标记）用「标记广告起点/终点」。校准按「本集 + 当前播放源」记住，画面与弹幕的时间对照见上方。
@@ -261,6 +296,9 @@ export default {
       autoApplied: 'autoApplied',
       autoReason: 'autoReason',
       pendingInsertStart: 'pendingInsertStart',
+      pendingCutStart: 'pendingCutStart',
+      durationHint: 'durationHint',
+      showDurationHint: 'showDurationHint',
       danmakuContentStart: 'danmakuContentStart',
       referenceWindow: 'referenceWindow'
     }),
@@ -302,6 +340,33 @@ export default {
 
     cancelPendingInsert() {
       this.$store.dispatch('danmakuAlignment/cancelPendingInsert');
+    },
+
+    // 标记删减：官方有、本片源删掉的段落
+    markCutStart() {
+      this.$store.dispatch('danmakuAlignment/markCutStart', this.currentTime);
+    },
+
+    markCutEnd() {
+      this.$store.dispatch('danmakuAlignment/markCutEnd', this.currentTime);
+      this.$emit('notice', '已记录删减区间，其后的弹幕已整体前移', 'info');
+    },
+
+    cancelPendingCut() {
+      this.$store.dispatch('danmakuAlignment/cancelPendingCut');
+    },
+
+    removeRange(kind, index) {
+      this.$store.dispatch('danmakuAlignment/removeRange', { kind, index });
+    },
+
+    applyDurationGap() {
+      this.$store.dispatch('danmakuAlignment/applyDurationGapAsIntroCut');
+      this.$emit('notice', '已按时长差对齐，如不准可点「归零」重来', 'info');
+    },
+
+    dismissDurationHint() {
+      this.$store.dispatch('danmakuAlignment/dismissDurationHint');
     },
 
     formatClock(seconds) {
@@ -567,6 +632,104 @@ export default {
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.66);
   word-break: break-word;
+}
+
+/* 时长差提示：没有其它自动信号时的全局建议 */
+.danmaku-align-duration {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 204, 102, 0.24);
+  border-radius: 9px;
+  background: rgba(255, 204, 102, 0.08);
+}
+
+.danmaku-align-duration-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 204, 102, 0.18);
+  color: #ffd98a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.danmaku-align-duration small {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.68);
+  word-break: break-word;
+}
+
+/* 已标区间列表：可单条删除 */
+.danmaku-align-ranges {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.danmaku-align-ranges li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+}
+
+.range-kind {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 138, 156, 0.16);
+  color: #ff9fb0;
+  font-weight: 700;
+}
+
+.range-kind.is-insert {
+  background: rgba(97, 229, 160, 0.16);
+  color: #9bf0c4;
+}
+
+.range-time {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.range-len {
+  color: rgba(255, 255, 255, 0.5);
+  font-variant-numeric: tabular-nums;
+}
+
+.range-remove {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.range-remove:hover {
+  border-color: rgba(255, 138, 156, 0.5);
+  color: #ff9fb0;
+}
+
+.danmaku-align-mark-hint {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .danmaku-align-mark {

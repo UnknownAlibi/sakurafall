@@ -148,6 +148,28 @@ test('addInsertRange: 追加重叠/乱序的广告区间并保持有序，过短
   assert.deepEqual(ignored.inserts, base.inserts);
 });
 
+test('addCutRange / removeRangeAt: 手动标删减段并按条删除', async () => {
+  const { addCutRange, removeRangeAt } = await import('../src/renderer/utils/danmakuAlignment.js');
+  const base = { offset: 0, cuts: [], inserts: [{ start: 600, end: 660 }] };
+
+  const withCut = addCutRange(base, 300, 330);
+  assert.deepEqual(withCut.cuts, [{ start: 300, end: 330 }], '删减段写入 cuts');
+  assert.deepEqual(withCut.inserts, base.inserts, '不应影响插入段');
+
+  const ignored = addCutRange(withCut, 100, 100.5);
+  assert.deepEqual(ignored.cuts, withCut.cuts, '过短区间忽略');
+
+  const removedCut = removeRangeAt(withCut, 'cuts', 0);
+  assert.deepEqual(removedCut.cuts, [], '单条删除删减段');
+
+  const removedInsert = removeRangeAt(withCut, 'inserts', 0);
+  assert.deepEqual(removedInsert.inserts, [], '单条删除插入段');
+  assert.deepEqual(removedInsert.cuts, withCut.cuts, '删插入段不影响删减段');
+
+  assert.deepEqual(removeRangeAt(withCut, 'cuts', 9), withCut, '越界索引原样返回');
+  assert.deepEqual(removeRangeAt(withCut, 'offset', 0), withCut, '非法类型原样返回');
+});
+
 test('inferDanmakuContentStart: 从「空降/正片开始」成簇标记推断正片起点', () => {
   const comments = [
     { time: 10, text: '前排' },

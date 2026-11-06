@@ -189,6 +189,32 @@ export function addInsertRange(alignment, start, end) {
   return normalizeAlignment({ ...base, inserts: [...base.inserts, { start: from, end: to }] });
 }
 
+/**
+ * 追加一段「本视频删掉的区间」（官方时间轴上的起止），手动标记删减时用。
+ * 用于中段被剪辑、且没有自动信号可用的场景。
+ */
+export function addCutRange(alignment, start, end) {
+  const base = normalizeAlignment(alignment);
+  const from = Math.max(0, toFiniteNumber(start, 0));
+  const to = Math.max(from, toFiniteNumber(end, from));
+  if (to - from < 1) return base;
+  return normalizeAlignment({ ...base, cuts: [...base.cuts, { start: from, end: to }] });
+}
+
+/**
+ * 删除第 index 段区间（kind: 'cuts' | 'inserts'）。
+ * 标错时只删这一条，不必整体归零。
+ */
+export function removeRangeAt(alignment, kind, index) {
+  const base = normalizeAlignment(alignment);
+  const list = base[kind];
+  if (!Array.isArray(list) || index < 0 || index >= list.length) return base;
+  return normalizeAlignment({
+    ...base,
+    [kind]: list.filter((_, position) => position !== index)
+  });
+}
+
 /** 人类可读摘要（弹幕设置面板里显示） */
 export function describeAlignment(alignment) {
   const normalized = normalizeAlignment(alignment);

@@ -222,9 +222,16 @@ export default {
         const times = (this.rawComments || [])
           .map(comment => Number(comment?.time))
           .filter(Number.isFinite);
+        const videoDuration = Number(this.animeMetadata?.duration) || 0;
+        const maxCommentTime = times.length ? Math.max(...times) : 0;
         this.$store.dispatch('danmakuAlignment/autoAlignFromDetections', {
-          videoDuration: Number(this.animeMetadata?.duration) || 0,
-          maxCommentTime: times.length ? Math.max(...times) : 0
+          videoDuration,
+          maxCommentTime
+        });
+        // 时长差是「没有锚点也没有片头检测」时唯一还能用的信号，交给面板给出建议
+        this.$store.dispatch('danmakuAlignment/evaluateDurationGap', {
+          videoDuration,
+          danmakuEnd: maxCommentTime
         });
       }, 1200);
     },

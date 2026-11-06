@@ -5,6 +5,8 @@ import {
   describeAlignment,
   isAlignmentEmpty,
   addInsertRange,
+  addCutRange,
+  removeRangeAt,
   formatClock
 } from '../../utils/danmakuAlignment.js';
 import { inferDanmakuContentStart } from '../../utils/danmakuAnchors.js';
@@ -33,6 +35,10 @@ export default {
     suggestion: null,
     // 手动标记插入区间（广告）时的起点，null 表示未在标记中
     pendingInsertStart: null,
+    // 手动标记删减区间（中段被剪辑）时的起点
+    pendingCutStart: null,
+    // 时长差提示：视频比弹幕短/长多少秒，用于「没有其它信号」时给一键解释
+    durationHint: null,
     // 弹幕侧推断的锚点（来自弹幕文本，如「空降/正片开始」簇）
     danmakuAnchors: { contentStart: null, confidence: 0, samples: 0 },
     // 作品级片头长度模板：没有弹幕锚点时判断「本视频片头是否被剪短」
@@ -64,6 +70,12 @@ export default {
     notes: state => state.notes,
     suggestion: state => state.suggestion,
     pendingInsertStart: state => state.pendingInsertStart,
+    pendingCutStart: state => state.pendingCutStart,
+    durationHint: state => state.durationHint,
+    // 时长差提示只在「自动对齐没给出结论、当前也没有任何校准」时展示，避免和自动结果打架
+    showDurationHint: state => Boolean(state.durationHint) && !state.autoApplied && isAlignmentEmpty(state.alignment),
+    cuts: state => state.alignment.cuts,
+    inserts: state => state.alignment.inserts,
     danmakuAnchors: state => state.danmakuAnchors,
     danmakuContentStart: state => state.danmakuAnchors.contentStart,
     referenceWindow: state => state.referenceWindow
@@ -121,6 +133,14 @@ export default {
       state.suggestion = suggestion || null;
     },
 
+    SET_PENDING_CUT_START(state, seconds = null) {
+      state.pendingCutStart = seconds === null || seconds === undefined ? null : Math.max(0, Number(seconds) || 0);
+    },
+
+    SET_DURATION_HINT(state, hint = null) {
+      state.durationHint = hint && Number(hint.gap) ? hint : null;
+    },
+
     SET_PENDING_INSERT_START(state, seconds = null) {
       state.pendingInsertStart = seconds === null ? null : Number(seconds);
     },
@@ -162,6 +182,9 @@ export default {
       commit('SET_SAVED', { alignment: createEmptyAlignment() });
       commit('SET_AUTO_APPLIED', {});
       commit('SET_TEMPLATE', null);
+      commit('SET_PENDING_INSERT_START', null);
+      commit('SET_PENDING_CUT_START', null);
+      commit('SET_DURATION_HINT', null);
       if (!state.episodeKey) return;
       const token = state.loadToken;
 
@@ -225,6 +248,9 @@ export default {
     reset({ commit, dispatch }) {
       commit('SET_AUTO_SUPPRESSED', true);
       commit('SET_AUTO_APPLIED', {});
+      commit('SET_PENDING_INSERT_START', null);
+      commit('SET_PENDING_CUT_START', null);
+      commit('SET_DURATION_HINT', null);
       commit('SET_ALIGNMENT', createEmptyAlignment());
       commit('SET_NOTES', []);
       dispatch('schedulePersist');
@@ -366,6 +392,73 @@ export default {
 
     cancelPendingInsert({ commit }) {
       commit('SET_PENDING_INSERT_START', null);
+    },
+
+    /**
+     * 手动标记删减区间：用于「中段被剪辑、且没有自动信号」的场景。
+     * 起点取官方时间轴上被删的第一帧，终点取被删的最后一帧。
+     */
+    markCutStart({ commit }, time) {
+      commit('SET_PENDING_CUT_START', Math.max(0, Math.round((Number(time) || 0) * 10) / 10));
+    },
+
+    markCutEnd({ commit, state, dispatch }, time) {
+      if (state.pendingCutStart === null) return;
+      const next = addCutRange(state.alignment, state.pendingCutStart, time);
+      commit('SET_PENDING_CUT_START', null);
+      if (next.cuts.length === state.alignment.cuts.length) return;
+      commit('SET_AUTO_APPLIED', {});
+      commit('SET_ALIGNMENT', next);
+      dispatch('schedulePersist');
+    },
+
+    cancelPendingCut({ commit }) {
+      commit('SET_PENDING_CUT_START', null);
+    },
+
+    /** 删除第 index 段区间（标错时单条撤销，不用整体归零） */
+    removeRange({ commit, state, dispatch }, { kind, index } = {}) {
+      if (kind !== 'cuts' && kind !== 'inserts') return;
+      const next = removeRangeAt(state.alignment, kind, index);
+      if (JSON.stringify(next) === JSON.stringify(state.alignment)) return;
+      commit('SET_AUTO_APPLIED', {});
+      commit('SET_ALIGNMENT', next);
+      dispatch('schedulePersist');
+    },
+
+    /**
+     * 时长差提示：视频比弹幕覆盖范围短/长多少秒。
+     * 没有锚点、没有片头检测时，这是唯一还能用的全局信号。
+     */
+    evaluateDurationGap({ commit }, { videoDuration = 0, danmakuEnd = 0 } = {}) {
+      const video = Number(videoDuration) || 0;
+      const end = Number(danmakuEnd) || 0;
+      if (!(video > 60) || !(end > 60)) {
+        commit('SET_DURATION_HINT', null);
+        return;
+      }
+      const gap = Math.round((end - video) * 10) / 10;
+      commit('SET_DURATION_HINT', Math.abs(gap) < 15
+        ? null
+        : { gap, videoDuration: video, danmakuEnd: end });
+    },
+
+    /** 把时长差按「删了片头」解释：弹幕整体前移 gap 秒 */
+    applyDurationGapAsIntroCut({ commit, state, dispatch }) {
+      const hint = state.durationHint;
+      if (!hint || hint.gap <= 0) return;
+      const offset = Math.round(-hint.gap * 10) / 10;
+      commit('SET_AUTO_APPLIED', {});
+      commit('SET_ALIGNMENT', { ...state.alignment, offset });
+      commit('SET_NOTES', [
+        `视频比弹幕覆盖范围短 ${hint.gap} 秒，已按时长差把弹幕整体前移 ${hint.gap} 秒（若实际是删了片尾，请用「归零」后改标删减段）`
+      ]);
+      commit('SET_DURATION_HINT', null);
+      dispatch('persist');
+    },
+
+    dismissDurationHint({ commit }) {
+      commit('SET_DURATION_HINT', null);
     },
 
     /** 防抖落库：播放中的连续微调只写一次 */
