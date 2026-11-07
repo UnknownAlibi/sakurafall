@@ -35,6 +35,7 @@
           :disabled="!downloadDir"
           @click="onOpenDir"
         >打开目录</button>
+        <button class="dl-dir-btn dl-dir-btn-secondary" @click="onOpenLocalVideo">打开本地视频</button>
       </div>
     </div>
 
@@ -326,6 +327,14 @@ export default {
             const dir = await this.selectDownloadDir();
             if (dir) {
                 this.$notify?.success('下载目录已更新', dir);
+            }
+        },
+
+        // 本地视频直开：不经过番剧匹配，选完文件直接进播放页（弹幕在播放页导入 XML）
+        async onOpenLocalVideo() {
+            const result = await window.electronAPI?.openLocalVideo?.();
+            if (result && result.success === false && !result.canceled) {
+                this.$notify?.error('打开失败', result.error || '无法打开该视频');
             }
         },
 

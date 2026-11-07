@@ -96,6 +96,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // 独立播放窗口
     openPlayerWindow: (videoData) => ipcRenderer.invoke('open-player-window', toIpcSafeValue(videoData)),
+    // 直接打开本地视频文件（不传路径则弹文件选择框）
+    openLocalVideo: (filePath) => ipcRenderer.invoke('open-local-video', filePath ? String(filePath) : ''),
     updatePlayerWindow: (windowId, videoData) => ipcRenderer.invoke('update-player-window', windowId, toIpcSafeValue(videoData)),
     closePlayerWindow: (windowId) => ipcRenderer.invoke('close-player-window', windowId),
     playerGetData: () => ipcRenderer.invoke('player-get-data'),

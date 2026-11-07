@@ -833,7 +833,6 @@ function releasePlayerRuntimeResources() {
  */
 function createPlayerWindow(videoData) {
     const appIcon = loadAppIcon();
-
     const win = new BrowserWindow({
         width: 1000,
         height: 620,
@@ -922,6 +921,7 @@ function createMenu() {
         {
             label: '文件',
             submenu: [
+                localVideo.menuItem,
                 {
                     label: '退出',
                     accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
@@ -1264,7 +1264,7 @@ registerPlayerWindowIpc({
     loadWindowState,
     BrowserWindow
 });
-
+const localVideo = require('./ipc/localVideo').registerLocalVideoIpc({ handle: secureIpcHandle, dialog, BrowserWindow, mediaLibraryService, createPlayerWindow });
 // 文件对话框
 secureIpcHandle('select-folder', async (event) => {
     try {
